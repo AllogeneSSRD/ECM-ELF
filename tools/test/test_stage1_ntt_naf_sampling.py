@@ -71,7 +71,12 @@ def main():
         for row in rows:
             assert row["benchmark_kind"] == "stage1_naf_stratified" and row["b1"] == b1
             w = row["naf_window"]
-            assert (row["naf_columns"], row["block_steps"], row["sample_nonzero"]) == shapes[w]
+            columns, pool, adds = shapes[w]
+            assert (row["naf_columns"], row["sample_pool_steps"]) == (columns, pool)
+            steps = row["block_steps"]
+            assert 0 < steps <= pool and row["timed_steps"] % steps == 0
+            assert 0 < row["sample_nonzero"] <= steps
+            assert abs(row["sample_nonzero"] - steps*adds/pool) <= 1
             expected = 1000 * row["batch"] * row["timed_steps"] * row["repeats"] / row["total_device_ms"]
             assert math.isclose(row["iter_per_s"], expected, rel_tol=1e-9)
             if row["sample_phase"] == 2:

@@ -38,6 +38,12 @@ enum Dataflow : unsigned {
 };
 inline constexpr unsigned experimental_dataflow_limit = (FixedWideForward << 1) - 1;
 
+struct TuneBlock {
+    unsigned steps, span, nonzero;
+    // The full block uses the original scalar. Short NAF blocks own their selected digits.
+    std::vector<int16_t> digits;
+};
+
 struct Control {
     unsigned resume = 0;
     unsigned warmup_iterations = 0;
@@ -50,7 +56,7 @@ struct Control {
     bool modular_square_probe = false;
     bool describe_only = false;
     unsigned sample_target_ms = 0; // Tune only. Group repeated fixed-cursor blocks after a pilot.
-    unsigned sample_span_steps = 0; // Stop zero-run Graphs at the seams of disjoint NAF spans.
+    const std::vector<TuneBlock>* sample_blocks = nullptr; // Shortest pilot first, full block last.
 };
 
 // Initial slots (slot-major, then curve, then little-endian uint32 limbs):
@@ -72,6 +78,7 @@ struct Run {
     unsigned length = 0, digit_bits = 0, passes = 0, tile = 0, completed_bits = 0;
     unsigned dataflow = 0;
     unsigned blocks_per_sample = 1;
+    unsigned sample_block_index = 0;
     bool stopped = false;
     size_t owned_bytes = 0, observed_bytes = 0, budget_bytes = 0;
 };

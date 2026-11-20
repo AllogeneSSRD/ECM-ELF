@@ -93,10 +93,13 @@ def main():
             extra += 'ntt_convolution = "linear"\n'
         handoff = '' if 'handoff_mode' in extra else 'handoff_mode = "off"\n'
         param = 'e' if model == 'ed' else 'm0'
+        # These fixtures compare prescribed NAF and x-only endpoints. With an
+        # empty read-only tune file, window zero selects the x-only reference.
+        tuning = '[stage2]\ntune_runtime_enabled = false\n' if args.edwards_naf_only else ''
         config.write_text(f'config_version = 4\n[shared]\nworktodo_file = "{(work / "worktodo.txt").as_posix()}"\n'
                           f'log_file = "{(work / "screen.log").as_posix()}"\n'
                           f'finished_file = "{(work / "finished.txt").as_posix()}"\n'
-                          f'[stage1]\ntarget = "gpu"\nparam = "{param}"\n'
+                          f'{tuning}[stage1]\ntarget = "gpu"\nparam = "{param}"\n'
                           f'gpu_algorithm = {algorithm}\nstage1_gpu_device = {args.device}\n'
                           f'stage1_save_dir = "{work.as_posix()}"\n'
                           'exponent_cache_dir = "off"\ncheckpoint_interval_seconds = 0.01\n'
@@ -272,12 +275,14 @@ def main():
             log = run(work, call, text=data)
             [plan] = ntt_executions(log)
             assert plan == ntt_executions((work / "screen.log").read_text(encoding="utf-8"))[0]
+            assert "stage1_ntt_runtime_tune: p=65521 batch=1-1" in log
+            columns, *values = tomllib.loads((work / "tune.toml").read_text(encoding="utf-8"))["ntt"]["matrix"]
+            rows = [dict(zip(columns,row)) for row in values]
+            fine = [r for r in rows if r["sample_phase"] == 2 and r["naf_window"] == 6 and r["batch"] == 1]
             if mode == "default":
-                assert "source=short_tune" in log
-                columns, *values = tomllib.loads((work / "tune.toml").read_text(encoding="utf-8"))["ntt"]["matrix"]
-                rows = [dict(zip(columns,row)) for row in values]
+                assert "stage1_ntt_selection: source=tune" in log
                 assert any(r["length"] == 2560 and r["naf_window"] == 6 for r in rows)
-                winner = max(rows, key=lambda r: r["iter_per_s"])
+                winner = max(fine, key=lambda r: r["iter_per_s"])
                 assert int(plan["ntt_length"]) == winner["length"]
                 assert int(plan["ntt_bpw"]) == winner["bpw"]
                 assert plan["ntt_type"] == winner["ntt_type"].removeprefix("stage1_")
@@ -286,7 +291,7 @@ def main():
             else:
                 assert plan["ntt_type"] == "weighted" and int(plan["ntt_length"]) == length
                 assert int(plan["ntt_u"]) == upper
-                assert not (work / "tune.toml").exists()
+                assert {r["length"] for r in fine} == {length}
             digits = int(plan["ntt_digits"])
             assert plan["ntt_bpw_avg"] == f"{65521 / digits:.6f}"
             assert plan["ntt_bpw"] == plan["ntt_bpw_max"] == str((65521 + digits - 1) // digits)

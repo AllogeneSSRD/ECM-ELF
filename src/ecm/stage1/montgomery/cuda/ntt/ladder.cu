@@ -10,6 +10,7 @@
 #include "../../../../../../kernels/cuda/stage1_ntt_segments.cuh"
 #include <array>
 #include <cmath>
+#include <map>
 #include <stdexcept>
 #include <type_traits>
 
@@ -1137,14 +1138,15 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     }
     Graph full, tail, warm_tail;
     std::array<Graph, 7> zero_graphs;
-    const unsigned scalar_count = count;
-    auto capture=[&](Graph& graph, unsigned count) {
+    const unsigned target_ms = control ? control->sample_target_ms : 0;
+    const auto* blocks_by_size = target_ms ? control->sample_blocks : nullptr;
+    auto capture=[&](Graph& graph, unsigned count, unsigned wrap = 0) {
         CK(cudaStreamBeginCapture(q,cudaStreamCaptureModeThreadLocal));
         for (unsigned i=0;i<count;++i) {
             if (naf) edwards_step(0);
             else step(i);
         }
-        if (!naf) advance<<<1,1,0,q>>>(start.data,count,control && control->sample_target_ms ? scalar_count : 0);
+        if (!naf) advance<<<1,1,0,q>>>(start.data,count,wrap);
         CK(cudaStreamEndCapture(q,&graph.graph));
         CK(cudaGraphInstantiateWithFlags(&graph.exec,graph.graph,0));
         CK(cudaGraphUpload(graph.exec,q));
@@ -1156,8 +1158,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (naf) {
         for (unsigned i=0; (1u << i) <= std::min(window, remaining); ++i)
             capture(zero_graphs[i], 1u << i);
-    } else if (window && remaining >= window) capture(full,window);
-    if (!naf && window && remaining % window) capture(tail,remaining % window);
+    } else if (!blocks_by_size && window && remaining >= window) capture(full,window,target_ms ? count : 0);
+    if (!naf && !blocks_by_size && window && remaining % window) capture(tail,remaining % window,target_ms ? count : 0);
     if (window && warmup % window && warmup % window != remaining % window)
         capture(warm_tail,warmup % window);
     Event begin,end,boundary;
@@ -1178,25 +1180,40 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         } else for (unsigned i=0;i<warmup;++i) step(i);
         CK(cudaStreamSynchronize(q));
     }
-    const unsigned target_ms = control ? control->sample_target_ms : 0;
-    const unsigned groups = samples;
+    const int groups = int(samples);
     std::vector<uint32_t> pilot, group_endpoint;
-    for (unsigned sample=0; sample<groups + (target_ms ? 2 : 0); ++sample) {
+    std::map<std::pair<unsigned,unsigned>, Graph> binary_graphs;
+    const bool probe = blocks_by_size && blocks_by_size->size() > 1;
+    for (int sample = probe ? -1 : 0; sample < groups + (target_ms ? 2 : 0); ++sample) {
         if (target_ms && control->poll && control->poll(0).stop) {
             result.stopped = true;
             break;
+        }
+        const TuneBlock* block = blocks_by_size ? &(*blocks_by_size)[result.sample_block_index] : nullptr;
+        const unsigned stop = block ? block->steps : count;
+        const auto* digits = naf ? &(block && !block->digits.empty() ? block->digits : naf->digits) : nullptr;
+        auto full_exec = full.exec, tail_exec = tail.exec;
+        if (block && !naf && window) {
+            // Each captured cursor wraps at this block's end, including short tails.
+            const auto graph = [&](unsigned steps) {
+                auto& g = binary_graphs[{stop, steps}];
+                if (!g.exec) capture(g, steps, stop);
+                return g.exec;
+            };
+            if (stop >= window) full_exec = graph(window);
+            if (stop % window) tail_exec = graph(stop % window);
         }
         reset();
         CK(cudaStreamSynchronize(q));
         const double wall=now_s();
         CK(cudaEventRecord(begin.value,q));
-        const bool timed_group = target_ms && sample && sample <= groups;
+        const bool timed_group = target_ms && sample > 0 && sample <= groups;
         const unsigned blocks = timed_group ? result.blocks_per_sample : 1;
         auto replay = [&] {
             unsigned cursor = resume;
             unsigned next_poll = resume;
             unsigned zero_end = resume;
-            while (cursor < count) {
+            while (cursor < stop) {
                 if (!target_ms && control && control->poll && cursor >= next_poll) {
                     CK(cudaEventRecord(boundary.value,q));
                     CK(cudaEventSynchronize(boundary.value));
@@ -1212,16 +1229,16 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                     next_poll = cursor + (window ? std::max(window, 128u) : 128u);
                 }
                 if (naf) {
-                    const int digit = naf->digits[cursor];
+                    const int digit = (*digits)[cursor];
                     if (!digit && window) {
                         if (zero_end <= cursor) {
-                            unsigned limit = std::min(window, count - cursor);
-                            if (control && control->sample_span_steps) {
-                                const unsigned span = control->sample_span_steps;
+                            unsigned limit = std::min(window, stop - cursor);
+                            if (block && block->span) {
+                                const unsigned span = block->span;
                                 limit = std::min(limit, span - cursor % span);
                             }
                             zero_end = cursor + 1;
-                            while (zero_end - cursor < limit && !naf->digits[zero_end])
+                            while (zero_end - cursor < limit && !(*digits)[zero_end])
                                 ++zero_end;
                         }
                         unsigned i = 0;
@@ -1235,12 +1252,12 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 } else if (!window) {
                     step(cursor - resume);
                     ++cursor;
-                } else if (count - cursor >= window) {
-                    CK(cudaGraphLaunch(full.exec,q));
+                } else if (stop - cursor >= window) {
+                    CK(cudaGraphLaunch(full_exec,q));
                     cursor += window;
                 } else {
-                    CK(cudaGraphLaunch(tail.exec,q));
-                    cursor = count;
+                    CK(cudaGraphLaunch(tail_exec,q));
+                    cursor = stop;
                 }
             }
             result.completed_bits = cursor;
@@ -1253,10 +1270,18 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         CK(cudaEventSynchronize(end.value));
         result.wall_ms.push_back((now_s()-wall)*1000);
         float ms=0; CK(cudaEventElapsedTime(&ms,begin.value,end.value));
+        if (sample < 0) {
+            const double fit = target_ms * double(stop) / std::max(0.001, double(ms));
+            while (result.sample_block_index+1 < blocks_by_size->size() &&
+                   (*blocks_by_size)[result.sample_block_index+1].steps <= fit)
+                ++result.sample_block_index;
+            if (result.sample_block_index) continue; // Warm the selected block to calibrate its actual cost.
+            sample = 0; // The short probe also serves as the warmup.
+        }
         if (!target_ms || timed_group) result.device_ms.push_back(ms);
         else if (!sample) {
-            const double wanted = std::ceil(target_ms / std::max(0.001, double(ms)));
-            result.blocks_per_sample = unsigned(std::clamp(wanted, 1., double(UINT32_MAX / std::max(1u, count))));
+            const double wanted = std::round(target_ms / std::max(0.001, double(ms)));
+            result.blocks_per_sample = unsigned(std::clamp(wanted, 1., double(UINT32_MAX / std::max(1u, stop))));
         }
         const double read=now_s();
         std::vector<uint32_t> got(checkpoint_slots*stride);

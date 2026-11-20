@@ -14,6 +14,7 @@
 #include "ecm/platform/stop.h"
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cmath>
 #include <deque>
 #include <filesystem>
@@ -74,7 +75,7 @@ struct Measurement {
     std::vector<double> ms;
     size_t owned = 0, observed = 0, budget = 0;
     unsigned steps = 0, blocks = 1;
-    unsigned naf_columns = 0, sample_nonzero = 0;
+    unsigned naf_columns = 0, sample_nonzero = 0, pool_steps = 0;
     double total_ms() const { return std::accumulate(ms.begin(), ms.end(), 0.0); }
     double time() const {
         auto ordered = ms;
@@ -104,8 +105,9 @@ unsigned max_exponent(const Plan& plan) {
 void print_measurement(const Measurement& m, unsigned target) {
     const auto& p = m.plan;
     const auto shape = tune_shape_descriptor(p);
-    ecm_ts_fprintf(stdout, "%u %u %s %uc %.0f iter/s dataflow=%u target_ms=%u timed_steps=%u\n",
-        p.length, max_exponent(p), shape.c_str(), m.batch, m.throughput()*m.steps, p.dataflow,target,m.steps);
+    ecm_ts_fprintf(stdout, "%u %u %s %uc %.0f iter/s dataflow=%u target_ms=%u timed_steps=%u block_steps=%u group_ms=%.3f\n",
+        p.length, max_exponent(p), shape.c_str(), m.batch, m.throughput()*m.steps, p.dataflow,
+        target, m.steps, m.steps / m.blocks, m.group_ms());
 }
 
 Stage1NttOptions fixed_plan(Stage1NttOptions o, const Plan& plan) {
@@ -175,7 +177,44 @@ struct TimeLimit {};
 struct NafSample {
     unsigned columns = 0, nonzero = 0;
     std::vector<int16_t> digits;
+    std::vector<TuneBlock> blocks;
 };
+
+// Use contiguous windows of real digits. Balance the cumulative number of adds
+// against the full pool, then prefer the window closest to each band's centre.
+void prepare_blocks(NafSample& sample) {
+    const unsigned size = unsigned(sample.digits.size());
+    const unsigned seam = sample.columns > size ? ecm_stage1::naf_tune_span : size;
+    std::vector<unsigned> adds(size + 1);
+    for (unsigned i = 0; i < size; ++i) adds[i+1] = adds[i] + (sample.digits[i] != 0);
+    const unsigned cycle = sample.nonzero ? std::max(1u, (size + sample.nonzero/2) / sample.nonzero) : 1;
+    for (unsigned steps = cycle; steps < size; steps *= 2) {
+        unsigned bands = 1;
+        while (bands < ecm_stage1::naf_tune_strata && steps / bands >= 4 * cycle) bands *= 2;
+        const unsigned span = steps / bands;
+        if (span > seam) continue;
+        TuneBlock block{steps, span, 0, {}};
+        block.digits.reserve(steps);
+        for (unsigned band = 0; band < bands; ++band) {
+            const unsigned lo = band*size/bands, hi = (band+1)*size/bands;
+            const int wanted = int(std::lround(double((band+1)*span)*sample.nonzero/size));
+            std::pair<int,int> best{INT_MAX, INT_MAX};
+            unsigned start = lo;
+            for (unsigned at = lo; at + span <= hi; ++at) {
+                if (at/seam != (at+span-1)/seam) continue;
+                const int n = int(block.nonzero + adds[at+span] - adds[at]);
+                const auto score = std::make_pair(std::abs(n-wanted), std::abs(int(2*at+span)-int(lo+hi)));
+                if (score < best) { best = score; start = at; }
+            }
+            if (best.first == INT_MAX) break;
+            block.digits.insert(block.digits.end(), sample.digits.begin()+start, sample.digits.begin()+start+span);
+            block.nonzero += adds[start+span] - adds[start];
+        }
+        if (block.digits.size() == steps && (!sample.nonzero || block.nonzero))
+            sample.blocks.push_back(std::move(block));
+    }
+    sample.blocks.push_back({size, seam, sample.nonzero, {}});
+}
 
 // One scalar per tuning command, one immutable sample per requested window.
 class TuneNafSamples {
@@ -209,6 +248,7 @@ public:
                 sample.nonzero += digit != 0;
             }
         }
+        prepare_blocks(sample);
         ecm_ts_fprintf(stdout, "stage1_ntt_naf_sample: b1=%llu naf=%u columns=%u sampled=%u nonzero=%u\n",
                        static_cast<unsigned long long>(b1_), window, sample.columns, bits, sample.nonzero);
         return windows_.emplace(window, std::move(sample)).first->second;
@@ -223,25 +263,38 @@ class Calibration {
     const NafSample* naf_sample_ = nullptr;
     size_t dictionary_limit_ = 0;
     std::vector<uint32_t> dictionary_;
-    unsigned reference_batch_ = 0;
-    std::vector<uint32_t> reference_;
+    std::vector<uint32_t> projective_unit_;
+    std::vector<TuneBlock> binary_blocks_;
+    // One compact endpoint per coordinate and lane, keyed by the replayed block.
+    std::map<unsigned, std::vector<std::array<size_t,4>>> references_;
 public:
     Calibration(const Device& device, unsigned p, unsigned bits)
         : device_(device), p_(p), bits_(bits), scalar_((bits + 31) / 32) {
         std::mt19937 random(0x67ae128bu);
         for (auto& word : scalar_) word = random();
+        for (unsigned steps = 4; steps < bits; steps *= 2) binary_blocks_.push_back({steps, 0, 0, {}});
+        binary_blocks_.push_back({bits, 0, 0, {}});
     }
 
     void native(unsigned window, const NafSample& sample, size_t dictionary_limit) {
         window_ = window;
         dictionary_limit_ = dictionary_limit;
         naf_sample_ = &sample;
-        bits_ = unsigned(sample.digits.size());
         const unsigned words = (p_ + 31) / 32;
         dictionary_.resize(size_t(4u << (window - 2)) * words);
         ecm_edwards::Integer n, d, x, y, a24, factor;
         mpz_setbit(n.v, p_);
         mpz_sub_ui(n.v, n.v, 1);
+        // Represent the neutral point as (0:u:u). Dense coordinates exercise
+        // normal reduction costs from the first doubling of a short sample.
+        std::mt19937 random(0x1f83d9abu);
+        projective_unit_.resize(words);
+        do {
+            std::generate(projective_unit_.begin(), projective_unit_.end(), [&]{ return random(); });
+            if (p_ % 32) projective_unit_.back() &= (1u << (p_ % 32)) - 1;
+            mpz_import(y.v, words, -1, sizeof(uint32_t), 0, 0, projective_unit_.data());
+            mpz_gcd(factor.v, y.v, n.v);
+        } while (mpz_cmp_ui(factor.v, 1) != 0);
         ecm_edwards::MersenneConstruction context(n.v);
         for (unsigned sigma = 26; sigma < 42; ++sigma) {
             if (ecm_edwards::construct(d.v, x.v, y.v, a24.v, factor.v, sigma, n.v, &context)
@@ -269,13 +322,15 @@ public:
         control.describe = [&](const Plan& plan) { m.plan = plan; };
         control.poll = [](unsigned) { return Control::Action{false, ecm_stage1_stop_requested()}; };
         control.sample_target_ms = target_ms;
+        const auto& blocks = window_ ? naf_sample_->blocks : binary_blocks_;
+        control.sample_blocks = &blocks;
         Run run;
         if (window_) {
             m.naf_columns = naf_sample_->columns;
-            m.sample_nonzero = naf_sample_->nonzero;
-            if (m.naf_columns > bits_) control.sample_span_steps = ecm_stage1::naf_tune_span;
-            for (unsigned lane = 0; lane < batch; ++lane)
-                active[stride + lane * words] = active[2 * stride + lane * words] = 1;
+            for (unsigned slot : {1u, 2u})
+                for (unsigned lane = 0; lane < batch; ++lane)
+                    std::copy(projective_unit_.begin(), projective_unit_.end(),
+                              active.begin() + slot*stride + size_t(lane)*words);
             const size_t slots = dictionary_.size() / words;
             std::vector<uint32_t> table(slots * stride);
             for (size_t i = 0; i < slots; ++i)
@@ -296,22 +351,22 @@ public:
             run = ladder(device_.index, p_, batch, active, scalar_, bits_, options, control, samples);
         }
         m.blocks = run.blocks_per_sample;
-        m.steps = bits_ * m.blocks;
         if (run.stopped) throw Cancelled();
-        // A larger batch appends lanes to each slot. Retain one reference and
-        // check common lanes even when the plan or batch size changes.
-        const size_t reference_stride = size_t(words) * reference_batch_;
-        const size_t common = size_t(words) * std::min(batch, reference_batch_);
-        if (common) {
-            for (unsigned slot = 0; slot < (window_ ? 3u : 4u); ++slot) {
-                const auto* first = run.points.data() + slot * stride;
-                if (!std::equal(first, first + common, reference_.data() + slot * reference_stride))
-                    throw std::runtime_error("NTT tune endpoint mismatch");
+        const auto& block = blocks[run.sample_block_index];
+        m.pool_steps = blocks.back().steps;
+        m.steps = block.steps * m.blocks;
+        m.sample_nonzero = block.nonzero;
+        auto& reference = references_[block.steps];
+        const auto common = reference.size();
+        if (common < batch) reference.resize(batch);
+        for (unsigned slot = 0; slot < (window_ ? 3u : 4u); ++slot) {
+            for (unsigned lane = 0; lane < batch; ++lane) {
+                const auto* coordinate = run.points.data() + slot*stride + size_t(lane)*words;
+                const std::string_view bytes(reinterpret_cast<const char*>(coordinate), words*sizeof(*coordinate));
+                const auto hash = std::hash<std::string_view>{}(bytes);
+                if (lane < common && hash != reference[lane][slot]) throw std::runtime_error("NTT tune endpoint mismatch");
+                reference[lane][slot] = hash;
             }
-        }
-        if (batch > reference_batch_) {
-            reference_batch_ = batch;
-            reference_ = std::move(run.points);
         }
         m.ms = std::move(run.device_ms);
         m.owned = run.owned_bytes;
@@ -561,18 +616,10 @@ bool compatible_workload(const Fields& row, const ecm_stage1::Stage1Request& req
            (!window || pt::is_stratified_naf(row) || uint(row,"b1") == uint64_t(request.b1));
 }
 
-// The 512-curve preview wrote 0.72.0 rows with the same timing protocol as 0.71.3.
-constexpr std::string_view timing_version(std::string_view version) {
-    if (std::string_view(ecm_program::version) == "0.71.5" &&
-        (version == "0.71.4" || version == "0.71.5" || version == "0.72.0"))
-        return "0.71.3";
-    return version;
-}
-
 bool same_workload(const Fields& row, const ecm_stage1::Stage1Request& request, unsigned window) {
     return compatible_workload(row,request,window) && row.count("benchmark_kind") &&
            pt::text(row,"benchmark_kind") == (window ? pt::stratified_naf_kind : pt::stage1_graph_ntt_kind) &&
-           timing_version(pt::text(row,"program_version")) == timing_version(ecm_program::version);
+           pt::text(row,"program_version") == ecm_program::version;
 }
 
 bool same_dispatch(const Fields& row, unsigned p, const Plan& plan) {
@@ -961,6 +1008,7 @@ public:
             row["reference_bits"] = std::to_string(p_);
             row["timed_steps"] = std::to_string(m.steps);
             row["block_steps"] = std::to_string(m.steps / m.blocks);
+            row["sample_pool_steps"] = std::to_string(m.pool_steps);
             row["curve"] = pt::quoted(curve_name(request_));
             row["b1"] = std::to_string(uint64_t(request_.b1));
             row["naf_window"] = std::to_string(window_);
@@ -1070,7 +1118,7 @@ struct WindowSearch {
         if (scan_graph)
             for (auto& family : families) family.options.window = 16;
         if (families.empty() || grid.batch_explicit) return;
-        scope << timing_version(ecm_program::version) << '/' << curve_name(request) << '/' << w << '/' << (p-1)/4096
+        scope << ecm_program::version << '/' << curve_name(request) << '/' << w << '/' << (p-1)/4096
               << '/' << options.profile << '/' << options.tile << '/' << options.outer_max
               << '/' << options.window << '/' << options.warp_tail;
         search << exhaustive << '/' << grid.batch.first << "/final-graph/repeat=" << grid.coarse_repeats << ':' << grid.fine_repeats;

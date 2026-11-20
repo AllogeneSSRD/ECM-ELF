@@ -26,6 +26,20 @@ M262139 在两卡均用 16384 点加权 NTT 和原生 2XY NAF w10。4070 Ti 的 
 
 0.63.17 在各档沿用之前选出的 Edwards 点乘路径和窗口。w8／w10／w12 的全位宽对照、初始化时间及内存分项见 [原生 Edwards NTT 的窗口矩阵](STAGE1_MERSENNE_NTT.md#原生-edwards-ntt-窗口矩阵)。
 
+#### RTX 4070 Ti 调优吞吐投影（0.71.6）
+
+紫红色星标表示按变换长度选出的峰值吞吐，绿色菱形为同卡 0.63.17 的主循环实测基线。折算到 B1=1,000,000，M16319 的投影为 **0.93 秒／曲线**，基线为 **1.20**。M262139 的投影为 **51.96 秒／曲线**，基线为 **20.43**。前者采用代表指数 13825 的样本，后者采用代表指数 204776 的样本。
+
+![RTX 4070 Ti Edwards 0.71.6 调优吞吐投影与历史实测，每曲线秒数，对数坐标](attachments/stage1-edwards-4070ti-tune-0716-log.png)
+
+![RTX 4070 Ti Edwards 调优吞吐投影与历史实测，线性坐标](attachments/stage1-edwards-4070ti-tune-0716-linear.png)
+
+2026-11-20 的生产 tune 文件含 **1,254 条** RTX 4070 Ti、Edwards、0.71.6 采样记录。本次采样 B1=128，粗测和精测各 2 组，每组目标 100 ms。吞吐取正式组的曲线列数总和除以 CUDA event 总时间，排除曲线和字典准备、Graph 构建、预热及末点回读。采样期间的频率和功耗未记录。
+
+对历史矩阵的每个指数，按自动规划的卷积类型和 NTT 长度匹配记录，取最高 `iter/s`，再以获选窗口在 B1=1,000,000 的完整 NAF 列数除以该吞吐。29 个指数中有 **22 个**可匹配，覆盖 M2003 至 M262139，其中 18 个取自精测、4 个取自粗测。M61 至 M1279 的 7 个指数缺少匹配长度，图中留空。多个指数可共用同一条记录，因此相邻点有时等高。
+
+绘图使用 `tune-4070ti.toml` 的快照 `data/experiments/stage1_tune_plot/67c9789fd5e7.toml`。逐点的代表指数、吞吐、NAF 窗口、批量、采样阶段及文件 SHA-256 记录在 `data/figures/stage1_tune_0716_4070ti/stage1-ed-4070ti-tune.csv`。[绘图脚本](../../tools/bench/plot_stage1_tune.py) · [调优计时口径](../usage/TUNE.md#采样与吞吐)
+
 ### Montgomery PARAM0
 
 ![Montgomery Stage1 的 NTT、ECM-ELF CGBN、GMP-ECM CGBN 和 Prime95 秒每曲线对比，对数坐标](attachments/stage1-ntt-best-cgbn-prime95-log.png)

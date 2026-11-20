@@ -252,7 +252,7 @@ def main():
     for row in data:
         assert row["sample_target_ms"] == 100 and 61 <= row["reference_bits"] <= 62
         assert row["benchmark_kind"] == "stage1_naf_stratified"
-        assert row["block_steps"] == row["naf_columns"] <= 64
+        assert 0 < row["block_steps"] <= row["sample_pool_steps"] == row["naf_columns"] <= 64
         rate = 1000 * row["batch"] * row["repeats"] * row["timed_steps"] / row["total_device_ms"]
         assert abs(row["iter_per_s"] / rate - 1) < 1e-8
     snapshot = database.read_bytes()
@@ -279,7 +279,7 @@ def main():
     old = rows()
     for row in old:
         row["repeats"] = 3 if row.pop("sample_phase") == 1 else 5
-        for column in ("naf_columns", "sample_nonzero", "total_device_ms"):
+        for column in ("naf_columns", "sample_nonzero", "total_device_ms", "sample_pool_steps"):
             del row[column]
         row["benchmark_kind"] = "stage1_graph_replay"
         row["program_version"] = "0.71.1"
@@ -309,6 +309,24 @@ def main():
     assert {(r["sample_phase"], r["repeats"]) for r in mont} == {(1, 3), (2, 1)}
     assert all(r["sample_target_ms"] == 25 for r in mont)
     assert {r["graph_bits"] for r in mont} == {4, 8, 16, 32, 64}
+
+    # At this cost even a single full block misses a 1 ms budget. A 64-step
+    # Graph window must still run NAF zero runs and short binary tail Graphs.
+    previous_db = database
+    database = out / "short_blocks.toml"
+    for curve, spec, pool in (("e", ",naf=6", 186), ("m0", "", 64)):
+        log = run(f"short_blocks_{curve}", ["--param", curve, "-tune",
+            "ntt,exp=27622,batch=32,time=0.01" + spec, "128"],
+            settings="ntt_profile = 1\nntt_window_bits = 64")
+        assert len(re.findall(r"block_steps=\d+ group_ms=\d+\.\d+", log)) == 2
+        tested = [r for r in rows() if r["curve"] == ("edwards" if curve == "e" else "mont0")]
+        assert {r["sample_phase"] for r in tested} == {1, 2}
+        for r in tested:
+            assert r["graph_bits"] == 64 and r["sample_pool_steps"] == pool
+            assert 0 < r["block_steps"] < 64 and r["timed_steps"] % r["block_steps"] == 0
+            if curve == "e":
+                assert abs(r["sample_nonzero"] - r["block_steps"]*26/186) <= 1 and r["sample_nonzero"] > 0
+    database = previous_db
     database = out / "default_windows.toml"
     run("default_windows", ["-tune", "exp=61,batch=1,time=0.01", "32"],
         settings="edwards_naf_window_bits = 3\nntt_profile = 1")

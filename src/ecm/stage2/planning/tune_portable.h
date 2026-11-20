@@ -234,11 +234,14 @@ inline void validate_stage1_ntt(const Fields &s) {
         const auto groups=uint(s,"repeats");
         const bool stratified=is_stratified_naf(s);
         const bool grouped=stratified || (s.count("benchmark_kind") && text(s,"benchmark_kind")==stage1_graph_ntt_kind);
+        const auto pool=optional_uint(s,"sample_pool_steps",block);
+        if (s.count("sample_pool_steps") && (!grouped || block>pool || (!stratified && pool!=64)))
+            throw std::runtime_error("invalid Stage1 tune sample pool");
         double group_ms=ms;
         if(stratified) {
             constexpr Word max_columns=ecm_stage1::naf_tune_span*ecm_stage1::naf_tune_strata;
             const auto columns=uint(s,"naf_columns");
-            if(!window || !groups || columns>UINT32_MAX || block!=std::min(columns,max_columns) ||
+            if(!window || !groups || columns>UINT32_MAX || pool!=std::min(columns,max_columns) ||
                uint(s,"sample_nonzero")>block || !(real(s,"total_device_ms")>0))
                 throw std::runtime_error("invalid stratified NAF sample");
             group_ms=real(s,"total_device_ms")/groups;
