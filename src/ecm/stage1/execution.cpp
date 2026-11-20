@@ -1,6 +1,6 @@
 #include "execution.h"
 #if ECM_HAS_CUDA_STAGE1
-#include "montgomery/cuda/ntt/workflow.h"
+#include "cuda/ntt/workflow.h"
 #else
 #include "edwards/opencl/workflow.h"
 #include "montgomery/opencl/workflow.h"

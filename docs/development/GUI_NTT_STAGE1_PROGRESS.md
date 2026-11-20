@@ -27,7 +27,7 @@ NTT Stage1 的标量列进度属于当前曲线批次。GUI 分别保存任务�
 
 主进度条显示任务总百分比，下方子条显示 `curve 129–160 50.0%`。所有任务的摘要首行显示数、已知因子标记和 `curves = ...`；Stage1 的 Stage2 交接目标放在该行末尾。实际执行参数保留在下一行。
 
-实现入口：`src/ecm/application/gui/log_parse.*`、`worker_proc.*`、`worker_controller.*`，以及 `gui_v2/ui/worker_presentation.h` 和 `gui_v2/app.cpp`。NTT 计时字段由 `src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp` 输出。
+实现入口：`src/ecm/application/gui/log_parse.*`、`worker_proc.*`、`worker_controller.*`，以及 `gui_v2/ui/worker_presentation.h` 和 `gui_v2/app.cpp`。NTT 计时字段由 `src/ecm/stage1/cuda/ntt/workflow.cpp` 输出。
 
 ## 验收
 

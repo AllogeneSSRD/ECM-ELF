@@ -6,11 +6,10 @@
 #include "ecm/stage1/ntt_target.h"
 #include "ecm/io/save.h"
 #include "ecm/io/results.h"
-#include "../platform/generated/configuration_defaults.h"
 #include "ecm/platform/logging.h"
 #if ECM_HAS_CUDA_STAGE1
-#include "montgomery/cuda/ntt/batches.h"
-#include "montgomery/cuda/ntt/tune.h"
+#include "cuda/ntt/batches.h"
+#include "cuda/ntt/tune.h"
 #include "ecm/platform/stop.h"
 #endif
 #include <chrono>
@@ -65,17 +64,6 @@ struct TaskResult::State {
     ecm_save::Range save_range;
     std::string completed_checkpoint;
 };
-
-Stage1ExecutionPreferences::Stage1ExecutionPreferences()
-    : stage1_threads(ecm_config::defaults::stage1_stage1_threads),
-      naf_w(ecm_config::defaults::stage1_naf_w), device_index(ecm_config::defaults::stage1_device) {
-}
-
-Stage1Persistence::Stage1Persistence()
-    : save_name_pattern(ecm_config::defaults::stage1_save_name_pattern),
-      ckpt_ms(ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS),
-      ckpt_backups(ecm_config::defaults::stage1_ckpt_backups) {
-}
 
 TaskResult::TaskResult() : data_(std::make_unique<State>()) {
 }

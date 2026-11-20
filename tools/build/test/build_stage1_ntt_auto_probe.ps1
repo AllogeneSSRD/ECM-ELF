@@ -6,7 +6,8 @@ Set-Location $repo
 . (Join-Path $PSScriptRoot '../internal/cuda_ntt_probe.ps1')
 Invoke-EcmNttProbeBuild -Repo $repo -Build $Build -Arch $Arch -ModuleBuild $ModuleBuild `
     -Source 'tools/test/stage1_ntt_auto_probe.cpp' -Name 'stage1_ntt_auto_probe' `
-    -ExtraSources @('src/ecm/stage1/montgomery/cuda/ntt/ladder.cu', `
-                    'src/ecm/stage1/montgomery/cuda/ntt/tune.cpp', 'src/io/files.cpp', `
+    -ExtraSources @('src/ecm/stage1/cuda/ntt/ladder.cu', `
+                    'src/ecm/stage1/cuda/ntt/tune.cpp', 'src/ecm/stage1/options.cpp', `
+                    'src/ecm/stage1/scalar.cpp', 'src/io/files.cpp', `
                     'src/ecm/platform/logging.cpp', 'src/ecm/platform/stop.cpp', `
                     'src/ecm/application/configuration/runtime.cpp')

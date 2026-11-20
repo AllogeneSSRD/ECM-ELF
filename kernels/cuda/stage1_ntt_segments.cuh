@@ -2,7 +2,7 @@
 
 #include "ecm/stage1/ntt_length.h"
 #include "stage1_ntt_layout.cuh"
-#include "../../src/ecm/stage1/montgomery/cuda/ntt/weighted.cuh"
+#include "../../src/ecm/stage1/cuda/ntt/weighted.cuh"
 
 namespace ecm_mersenne_ntt::stage1_layout {
 

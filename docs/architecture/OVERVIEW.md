@@ -7,7 +7,7 @@
 | Stage1 应用 | 配置合并、输入、模式、依赖组装、展示和退出 | [main.cpp](../../src/main.cpp) |
 | Stage1 单任务 | 批次寿命、调用执行、逐曲线身份、发布与 seal | [task.cpp](../../src/ecm/stage1/task.cpp) |
 | Stage1 队列 | 领取任务、处理任务状态、finished、源行改写及跨阶段交接 | [main.cpp](../../src/main.cpp) |
-| CUDA Stage1 | CGBN 曲线批处理、实际设备资源、分档和点乘 | [Montgomery](../../src/ecm/stage1/montgomery/cuda/)、[Edwards](../../src/ecm/stage1/edwards/cuda/) |
+| CUDA Stage1 | 曲线批处理、CGBN 分档、NTT 点乘与调优 | [共享 NTT](../../src/ecm/stage1/cuda/ntt/)、[Montgomery](../../src/ecm/stage1/montgomery/cuda/)、[Edwards](../../src/ecm/stage1/edwards/cuda/) |
 | CPU Stage1 | 曲线点运算、标量乘、曲线批次及检查点 | [Montgomery](../../src/ecm/stage1/montgomery/cpu/)、[Edwards](../../src/ecm/stage1/edwards/cpu/) |
 | CPU 模算术 | 两种曲线共用的 GMP 标量与 AVX512-IFMA 模运算 | [模块职责](STAGE1.md#cpu-模算术与点运算) |
 | OpenCL Stage1 | 设备配置、路径注册、动态内核组装 | [engine.cpp](../../src/ecm/stage1/montgomery/opencl/engine.cpp) |
@@ -27,7 +27,7 @@
 
 `ecm` 与 `ecm_cuda` 编译同一组 Stage1 驱动、CPU 算术、配置、队列和存档源文件；两者在 `ecm_backend_*` 接口分别接入 OpenCL 与 CUDA 实现。`ecm_cuda_stage2` 保持独立的 save/回执执行流程。三个程序共用 [整数表达式解析](../../src/io/expression.cpp)与 [worktodo 读写](../../src/io/worktodo.cpp)；队列读取结果区分任务、空队列和 I/O 错误，避免把读档失败视为处理完成。构建的共用 Stage1 源清单在 [cuda_sources.cmake](../../tools/build/internal/cuda_sources.cmake) 中维护，由根 CMake 消费；不同后端仍分别编译这些源文件。
 
-Stage1 在 `stage1/edwards/` 与 `stage1/montgomery/` 内按 CPU/CUDA/OpenCL 组织完整曲线实现；共有任务、执行合同、标量、选择与进度在 `stage1/` 根目录平铺。`stage2/` 集中任务、输入、规划、进程及 CPU/CUDA 续算；其 CUDA 程序入口属于跨曲线共同能力，CPU Edwards 程序入口属于 `stage2/edwards/cpu/`，通用 GW 引擎留在 `stage2/cpu/`。顶层 `cpu/`、`cuda/`、`opencl/` 保留共享技术支持；没有第二套隐藏的阶段执行流程。公开请求与选择合同在 `include/ecm/stage1/`，阶段私有协作头留在 `src/ecm/stage1/`。模块职责和位宽边界见 [Stage1](STAGE1.md#cuda-模块边界)。
+Stage1 在 `stage1/edwards/` 与 `stage1/montgomery/` 内按 CPU/CUDA/OpenCL 组织曲线专用实现。两种曲线共用的 Mersenne NTT 工作流、点乘、批次规划和调优属于 `stage1/cuda/ntt/`，跨阶段的变换与 Graph 基础设施属于 `src/ecm/cuda/ntt/`。共有任务、执行合同、标量、选择与进度在 `stage1/` 根目录平铺。`stage2/` 集中任务、输入、规划、进程及 CPU/CUDA 续算；其 CUDA 程序入口属于跨曲线共同能力，CPU Edwards 程序入口属于 `stage2/edwards/cpu/`，通用 GW 引擎留在 `stage2/cpu/`。顶层 `cpu/`、`cuda/`、`opencl/` 保留共享技术支持；没有第二套隐藏的阶段执行流程。公开请求与选择合同在 `include/ecm/stage1/`，阶段私有协作头留在 `src/ecm/stage1/`。模块职责和位宽边界见 [Stage1](STAGE1.md#cuda-模块边界)。
 
 ## 目录与依赖
 
@@ -50,7 +50,8 @@ src/
 └── ecm/
     ├── application/                共享配置生成物、运行态与 GUI
     ├── stage1/                     共同任务、合同、选择、标量与进度平铺
-    │   ├── edwards/{cpu,cuda}/      Edwards完整流程和设备实现
+    │   ├── cuda/ntt/               两种曲线共用的 Mersenne NTT 后端
+    │   ├── edwards/{cpu,cuda}/     Edwards 专用流程和设备实现
     │   └── montgomery/             Montgomery完整流程，共享param分派
     │       └── {cpu,cuda,opencl}/
     ├── stage2/                     任务、输入、几何、进程与控制台

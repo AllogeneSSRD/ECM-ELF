@@ -15,7 +15,7 @@ add_custom_target(ecm_config_check ALL
     COMMENT "Checking generated ECM configuration")
 
 # Stage1's banner, results and tune identity share the public version.
-set_property(SOURCE src/main.cpp src/io/results.cpp src/ecm/stage1/montgomery/cuda/ntt/tune.cpp
+set_property(SOURCE src/main.cpp src/io/results.cpp src/ecm/stage1/cuda/ntt/tune.cpp
     APPEND PROPERTY OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/ecm/platform/program_version.h")
 
 # MSVC Debug CRT (MDd) has an incompatibility with GMP's custom allocator

@@ -47,7 +47,7 @@ Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，�
 
 例如 x-only 选中 64 步、窗口为 16 时，每块启动 4 个 Graph。若该块预热实测 0.8 ms，默认每组回放 125 块，即每曲线 8000 步。窗口是每个 Graph 的步数上限。x-only 的正数尾段可独立建图；所选块短于窗口时，测到的是该尾段。原生 NAF 的连续零列使用 1、2、4 等二次幂长度的 Graph，非零列直接执行倍点和点加。例如 186 列含 26 个非零列时，最短块约 7 列。若这 7 列耗时 160 ms，默认正式组只执行一块。100 ms 是每个正式组的软目标，调优命令的总耗时还包含初始化、试跑及核对。
 
-`sample_pool_steps` 是采样池列数，`block_steps` 是一块实际回放的列数，`timed_steps` 是每曲线每个正式组的列数，`repeats` 是正式组数。原生 Edwards 保存完整标量列数 `naf_columns`、一轮的非零列数 `sample_nonzero` 和所有正式组的 CUDA event 总时间 `total_device_ms`。聚合吞吐 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。各组的中位时间 `median_ms` 和标准差用于观察波动。控制台每条测量同时显示 `target_ms`、`timed_steps`、`block_steps` 和实测 `group_ms`。原生 Edwards 的 `group_ms` 取各组平均，x-only 取中位数。x-only 仍采用 `1000 × batch × timed_steps / median_ms`。`Single`、`Best`、`95%` 分别报告单曲线、峰值及达到峰值 95% 的最小实测批量。[GPU 回放和计时](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp)
+`sample_pool_steps` 是采样池列数，`block_steps` 是一块实际回放的列数，`timed_steps` 是每曲线每个正式组的列数，`repeats` 是正式组数。原生 Edwards 保存完整标量列数 `naf_columns`、一轮的非零列数 `sample_nonzero` 和所有正式组的 CUDA event 总时间 `total_device_ms`。聚合吞吐 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。各组的中位时间 `median_ms` 和标准差用于观察波动。控制台每条测量同时显示 `target_ms`、`timed_steps`、`block_steps` 和实测 `group_ms`。原生 Edwards 的 `group_ms` 取各组平均，x-only 取中位数。x-only 仍采用 `1000 × batch × timed_steps / median_ms`。`Single`、`Best`、`95%` 分别报告单曲线、峰值及达到峰值 95% 的最小实测批量。[GPU 回放和计时](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/cuda/ntt/tune.cpp)
 
 ## 生产选型
 
@@ -69,7 +69,7 @@ Edwards 的 `edwards_naf_window_bits=0` 在当前 GPU 的兼容记录中优先�
 
 #### NTT and transform sizes
 
-下表按 0.70.0 的生产选长规则，逐个枚举承载指数 `32 ≤ p ≤ 1048576`。固定卷积后端，令 `ntt_length`、`ntt_bits_per_word`、`ntt_tile` 均为 0。各列给出该后端会选本行最短安全长度的闭区间。读原生 Edwards 加权列时，**先查最后一列的单点**，再查常规区间。例如 497,679 位需要 32,768 点，497,680 位可回到 20,480 点，497,681 位又需要 32,768 点。保守界适用于 x-only 和关闭收紧界的 NAF。开启收紧界的原生 NAF 使用后两列。[选长入口](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu#L280) · [Edwards 无符号系数界](../../src/ecm/stage1/montgomery/cuda/ntt/weighted.cuh#L30)
+下表按 0.70.0 的生产选长规则，逐个枚举承载指数 `32 ≤ p ≤ 1048576`。固定卷积后端，令 `ntt_length`、`ntt_bits_per_word`、`ntt_tile` 均为 0。各列给出该后端会选本行最短安全长度的闭区间。读原生 Edwards 加权列时，**先查最后一列的单点**，再查常规区间。例如 497,679 位需要 32,768 点，497,680 位可回到 20,480 点，497,681 位又需要 32,768 点。保守界适用于 x-only 和关闭收紧界的 NAF。开启收紧界的原生 NAF 使用后两列。[选长入口](../../src/ecm/stage1/cuda/ntt/ladder.cu#L280) · [Edwards 无符号系数界](../../src/ecm/stage1/cuda/ntt/weighted.cuh#L30)
 
 | N（点） | 分解 | linear 的 p | IBDWT 保守界的 p | IBDWT 原生 Edwards 的 p（常规） | 优先选本行的 Edwards 单点 p |
 | ---: | :--- | ---: | ---: | ---: | :--- |
@@ -98,4 +98,4 @@ Edwards 的 `edwards_naf_window_bits=0` 在当前 GPU 的兼容记录中优先�
 
 线性卷积从 31 到 16 选择最大可用 digit 位宽 `b`，令 `c = ceil(p/b)`，要求 `c·(2^b−1)² < q`，再取覆盖 `2c+1` 的最小二次幂。加权卷积依次检查二次幂与表中的五个混合长度，要求 `N ≤ p`、`b = ceil(p/N) ≤ 31`。保守界为 `2N·(2^b−1)² < q`，原生 Edwards 还能使用规范乘积的 `U(p,N) < q`。这里 `q = 2^64−2^32+1`。长短 digit 的周期随 `gcd(p,N)` 变化，因此表中保留单点。涉及 2XY 频域组合时另查 `4U < q`。[整数系数判定](../../src/ecm/cuda/ntt/shape.cpp#L2) · [2XY 融合条件](../architecture/NTT.md#edwards-2xy-第一层频域融合)
 
-`ntt_convolution="auto"` 通常还会比较线性、加权二次幂及能缩短变换的加权混合候选。原生 NAF 的最短档若依赖收紧界，仍与其余合法计划按 NAF 列吞吐比较。混合长度均可采用 radix-5 分解，PFA 是同一长度的互素分解实现；可比较传统 twiddle 与 PFA 的置换成本。显式长度、digit 位宽或 tile 会改变准入条件。[生产候选](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp) · [radix-5 实现](../../kernels/cuda/stage1_ntt_radix5.cuh)
+`ntt_convolution="auto"` 通常还会比较线性、加权二次幂及能缩短变换的加权混合候选。原生 NAF 的最短档若依赖收紧界，仍与其余合法计划按 NAF 列吞吐比较。混合长度均可采用 radix-5 分解，PFA 是同一长度的互素分解实现；可比较传统 twiddle 与 PFA 的置换成本。显式长度、digit 位宽或 tile 会改变准入条件。[生产候选](../../src/ecm/stage1/cuda/ntt/tune.cpp) · [radix-5 实现](../../kernels/cuda/stage1_ntt_radix5.cuh)

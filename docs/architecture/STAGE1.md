@@ -117,7 +117,7 @@ GPU 切片策略在工作行的曲线类型和实际目标模数确定后依次�
 
 [Montgomery workflow](../../src/ecm/stage1/montgomery/cuda/workflow.cpp)直接调用CUDA曲线运行时；factory提供设备准备、查询和兼容入口。param在归一化后固定，新sigma只在没有接纳恢复种子时生成。ladder的[构造描述](../../src/ecm/stage1/montgomery/cuda/construction.h)集中param0/2的7-word布局、param3的5-word布局及末点偏移，checkpoint与runtime共用；resident/PRAC仍使用自己的布局合同。不同param不建立完整独立workflow，也不在同一批次混用。
 
-[NTT workflow](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp) 接收 PARAM0 和 Atkin–Morain Edwards。Edwards 使用 `48·lcm(1…B1)`，可运行原生 2XY NAF，也可用 `u=(1+y)/(1−y)` 和 `a24=1/(1−d)` 进入 x-only 阶梯。映射分母的非单位通过 GCD 分类，最终按 Montgomery X/Z 求仿射坐标，与 Edwards save 的约定一致。适配器将剩余活跃曲线转为 slot-major 布局，负责 checkpoint、末点求逆和因子分类。[ladder.cu](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) 负责设备缓冲区、显存准入、正逆变换和 Graph，变换运行时与 CUDA Stage2 共用。[profiles.h](../../src/ecm/stage1/montgomery/cuda/ntt/profiles.h) 提供内置档位，[tune.cpp](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp) 用 ladder 搜索并缓存计划。检查点保存位或 NAF 列游标、活跃曲线掩码和对应算法的规范坐标。卷积后端、tile、pass 和 Graph 配置可在恢复时重新选择。运行范围与用法见 [CUDA 全宽 NTT](../usage/STAGE1.md#cuda-全宽-ntt)。
+[NTT workflow](../../src/ecm/stage1/cuda/ntt/workflow.cpp) 接收 PARAM0 和 Atkin–Morain Edwards。Edwards 使用 `48·lcm(1…B1)`，可运行原生 2XY NAF，也可用 `u=(1+y)/(1−y)` 和 `a24=1/(1−d)` 进入 x-only 阶梯。映射分母的非单位通过 GCD 分类，最终按 Montgomery X/Z 求仿射坐标，与 Edwards save 的约定一致。适配器将剩余活跃曲线转为 slot-major 布局，负责 checkpoint、末点求逆和因子分类。[ladder.cu](../../src/ecm/stage1/cuda/ntt/ladder.cu) 负责设备缓冲区、显存准入、正逆变换和 Graph，变换运行时与 CUDA Stage2 共用。[profiles.h](../../src/ecm/stage1/cuda/ntt/profiles.h) 提供内置档位，[tune.cpp](../../src/ecm/stage1/cuda/ntt/tune.cpp) 用 ladder 搜索并缓存计划。检查点保存位或 NAF 列游标、活跃曲线掩码和对应算法的规范坐标。卷积后端、tile、pass 和 Graph 配置可在恢复时重新选择。运行范围与用法见 [CUDA 全宽 NTT](../usage/STAGE1.md#cuda-全宽-ntt)。
 
 宽位宽的分段归约可把进位摘要交给下一批打包，设备数据流见 [NTT 架构](NTT.md#stage1-分段进位与-pack-融合)。
 
@@ -148,7 +148,7 @@ CUDA Edwards NTT 的主机工作线程按 sigma 排序后分段处理，结果�
 
 参数映射中，写 $d=A/B$，其中 $A=2h^2-1$、$B=h^4$。$A_{24}=B/(B-A)$，因此 $d$、$A_{24}$、$x$、$y$ 的四个分母可用前缀积共用一次模逆。求积时额外乘入 $A$，同时确认 $d$ 和 $1-d$ 的单位性。乘积不可逆时，按原构造顺序逐项检查各分母和 $d(1-d)$。同一乘积可能包含不同的真因子，逐项检查可保留原路径找到的确切因子和退化分类。该批量求逆用于提供梅森构造工作区的 CUDA Edwards NTT 路径。[构造实测](../performance/STAGE1_MERSENNE_NTT.md#参数映射的批量求逆)
 
-`[stage1] gpu_init_threads` 或 `--gpu-init-threads` 控制该主机阶段。0 为自动，至少 8 条曲线且模数不少于 4096 位时最多用 4 个工作线程。预算、可用逻辑 CPU 数和曲线数也限制实际线程数。每线程拥有自己的 GMP 工作区，主机字典构造及结果发布仍按原槽位顺序执行。`stage1_ntt_edwards_setup` 记录实际线程数、墙钟时间与归约方式。见 [曲线数学](../../src/ecm/curve/edwards.h) 和 [NTT 主机工作流](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp)。
+`[stage1] gpu_init_threads` 或 `--gpu-init-threads` 控制该主机阶段。0 为自动，至少 8 条曲线且模数不少于 4096 位时最多用 4 个工作线程。预算、可用逻辑 CPU 数和曲线数也限制实际线程数。每线程拥有自己的 GMP 工作区，主机字典构造及结果发布仍按原槽位顺序执行。`stage1_ntt_edwards_setup` 记录实际线程数、墙钟时间与归约方式。见 [曲线数学](../../src/ecm/curve/edwards.h) 和 [NTT 主机工作流](../../src/ecm/stage1/cuda/ntt/workflow.cpp)。
 
 ### 其他 GPU 工作流
 

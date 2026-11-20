@@ -2,10 +2,10 @@
 #include "tune.h"
 #include "ecm/curve/edwards.h"
 #include "ecm/stage1/ntt_target.h"
-#include "../../../edwards/memory.h"
-#include "../../../sigma.h"
-#include "../../../../../io/stage1_binary.h"
-#include "../../../../../io/stage1_checkpoint.h"
+#include "../../edwards/memory.h"
+#include "../../sigma.h"
+#include "../../../../io/stage1_binary.h"
+#include "../../../../io/stage1_checkpoint.h"
 #include "ecm/platform/logging.h"
 #include <algorithm>
 #include <iterator>

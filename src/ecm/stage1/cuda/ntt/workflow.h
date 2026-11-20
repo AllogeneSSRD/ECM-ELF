@@ -1,5 +1,5 @@
 #pragma once
-#include "../../../execution.h"
+#include "../../execution.h"
 
 namespace ecm_cuda_stage1 {
 ecm_stage1::ComputationResult run_ntt_stage1(

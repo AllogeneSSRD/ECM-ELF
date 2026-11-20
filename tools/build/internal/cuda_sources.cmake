@@ -7,6 +7,7 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/group_order/backends.cpp
     src/ecm/stage1/selection.cpp
     src/io/results.cpp
+    src/ecm/stage1/options.cpp
     src/ecm/stage1/task.cpp
     src/ecm/stage1/computation.cpp
     src/ecm/stage1/sigma.cpp
@@ -61,10 +62,10 @@ set(ECM_STAGE2_NTT_SOURCES ${ECM_CUDA_NTT_SOURCES})
 
 set(ECM_STAGE1_CUDA_SOURCES
     ${ECM_CUDA_NTT_SOURCES}
-    src/ecm/stage1/montgomery/cuda/ntt/ladder.cu
-    src/ecm/stage1/montgomery/cuda/ntt/batches.cpp
-    src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp
-    src/ecm/stage1/montgomery/cuda/ntt/tune.cpp
+    src/ecm/stage1/cuda/ntt/ladder.cu
+    src/ecm/stage1/cuda/ntt/batches.cpp
+    src/ecm/stage1/cuda/ntt/workflow.cpp
+    src/ecm/stage1/cuda/ntt/tune.cpp
     src/ecm/application/configuration/runtime.cpp
     src/ecm/cuda/factory.cpp
     src/ecm/stage1/montgomery/cuda/workflow.cpp

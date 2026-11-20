@@ -5,7 +5,7 @@
 现有整数 NTT 探针在单整数上已显示交叉点，但接回 CGBN REDC 会保留二次成本，也没有验证完整 Stage1。新实验选择完整梅森模数，用线性 Goldilocks NTT、精确进位和 GPU 端梅森折叠闭合每次模乘。记录三层点乘依赖、常量频谱复用、定长 Graph 和余数 Graph；普通余因子、Edwards 和生产任务发布留待验证。
 
 - 参考 Prime95 `ecm.cpp` 中的延迟 FFT、融合乘加与点公式；GPUOWL 本地源码中的 iBDWT 位宽、变换后舍入及进位作为后续备选。首轮选择整数域便于与 GMP 作逐坐标等值验证。
-- `src/ecm/stage1/montgomery/cuda/ntt/ladder.cu` 实现驻留内核；`tools/test/stage1_mersenne_ntt.cpp` 提供构造、结果检查和计时。共享 NTT 库按已有 inventory 链接。Win11 的沙箱内并行 ptxas 遇到 `INVALID_HANDLE`，切换串行编译；设备链接在已授权的本机执行后通过。
+- `src/ecm/stage1/cuda/ntt/ladder.cu` 实现驻留内核；`tools/test/stage1_mersenne_ntt.cpp` 提供构造、结果检查和计时。共享 NTT 库按已有 inventory 链接。Win11 的沙箱内并行 ptxas 遇到 `INVALID_HANDLE`，切换串行编译；设备链接在已授权的本机执行后通过。
 - 算术验收包含 32/33/64/65/8192/8193/262144 位的人工坐标、Graph 短尾、直接提交，以及两种因子来源。B1=40、M65、sigma 11 给出 `31×8191`；sigma 12 构造时给出 `31`。4294967311 起的四曲线通过大 sigma 原样校验。
 - 基准按单曲线 tile 筛选后冻结，同一位宽也用于四曲线；对照复用现有 CGBN worker，只在独立实验目录执行。192 曲线批次可能返回真因子，初次采集器将状态 1 错判失败，原记录保留；正式采集接受返回码 0/1，并另核对 1/4 曲线的归一化保存点。
 - 主矩阵的 30 个 NTT 进程（每进程三样本）与 18 个 CGBN 对照通过，独立核对了 30 个归一化点。随后 B1=5000 的 6 对单曲线进程又通过交叉验证。两档小位宽的单曲线延迟优势在长标量下仍成立，CGBN 192 曲线批量则保持吞吐优势。

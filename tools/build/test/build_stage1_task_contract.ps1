@@ -16,9 +16,9 @@ if(-not $manifest.host_compiler -or -not $manifest.compile_setup){throw 'Formal 
 . (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
 $inventory=Get-EcmCudaInventory $repo
 $production=@($inventory.groups.STAGE1_COMMON)+@($inventory.groups.STAGE1_CUDA)
-$sources=@('src/io/results.cpp','src/ecm/stage1/selection.cpp','src/ecm/stage1/task.cpp','src/ecm/stage1/computation.cpp','src/ecm/stage1/montgomery/opencl/checkpoint.cpp',
+$sources=@('src/io/results.cpp','src/ecm/stage1/selection.cpp','src/ecm/stage1/options.cpp','src/ecm/stage1/task.cpp','src/ecm/stage1/computation.cpp','src/ecm/stage1/montgomery/opencl/checkpoint.cpp',
     'src/io/stage1_checkpoint.cpp','src/ecm/platform/stop.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp',
-    'src/ecm/stage1/scalar.cpp','src/ecm/stage1/progress.cpp')
+    'src/ecm/stage1/scalar.cpp','src/ecm/stage1/progress.cpp','src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp')
 if($QueueWorkflow){
     & (Join-Path $PSScriptRoot 'build_stage1_host_io.ps1') -WorkerBuild $WorkerBuild -Build $Build
     return

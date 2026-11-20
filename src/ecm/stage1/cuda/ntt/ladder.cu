@@ -3,11 +3,11 @@
 #include "weighted.cuh"
 #include "ecm/stage1/ntt_length.h"
 #include "ecm/integer.h"
-#include "../../../../../../kernels/cuda/stage1_ntt_radix5.cuh"
-#include "../../../../cuda/ntt/runtime.h"
-#include "../../../../../../kernels/cuda/stage1_ntt_dataflow.cuh"
-#include "../../../../../../kernels/cuda/stage1_ntt_layout.cuh"
-#include "../../../../../../kernels/cuda/stage1_ntt_segments.cuh"
+#include "../../../../../kernels/cuda/stage1_ntt_radix5.cuh"
+#include "../../../cuda/ntt/runtime.h"
+#include "../../../../../kernels/cuda/stage1_ntt_dataflow.cuh"
+#include "../../../../../kernels/cuda/stage1_ntt_layout.cuh"
+#include "../../../../../kernels/cuda/stage1_ntt_segments.cuh"
 #include <array>
 #include <cmath>
 #include <map>

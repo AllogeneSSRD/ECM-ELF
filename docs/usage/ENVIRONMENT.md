@@ -112,7 +112,7 @@ OpenCL Stage1 早期环境入口也已迁至命令行。当前入口见 [Stage1 
 | `ED_SOA_DEBUG` | 未设置时关闭。设任意值即开启 | CPU Edwards SIMD 的字典、归约、点乘和检查点诊断。即使设 `0` 也会输出。 |
 | `ED_SOA_DUMP_STEP` | `0`。正整数为间隔（NAF 数字数） | 与 `ED_SOA_DEBUG` 一起用，按间隔打印 lane 0 全坐标，便于对拍。 |
 
-建表默认条件见 [GPU NTT 选型](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp)。CPU 计时与调试输出见 [标量 NAF](../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp)和 [IFMA NAF](../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp)。
+建表默认条件见 [GPU NTT 选型](../../src/ecm/stage1/cuda/ntt/workflow.cpp)。CPU 计时与调试输出见 [标量 NAF](../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp)和 [IFMA NAF](../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp)。
 
 ## 公共运行时和 GUI
 

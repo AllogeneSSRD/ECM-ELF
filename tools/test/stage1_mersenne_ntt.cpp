@@ -1,5 +1,5 @@
 // End-to-end Suyama PARAM0 Stage1 driver and independent GMP oracle.
-#include "../../src/ecm/stage1/montgomery/cuda/ntt/ladder.h"
+#include "../../src/ecm/stage1/cuda/ntt/ladder.h"
 #include "ecm/platform/program_version.h"
 #include "ecm/stage1/ntt_length.h"
 #include "ecm/stage1/scalar.h"

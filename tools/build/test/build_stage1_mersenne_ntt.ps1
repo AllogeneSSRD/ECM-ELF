@@ -6,5 +6,5 @@ Set-Location $repo
 . (Join-Path $PSScriptRoot '../internal/cuda_ntt_probe.ps1')
 Invoke-EcmNttProbeBuild -Repo $repo -Build $Build -Arch $Arch -ModuleBuild $ModuleBuild `
     -Source 'tools/test/stage1_mersenne_ntt.cpp' -Name 'stage1_mersenne_ntt' `
-    -ExtraSources @('src/ecm/stage1/montgomery/cuda/ntt/ladder.cu','src/ecm/stage1/scalar.cpp') `
+    -ExtraSources @('src/ecm/stage1/cuda/ntt/ladder.cu','src/ecm/stage1/scalar.cpp') `
     -SplitCompile $SplitCompile

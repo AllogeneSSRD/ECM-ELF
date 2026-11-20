@@ -1,8 +1,9 @@
 // Synthetic Stage1 ladder states let the production selector run at exact
 // exponent boundaries where small factors can change the number of live curves.
-#include "../../src/ecm/stage1/montgomery/cuda/ntt/ladder.h"
-#include "../../src/ecm/stage1/montgomery/cuda/ntt/tune.h"
+#include "../../src/ecm/stage1/cuda/ntt/ladder.h"
+#include "../../src/ecm/stage1/cuda/ntt/tune.h"
 #include "../../src/io/files.h"
+#include "ecm/integer.h"
 #include "ecm/platform/program_version.h"
 #include "ecm/stage1/ntt_length.h"
 #include <algorithm>
@@ -32,7 +33,11 @@ int main(int argc, char** argv) {
             !batch || batch > ecm_stage1::stage1_ntt_max_curves ||
             !steps || steps > 1000000)
             throw std::invalid_argument("invalid benchmark width, batch or step count");
-        ecm_stage1::Stage1NttOptions options;
+        ecm_stage1::Stage1Options task;
+        task.execution.device_index = device;
+        task.execution.selection.gpu_param = 0;
+        task.execution.selection.gpu_algorithm = ecm_stage1::GpuAlgorithm::Ntt;
+        auto& options = task.execution.ntt;
         options.tune_file = argv[5];
         if (plan_argc == 13) {
             options.automatic = false;
@@ -44,7 +49,16 @@ int main(int argc, char** argv) {
             options.window = std::stoi(argv[11]);
             options.warp_tail = std::stoi(argv[12]);
         }
-        const auto selected = ecm_mersenne_ntt::select_tuned_plan(device, p, batch, options);
+        ecm_edwards::Integer modulus;
+        mpz_setbit(modulus.v, p);
+        mpz_sub_ui(modulus.v, modulus.v, 1);
+        // Match standalone -tune's default B1 for plan lookup and sample metadata.
+        // The measured ladder below still uses the requested synthetic scalar length.
+        constexpr double tune_b1 = 128;
+        const std::string empty;
+        const ecm_stage1::Stage1Request request{modulus.v, tune_b1, tune_b1, batch, empty, false, empty, task};
+        ecm_mersenne_ntt::BatchMemory memory;
+        const auto selected = ecm_mersenne_ntt::select_tuned_plan(request, p, batch, options, 0, true, memory);
         const unsigned words = (p + 31) / 32;
         std::mt19937 random(0x67ae128bu);
         std::vector<uint32_t> scalar((steps + 31) / 32), initial(size_t(6) * batch * words);

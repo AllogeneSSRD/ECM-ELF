@@ -388,9 +388,9 @@ CGBN 的 Edwards 用 NAF w6 和 HWCD，每列倍点，只在非零列读取预�
 
 RTX 4070 Ti 使用 0.62.3 的 29 个指数，RTX 4060 Laptop 使用 0.62.2 的 26 个指数。同卡、同指数的两种曲线复用相同的卷积类型、变换长度、digit 位宽、pass、Graph 参数和批量。每种曲线取三次设备计时的中位数。阴影以 Edwards 最短／Montgomery 最长和 Edwards 最长／Montgomery 最短给出样本比值范围。55 组中有 **54 组的中位耗时差在 ±0.65% 内**。4070 Ti 的 M127 为 −1.61%，样本比值范围为 −4.06% 至 +1.50%。两张卡的有符号差异中位数分别约为 +0.01% 和 −0.05%。
 
-Edwards 仍用 Atkin–Morain 构造曲线与初始点，主机用 `u = (1+y)/(1−y)` 转为 Montgomery x 坐标。Suyama PARAM0 直接准备自己的 Montgomery 初始点和曲线系数。两种初始状态随后都交给同一个 x-only 二进制阶梯。每步的差分加、倍点、NTT 乘法和进位执行同一套设备代码。曲线构造、归一化、因子检查和保存均在图用的阶梯计时之外。见 [Edwards 映射和 NTT 入口](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp#L88) 与 [共享阶梯步](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu#L751)。
+Edwards 仍用 Atkin–Morain 构造曲线与初始点，主机用 `u = (1+y)/(1−y)` 转为 Montgomery x 坐标。Suyama PARAM0 直接准备自己的 Montgomery 初始点和曲线系数。两种初始状态随后都交给同一个 x-only 二进制阶梯。每步的差分加、倍点、NTT 乘法和进位执行同一套设备代码。曲线构造、归一化、因子检查和保存均在图用的阶梯计时之外。见 [Edwards 映射和 NTT 入口](../../src/ecm/stage1/cuda/ntt/workflow.cpp#L88) 与 [共享阶梯步](../../src/ecm/stage1/cuda/ntt/ladder.cu#L751)。
 
-本批 Montgomery 使用 `lcm(1…B1)`，Edwards 使用其 48 倍。B1=1024 时两者分别执行 1478 与 1484 步，Edwards 多约 0.41%。B1=10000 时分别为 14446 与 14451 步，多约 0.035%。例如 M262139 的整段 Edwards 耗时在两张卡上分别多约 0.40% 与 0.41%，按各自步数归一化后差异均小于 0.01%。见 [标量构造](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp#L144)。
+本批 Montgomery 使用 `lcm(1…B1)`，Edwards 使用其 48 倍。B1=1024 时两者分别执行 1478 与 1484 步，Edwards 多约 0.41%。B1=10000 时分别为 14446 与 14451 步，多约 0.035%。例如 M262139 的整段 Edwards 耗时在两张卡上分别多约 0.40% 与 0.41%，按各自步数归一化后差异均小于 0.01%。见 [标量构造](../../src/ecm/stage1/cuda/ntt/workflow.cpp#L144)。
 
 百分比图的 `--cgbn` 读取 `data/experiments/stage1_cgbn_curve_cost_0623/{gpu0,gpu1}/`。每个 `--ntt-pair` 按 Montgomery、Edwards 顺序传入同卡的两份 `summary.json`，分别使用 4060 的 0.62.2 矩阵、4070 Ti 的 0.62.3 主矩阵和 radix-5 补测。逐点数据 `cgbn_curve_delta.csv` 和 `ntt_curve_delta.csv` 保存在 `data/benchmarks/stage1_cgbn_curve_cost_0623/`。见 [百分比绘图脚本](../../tools/bench/plot_stage1_curve_cost.py) 与 [CGBN 工作行生成器](../../tools/bench/prepare_stage1_gpu_matrix.py)。
 

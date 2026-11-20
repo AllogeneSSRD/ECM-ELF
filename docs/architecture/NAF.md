@@ -62,7 +62,7 @@ CPU 建表做批量模逆以得到仿射项，GMP 每条曲线、IFMA 每个 lan
 | w10 | Stage1 末点 | 字典归一化 | 15 |
 | w12 | 字典归一化 | 字典归一化 | 14 |
 
-主机建表命中后，该 sigma 直接进入 Stage1 因子结果。其余曲线运行到末点，计算 Montgomery 映射分母 $Z-Y$ 与 $N$ 的 GCD。18 次运行逐 sigma 一致，sigma 27 和 31 返回 270811405193137，其余 14 条返回 130553，两个数均经整除验证。窗口改变了运行中的分母检查点，三个窗口都在 Stage1 返回同一组结果。比较主循环时须使用实际发射曲线数。见 [建表结果分派](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp#L315) 和 [末点检查](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp#L526)。
+主机建表命中后，该 sigma 直接进入 Stage1 因子结果。其余曲线运行到末点，计算 Montgomery 映射分母 $Z-Y$ 与 $N$ 的 GCD。18 次运行逐 sigma 一致，sigma 27 和 31 返回 270811405193137，其余 14 条返回 130553，两个数均经整除验证。窗口改变了运行中的分母检查点，三个窗口都在 Stage1 返回同一组结果。比较主循环时须使用实际发射曲线数。见 [建表结果分派](../../src/ecm/stage1/cuda/ntt/workflow.cpp#L315) 和 [末点检查](../../src/ecm/stage1/cuda/ntt/workflow.cpp#L526)。
 
 逐项复算见 `data/experiments/stage1_ntt_naf_windows_06315/verify_m16319.log`。原始运行证据为同目录下 `full/gpu{0,1}/a0-p16319-l1024-c16-w{8,10,12}-s0-r{0,1,2}/` 内的 `driver.log` 和 `point.save`。
 

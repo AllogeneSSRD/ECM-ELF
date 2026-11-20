@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../../../cuda/arithmetic/goldilocks/goldilocks.cuh"
+#include "../../../cuda/arithmetic/goldilocks/goldilocks.cuh"
 #include <algorithm>
 #include <cstdint>
 #include <numeric>

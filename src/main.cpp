@@ -58,7 +58,7 @@ using ecm_stage1_app::stage1_result_settings;
 #define ECM_HAS_CUDA_STAGE1 0
 #endif
 #if ECM_HAS_CUDA_STAGE1
-#include "ecm/stage1/montgomery/cuda/ntt/tune.h"
+#include "ecm/stage1/cuda/ntt/tune.h"
 #endif
 // Application assembly still selects the CPU default NAF window.
 #include "ecm/stage1/edwards/cpu/ecm_edwards_cpu.h"
