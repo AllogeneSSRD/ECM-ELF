@@ -246,7 +246,10 @@ inline void validate_stage1_ntt(const Fields &s) {
         if(!block || (!stratified && block>64) || !steps || steps>UINT32_MAX || steps%block || (!grouped && steps>64*block) ||
            width<ecm_stage1::stage1_ntt_min_exponent || width>ecm_stage1::stage1_ntt_max_exponent ||
            uint(s,"segments")!=(width+8191)/8192 || (grouped ? !target || target>UINT32_MAX : target!=20 && target!=50) ||
-           (grouped ? groups!=3 && groups!=5 : groups!=(target==20 ? 3u : 5u)) || !uint(s,"carry_bits") || uint(s,"carry_bits")>64 ||
+           (s.count("sample_phase") ? !grouped || groups>ecm_stage1::ntt_max_repeats ||
+                uint(s,"sample_phase")<1 || uint(s,"sample_phase")>2 :
+                grouped ? groups!=3 && groups!=5 : groups!=(target==20 ? 3u : 5u)) ||
+           !uint(s,"carry_bits") || uint(s,"carry_bits")>64 ||
            uint(s,"uniform_digits")>1 || uint(s,"dataflow")>UINT32_MAX ||
            (window && (curve!="edwards" || window<2 || window>12)) || uint(s,"b1")<2 ||
            (curve!="edwards" && curve!="mont0") || !(ms>0) ||
@@ -662,6 +665,7 @@ struct Profile {
             if(old.count("batch_scope")!=sample.count("batch_scope") ||
                (sample.count("batch_scope") && required(old,"batch_scope")!=required(sample,"batch_scope")))return false;
             if(old.count("sample_target_ms")!=sample.count("sample_target_ms"))return false;
+            if(optional_uint(old,"sample_phase",0)!=optional_uint(sample,"sample_phase",0))return false;
             if(old.count("benchmark_kind")!=sample.count("benchmark_kind") ||
                (sample.count("benchmark_kind") && required(old,"benchmark_kind")!=required(sample,"benchmark_kind")))return false;
             if(sample.count("sample_target_ms"))

@@ -13,6 +13,7 @@ bool ecm_visit_log_lines(const std::string &path,const std::function<void(const 
 #include <chrono>
 #include <cctype>
 #include <cstring>
+#include <cstdlib>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -451,7 +452,7 @@ void ecm_install_timestamped_iostreams() {
     g_installed = true;
 }
 
-int ecm_ts_vfprintf(FILE *stream, const char *fmt, va_list ap) {
+static int write_timestamped(FILE *stream, const char *fmt, va_list ap, const char *color) {
     std::lock_guard<std::mutex> lk(g_log_mutex);
     const std::string p = ecm_log_timestamp_enabled() ? timestamp_prefix() : std::string();
 
@@ -461,7 +462,9 @@ int ecm_ts_vfprintf(FILE *stream, const char *fmt, va_list ap) {
         }
         va_list apc;
         va_copy(apc, ap);
+        if (color) std::fputs(color, f);
         std::vfprintf(f, fmt, apc);
+        if (color) std::fputs("\033[0m", f);
         va_end(apc);
         std::fflush(f);
     };
@@ -488,6 +491,27 @@ int ecm_ts_vfprintf(FILE *stream, const char *fmt, va_list ap) {
         }
     }
     return 0;
+}
+
+int ecm_ts_vfprintf(FILE *stream, const char *fmt, va_list ap) {
+    return write_timestamped(stream, fmt, ap, nullptr);
+}
+
+void ecm_log_accent(EcmLogAccent accent, const char *fmt, ...) {
+    const char *color = nullptr;
+#ifdef _WIN32
+    DWORD mode = 0;
+    const bool terminal = GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode) &&
+                          (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+#else
+    const bool terminal = isatty(fileno(stdout));
+#endif
+    if (terminal && !std::getenv("NO_COLOR"))
+        color = accent == EcmLogAccent::Report ? "\033[94m" : "\033[91m";
+    va_list ap;
+    va_start(ap, fmt);
+    write_timestamped(stdout, fmt, ap, color);
+    va_end(ap);
 }
 
 int ecm_ts_fprintf(FILE *stream, const char *fmt, ...) {

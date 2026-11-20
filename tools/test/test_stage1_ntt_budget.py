@@ -53,18 +53,18 @@ def main():
     assert {row["length"] for row in cold} == {2560,4096,8192}
     assert {row["dataflow"] & 384 for row in cold if row["length"] == 2560} == {0,128,384}
     for row in cold:
-        assert row["sample_target_ms"] == 100 and row["repeats"] in (3, 5)
+        assert row["sample_target_ms"] == 100 and row["repeats"] == 2
         rate = 1000 * row["batch"] * row["timed_steps"] * row["repeats"] / row["total_device_ms"]
         assert abs(row["iter_per_s"] / rate - 1) < 1e-7
     snapshot = database.read_bytes()
-    assert tune("hot", p, 6) == (0,len(cold))
-    assert snapshot == database.read_bytes()
+    assert tune("hot", p, 6) == (1,len(cold))
+    assert ("status=updated" in (out/"hot/run.log").read_text()) == (snapshot != database.read_bytes())
     measured, reused = tune("grow", p, 12)
     assert measured and reused
     assert tune("shrink", p, 4)[1] > 0
     snapshot = database.read_bytes()
-    assert tune("compatible", 63485, 6)[0] == 0
-    assert snapshot == database.read_bytes()
+    assert tune("compatible", 63485, 6)[0] == 1
+    assert ("status=updated" in (out/"compatible/run.log").read_text()) == (snapshot != database.read_bytes())
     measured, reused = tune("fusion_gate", 63493, 6)
     assert measured and reused
     assert any(r["reference_bits"] == 63493 and r["length"] == 2560 and not r["dataflow"] & 32768
@@ -76,14 +76,14 @@ def main():
         layouts = (0,128,384) if length == 2560 else (0,)
         for layout in layouts:
             covered = {r["batch"] for r in rows() if r["length"] == length and r["dataflow"] & 384 == layout
-                       and r["repeats"] == 5}
+                       and r["sample_phase"] == 2}
             assert set(range(1,cap+1)) <= covered
     flags = ["-sigma","26","-gpucurves","1","-save","out.save","32","32"]
     expression = f"2^{p}-1\n"
     log = run("production", 6, flags, expression)
     assert "source=tune" in log
     winner = max((r for r in rows() if r["reference_bits"] == p and r["b1"] == 32
-                  and r["batch"] == 1 and r["repeats"] == 5), key=lambda r: r["iter_per_s"])
+                  and r["batch"] == 1 and r["sample_phase"] == 2), key=lambda r: r["iter_per_s"])
     actual = dict(re.findall(r"(\w+)=([^ ]+)", re.search(r"stage1_ntt_plan: (.*)", log)[1]))
     for key, column in (("length","length"), ("tile_layers","tile"), ("graph_bits","graph_bits"),
                         ("outer_max_layers","max_radix_bits"), ("dataflow","dataflow")):

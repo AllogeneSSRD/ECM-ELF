@@ -341,7 +341,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const auto prep = now_s();
     if (p < ecm_stage1::stage1_ntt_min_exponent || p > ecm_stage1::stage1_ntt_max_exponent ||
         !curves || curves > ecm_stage1::stage1_ntt_max_curves || options.window < -1 || options.window > 64 ||
-        !samples || samples > 20 || count > UINT32_MAX - 64 ||
+        !samples || samples > ecm_stage1::ntt_max_repeats || count > UINT32_MAX - 64 ||
         (!naf && !(control && control->describe_only) && scalar_words.size() < (size_t(count) + 31) / 32) ||
         (control && control->resume > count))
         throw std::invalid_argument("invalid Mersenne NTT Stage1 shape or scalar");

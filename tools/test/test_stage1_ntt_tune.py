@@ -68,9 +68,9 @@ matrix = [
               "warp_tail:forward_pass_bits:inverse_pass_bits (0=linear, 1=weighted)")
     header = "length max_exp ntt_type batch iter/s"
     assert log.index(legend) < log.index(header)
-    lengths = [int(n) for n in re.findall(r"^(?:\[[^\n]*\] )?(?:Best |95% +)?(\d+) \d+ [01]:", log, re.M)]
+    lengths = [int(n) for n in re.findall(r"^(?:\[[^\n]*\] )?(?:(?:Best|95%) +)?(\d+) +\d+ +[01]:", log, re.M)]
     assert len(set(lengths)) == 2, lengths
-    best_lines = re.findall(r"Best \d+ \d+ [01]:[\d:,]+ \d+c \d+ iter/s", log)
+    best_lines = re.findall(r"Best +\d+ +\d+ +[01]:[\d:,]+ +\d+c +\d+ iter/s", log)
     mirrored = mirror.read_text(encoding="utf-8")
     assert legend in mirrored and len(best_lines) == 1 and all(line in mirrored for line in best_lines)
     profile = tomllib.loads(database.read_text(encoding="utf-8"))
@@ -91,16 +91,17 @@ matrix = [
             assert abs(r["iter_per_s"] * r["median_ms"] / (1000*r["batch"]*r["timed_steps"]) - 1) < 1e-7
             assert r["timed_steps"] % r["block_steps"] == 0 and r["stddev_seconds"] >= 0
     snapshot = database.read_bytes()
-    assert "measured=0 " in run("hot_matrix", ["--tune", "ntt", "--bits", str(p)], cfg=config)
-    assert database.read_bytes() == snapshot
+    hot = run("hot_matrix", ["--tune", "ntt", "--bits", str(p)], cfg=config)
+    assert "measured=1 " in hot and hot.count("stage1_ntt_recheck:") == 1
+    assert ("status=updated" in hot) == (database.read_bytes() != snapshot)
     assert "source=tune" in run("full_cached", [*flags[:1], "1", *flags[2:]], expression=expression)
-    assert re.search(r"95% +\d+ \d+ [01]:[\d:,]+ \d+c \d+ iter/s", log)
+    assert re.search(r"95% +\d+ +\d+ +[01]:[\d:,]+ +\d+c +\d+ iter/s", log)
     print("PASS full tune CLI, measured 95% batch and production selection", flush=True)
 
     direct = run("direct", ["--tune", "ntt", "--bits", "61"],
                  cfg=fixture + "ntt_window_bits = 0\nntt_length = 8\n")
-    assert re.search(r"Best 8 \d+ [01]:\d+:\d+:0:", direct)
-    assert set(re.findall(r"8 \d+ ([01]):\d+:\d+:0:", direct)) == {"0", "1"}
+    assert re.search(r"Best +8 +\d+ +[01]:\d+:\d+:0:", direct)
+    assert set(re.findall(r"8 +\d+ +([01]):\d+:\d+:0:", direct)) == {"0", "1"}
     print("PASS both modes grouped at one length with direct submission", flush=True)
 
     p = 58631
@@ -127,7 +128,7 @@ matrix = [
     # This matrix checks mixed-layout coverage at every shortlisted batch.
     # The preceding full matrix already verifies the default timing and reuse.
     log = run("full_mixed", ["--tune", f"ntt,exp={p},time=0.25"])
-    lengths = [int(n) for n in re.findall(r"^(?:\[[^\n]*\] )?Best (\d+) \d+ [01]:", log, re.M)]
+    lengths = [int(n) for n in re.findall(r"^(?:\[[^\n]*\] )?Best +(\d+) +\d+ +[01]:", log, re.M)]
     assert len(lengths) == 1
     assert {2560,4096} < {int(n) for n in re.findall(r"stage1_ntt_plan: p=58631 length=(\d+)", log)}
     columns, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]

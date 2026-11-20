@@ -201,7 +201,7 @@ def ntt_sample_scope(current, previous, overlay, hidden_versions=()):
 
 
 def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope,
-         hidden_versions=(), hide_ladder_retests=False):
+         hidden_versions=(), hide_ladder_retests=False, tune_note=""):
     model = "Edwards" if curve == "ed" else "Montgomery PARAM0"
     updated_cgbn = {backend.removesuffix("_previous") for backend, _ in points
                     if backend.startswith("cgbn") and backend.endswith("_previous")}
@@ -213,6 +213,8 @@ def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope,
     overlay_history = [version for backend, version in points if backend == "ntt_overlay_previous"]
     has_gmp_ecm = any(backend.startswith("gmp_ecm_cgbn") for backend, _ in points)
     colors = {
+        "tune": ("#a41b74", "*"),
+        "tune_overlay": ("#a41b74", "*"),
         "ntt": ("#b73339", "o"),
         "ntt_overlay": ("#14804a", "D"),
         "cgbn": ("#d4771d", "s"),
@@ -240,7 +242,9 @@ def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope,
             marker = "D" if overlay else "o"
         else:
             color, marker = colors[backend]
-        if backend == "prime95":
+        if backend in ("tune", "tune_overlay"):
+            label = f"NTT {version} · tune projection"
+        elif backend == "prime95":
             label = "GWNUM · 1 core at 4 GHz"
         elif backend.startswith("ntt"):
             label = f"NTT {version}"
@@ -262,7 +266,8 @@ def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope,
         cgbn_scope = "1 batch, 3 at paired points" if has_retests else "1 batch"
         fig.suptitle(f"Stage1 {model} · Cost per curve\n"
                      f"NTT · full Mersenne, {ntt_scope}   |   CGBN · cofactor, 2 blocks/SM, {cgbn_scope}   |   "
-                     "Prime95 · native Stage1, 3 runs" + ("\nGMP-ECM · cofactor, GPU CGBN in WSL" if has_gmp_ecm else ""),
+                     "Prime95 · native Stage1, 3 runs" + ("\nGMP-ECM · cofactor, GPU CGBN in WSL" if has_gmp_ecm else "")
+                     + ("\n" + tune_note if tune_note else ""),
                      fontsize=13, fontweight="medium", linespacing=1.45)
         lines = {}
         for i, ax in enumerate(axes):
@@ -275,10 +280,11 @@ def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope,
                 label, color, marker, previous = styles[key]
                 paired_ladder = key[0].endswith("_paired_ladder")
                 gmp_ecm = key[0].startswith("gmp_ecm_cgbn")
-                line, = ax.plot(x, y, label=label, color=color, marker=marker, markersize=4, linewidth=1.7,
+                tune = key[0] in ("tune", "tune_overlay")
+                line, = ax.plot(x, y, label=label, color=color, marker=marker, markersize=8 if tune else 4, linewidth=1.7,
                                 linestyle="none" if paired_ladder else ":" if gmp_ecm else "--" if previous else "-",
                                 markerfacecolor="none" if previous or gmp_ecm else color,
-                                zorder=4 if paired_ladder else 2 if previous else 3)
+                                zorder=5 if tune else 4 if paired_ladder else 2 if previous else 3)
                 if i:
                     lines[key] = line
                 if (key[0].startswith("cgbn") or gmp_ecm) and not previous:
@@ -298,9 +304,9 @@ def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope,
                 ax.ticklabel_format(style="plain", axis="x")
         axes[0].set_ylabel("Seconds per curve at B1 = 1,000,000 (scaled)")
         groups = (
-            (overlay_device, ("ntt_overlay", "ntt_overlay_previous", "cgbn_overlay", "cgbn_overlay_paired_ladder",
+            (overlay_device, ("tune_overlay", "ntt_overlay", "ntt_overlay_previous", "cgbn_overlay", "cgbn_overlay_paired_ladder",
                               "cgbn_overlay_previous", "gmp_ecm_cgbn_overlay")),
-            (device, ("ntt", "ntt_previous", "cgbn", "cgbn_paired_ladder", "cgbn_previous", "gmp_ecm_cgbn")),
+            (device, ("tune", "ntt", "ntt_previous", "cgbn", "cgbn_paired_ladder", "cgbn_previous", "gmp_ecm_cgbn")),
             ("Prime95", ("prime95",)),
         )
         columns = [(name, [line for role in roles for key, line in lines.items() if key[0] == role])

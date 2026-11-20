@@ -57,11 +57,9 @@ def main():
         measured = sum(int(m) for m, _ in summaries)
         reused = sum(int(r) for _, r in summaries)
         if source != b1:
-            assert measured == 0 and all(int(r) for _, r in summaries) and before == db.read_bytes()
-            assert "stage1_ntt_naf_sample:" not in log
-            cold = (out / f"from{source}_b{source}" / "run.log").read_text(encoding="utf-8")
-            winners = re.findall(r"\bBest [^\r\n]+", cold)
-            assert len(winners) == 3 and winners == re.findall(r"\bBest [^\r\n]+", log)
+            assert all(int(m)==1 and int(r)>0 for m, r in summaries)
+            assert log.count("stage1_ntt_recheck:") == log.count("stage1_ntt_naf_sample:") == 3
+            assert ("status=updated" in log) == (before != db.read_bytes())
             return
         assert before is None and measured and reused == 0
         assert log.count("stage1_ntt_naf_sample:") == 3
@@ -76,9 +74,11 @@ def main():
             assert (row["naf_columns"], row["block_steps"], row["sample_nonzero"]) == shapes[w]
             expected = 1000 * row["batch"] * row["timed_steps"] * row["repeats"] / row["total_device_ms"]
             assert math.isclose(row["iter_per_s"], expected, rel_tol=1e-9)
-            if row["repeats"] == 5:
+            if row["sample_phase"] == 2:
                 rates[w, row["batch"], row["graph_bits"]] = row["iter_per_s"]
-        assert set(rates) == {(w, b, g) for w in shapes for b in (1, 2) for g in (4, 8, 16, 32, 64)}
+        for w in shapes:
+            grids = [{g for window, batch, g in rates if (window, batch) == (w, b)} for b in (1, 2)]
+            assert {16} in grids and {4, 8, 16, 32, 64} in grids
         print(f"B1={b1} columns/sample/nonzero={shapes} measured={measured}", flush=True)
         return rates
 
@@ -89,9 +89,9 @@ def main():
         trained, actual = matrices[source], matrices[target]
         winner = max(trained, key=trained.get)
         best = max(actual, key=actual.get)
-        print(f"{source}->{target}: reused naf/batch/graph={winner}, independent best={best}, "
-              f"actual={actual[winner]:.1f}/{actual[best]:.1f} iter/s "
-              f"({100*actual[winner]/actual[best]:.2f}%)", flush=True)
+        observed = f"{actual[winner]:.1f} iter/s" if winner in actual else "outside target's final Graph scan"
+        print(f"{source}->{target}: reused naf/batch/graph={winner}, independently measured={observed}, "
+              f"independent best={best} at {actual[best]:.1f} iter/s", flush=True)
 
 
 if __name__ == "__main__":
