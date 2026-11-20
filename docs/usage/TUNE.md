@@ -24,13 +24,15 @@
 
 粗测比较允许的最小批量、内部批量和容量上限。实际分配失败时二分缩小容量。单曲线（或指定下界）和总吞吐接近领先者的形状进入精测，比较 tile、outer、每 Graph 4、8、16、32、64 步、倍增批量和峰值邻档。混合长度比较 twiddle radix-5、直接 PFA 和合并访存 PFA。容量同时考虑设备工作区、NAF 字典、主机内存及剩余曲线数。
 
-每个采样片段最多 64 步。x-only 用可重现的标量位。原生 Edwards 用指定 B1、w 的真实 NAF 中段，连续零列按生产规则拆成二次幂 Graph，非零列走实际点运算。因此窗口是每个 Graph 的上限，一个片段可以启动多个 Graph。
+x-only 使用 64 个可重现的标量位。原生 Edwards 用指定 B1、w 编码完整 NAF，至多采 512 列。总长不超过 512 列时全部执行。更长时按从高到低的列序等分为 8 段，各取居中连续的 64 列，按原顺序回放。连续零列按生产规则走二次幂 Graph，非零列执行倍点和点加。相隔的采样片段各自结束零列 Graph，点状态沿用。
 
-先运行一个片段预热，测得设备时间 `t`（ms）。每组连续运行 `max(1, ceil(100 × time / max(t, 0.001)))` 个相同片段，组内延续点状态。单个片段已超过目标时，整组只跑一次。每组以一对 CUDA event 计时，组间重置初始点。粗测取 3 组、精测取 5 组。另运行一个单片段核对预热末点，正式各组也核对末点。预热、末片段、建表、Graph 创建、重置和读回均在正式计时区间外。
+一次调优命令仅在首次需要测量时构造 B1 标量。每个 w 编码一次完整 NAF，保留选中的有符号列供整个命令的位宽、变换长度、批量和 Graph 候选复用。日志 `stage1_ntt_naf_sample` 每生成一份采样输出一次。全部命中已有测量时跳过标量构造和分段。
+
+将选出的所有列合为一轮。预热一轮，测得设备时间 t（ms）。每个正式组连续执行 `max(1, ceil(100 × time / max(t, 0.001)))` 轮，并受计步计数器上限约束。一轮已经超过目标时只做一轮。组内延续点状态，组间重置初始点。粗测 3 组、精测 5 组，最后再执行一轮核对预热末点。每个正式组用一对 CUDA event 计时，建标量、建字典、建 Graph、预热、重置、核对片段和末点读回都在吞吐计时区间外。
 
 例如 x-only 片段长 64 步，窗口为 16，每个片段启动 4 个 Graph。假设预热实测 0.8 ms，默认每组连续运行 125 个片段，即 500 次 Graph 回放、每曲线 8000 步。原生 NAF 的回放数还取决于该片段连续零列的分布。100 ms 是根据预热估算的目标，表里保存实际设备时间。
 
-`timed_steps` 是组内曲线各自执行的步数，`block_steps` 是片段长度。`iter_per_s = 1000 × batch × timed_steps / median_ms`，表示整个批量的聚合吞吐。表中同时记录组数、目标时间、组间标准差、Graph 窗口、dataflow 和峰值显存。`Single`、`Best`、`95%` 分别报告单曲线、峰值及达到峰值 95% 的最小实测批量。[GPU 回放和计时](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp)
+`block_steps` 是一轮采样列数，`timed_steps` 是每曲线每个正式组的列数，`repeats` 是正式组数。原生 Edwards 保存完整标量列数 `naf_columns`、一轮的非零列数 `sample_nonzero` 和所有正式组的 CUDA event 总时间 `total_device_ms`。聚合吞吐 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。各组的中位时间 `median_ms` 和标准差用于观察波动。x-only 仍采用 `1000 × batch × timed_steps / median_ms`。`Single`、`Best`、`95%` 分别报告单曲线、峰值及达到峰值 95% 的最小实测批量。[GPU 回放和计时](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp)
 
 ## 生产选型
 
@@ -40,7 +42,9 @@ Edwards 的 `edwards_naf_window_bits=0` 在当前 GPU 上取兼容记录中聚�
 
 沿用配置中的 `[stage2] tune_runtime_enabled`（默认 true，支持 worker 覆盖）。首次遇到缺少兼容记录的位宽时，CUDA Stage1 NTT 按当前任务的 B1、窗口和批量范围运行同一粗测与精测流程，再开始计算。关闭后只读选型，无匹配 NAF 时自动窗回退到 x-only。显式 `-tune` 可独立填表。
 
-跨指数查表会重新核对生产分派、工作负载和显存。生产选型可读取兼容版本的计时。相同 GPU、曲线、NAF 窗口（原生路径还匹配 B1）、4096 位区间、长度、digit 位宽、进位段数、carry 位数、均匀性及执行形状才可复用合成记录。显式调优要求相同版本和回放计时方式。增大 `time` 只补测精度不足的候选。粗测和精测分别保存。连续回放样本使用 `benchmark_kind="stage1_graph_replay"`。Stage1 和 Stage2 共用此文件时，两端均需使用支持该组计时格式的读取器。旧的 20／50 ms 表仍可参与生产选型。
+原生 Edwards 的分段采样行标记为 `stage1_naf_stratified`，其中 `b1` 记录采样来源。显式调优、自动选窗、选型和拆批可跨 B1 复用该类记录。仍须匹配 GPU、曲线、NAF 窗口、4096 位区间、变换长度、digit 位宽、进位段数、carry 位数、均匀性及执行形状，且当前预算须能容纳批量。显式调优还匹配程序版本、计时方式、组数和目标时间，增大 `time` 只补测精度不足的候选。旧的原生单片段合成记录和完整生产样本仍按原 B1 参与生产选型。x-only 连续回放使用 `stage1_graph_replay`。Stage1 和 Stage2 共用 tune 文件时，两端都需要能读取对应采样字段的版本。
+
+跨 B1 复用时，表中吞吐对应来源 B1。目标 B1 的非零列分布和实际访问的字典槽会变化，窗口排名也可能改变。要独立比较指定 B1 的最佳窗口，可将该次显式调优的 `tune_file` 指向单独的空表。
 
 自动拆批优先使用同条件完整生产样本的 `curves_per_s`，再参考合成 `iter_per_s`。取达到同类峰值 95% 的最小实测批量。运行时学习开启且剩余量超过容量时可用真实子批试跑，完成的曲线计入任务。生产样本的 `curves_per_s` 包含标量准备到归一化，部分恢复批次不进入完整排名。日志中 `stage1_ntt_runtime_tune` 表示补测，`stage1_ntt_naf_selection` 表示自动选窗，`stage1_ntt_batch_selection` 和 `stage1_ntt_selection` 给出批量和卷积来源。
 

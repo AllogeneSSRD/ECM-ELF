@@ -54,7 +54,7 @@ def main():
     assert {row["dataflow"] & 384 for row in cold if row["length"] == 2560} == {0,128,384}
     for row in cold:
         assert row["sample_target_ms"] == 100 and row["repeats"] in (3, 5)
-        rate = 1000 * row["batch"] * row["timed_steps"] / row["median_ms"]
+        rate = 1000 * row["batch"] * row["timed_steps"] * row["repeats"] / row["total_device_ms"]
         assert abs(row["iter_per_s"] / rate - 1) < 1e-7
     snapshot = database.read_bytes()
     assert tune("hot", p, 6) == (0,len(cold))
@@ -90,11 +90,12 @@ def main():
         assert int(actual[key]) == winner[column]
     run("linear", 6, flags, expression, 'ntt_convolution = "linear"\n')
     assert saved_points(out/"production/out.save",p,32,True) == saved_points(out/"linear/out.save",p,32,True)
-    limited = run("wall_budget", 6, ["--tune","ntt","--bits",str(p),"--naf-w","6","--tune-seconds","1","64"])
+    stronger = ["--tune","ntt,time=2","--bits",str(p),"--naf-w","6"]
+    limited = run("wall_budget", 6, [*stronger,"--tune-seconds","1","64"])
     assert "status=time_limit" in limited
     partial = [r for r in rows() if r["b1"] == 64]
     assert partial
-    continued = run("continue_budget", 6, ["--tune","ntt","--bits",str(p),"--naf-w","6","64"])
+    continued = run("continue_budget", 6, [*stronger,"64"])
     found = re.search(r"measured=(\d+) reused=(\d+)", continued)
     assert found and all(int(value) > 0 for value in found.groups())
     print("PASS native NAF, budget, mixed layouts, dispatch gate and production endpoint", flush=True)

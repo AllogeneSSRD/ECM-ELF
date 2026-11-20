@@ -181,6 +181,10 @@ inline constexpr const char *stage2_ntt_type="stage2_convolution";
 inline constexpr const char *linear_ntt_type="stage1_linear";
 inline constexpr const char *weighted_ntt_type="stage1_weighted";
 inline constexpr const char *stage1_graph_ntt_kind="stage1_graph_replay";
+inline constexpr const char *stratified_naf_kind="stage1_naf_stratified";
+inline bool is_stratified_naf(const Fields &s) {
+    return s.count("benchmark_kind") && text(s,"benchmark_kind")==stratified_naf_kind;
+}
 inline constexpr const char *stage1_runtime_ntt_kind="stage1_runtime";
 inline bool is_runtime_stage1_ntt(const Fields &s) {
     return s.count("benchmark_kind") && text(s,"benchmark_kind")==stage1_runtime_ntt_kind;
@@ -228,15 +232,25 @@ inline void validate_stage1_ntt(const Fields &s) {
         const auto curve=text(s,"curve");
         const auto ms=real(s,"median_ms");
         const auto groups=uint(s,"repeats");
-        const bool grouped=s.count("benchmark_kind") && text(s,"benchmark_kind")==stage1_graph_ntt_kind;
-        if(!block || block>64 || !steps || steps>UINT32_MAX || steps%block || (!grouped && steps>64*block) ||
+        const bool stratified=is_stratified_naf(s);
+        const bool grouped=stratified || (s.count("benchmark_kind") && text(s,"benchmark_kind")==stage1_graph_ntt_kind);
+        double group_ms=ms;
+        if(stratified) {
+            constexpr Word max_columns=ecm_stage1::naf_tune_span*ecm_stage1::naf_tune_strata;
+            const auto columns=uint(s,"naf_columns");
+            if(!window || !groups || columns>UINT32_MAX || block!=std::min(columns,max_columns) ||
+               uint(s,"sample_nonzero")>block || !(real(s,"total_device_ms")>0))
+                throw std::runtime_error("invalid stratified NAF sample");
+            group_ms=real(s,"total_device_ms")/groups;
+        }
+        if(!block || (!stratified && block>64) || !steps || steps>UINT32_MAX || steps%block || (!grouped && steps>64*block) ||
            width<ecm_stage1::stage1_ntt_min_exponent || width>ecm_stage1::stage1_ntt_max_exponent ||
            uint(s,"segments")!=(width+8191)/8192 || (grouped ? !target || target>UINT32_MAX : target!=20 && target!=50) ||
            (grouped ? groups!=3 && groups!=5 : groups!=(target==20 ? 3u : 5u)) || !uint(s,"carry_bits") || uint(s,"carry_bits")>64 ||
            uint(s,"uniform_digits")>1 || uint(s,"dataflow")>UINT32_MAX ||
            (window && (curve!="edwards" || window<2 || window>12)) || uint(s,"b1")<2 ||
            (curve!="edwards" && curve!="mont0") || !(ms>0) ||
-           std::abs(real(s,"iter_per_s")*ms/(1000.*batch*steps)-1)>1e-9 ||
+           std::abs(real(s,"iter_per_s")*group_ms/(1000.*batch*steps)-1)>1e-9 ||
            real(s,"stddev_seconds")<0)
             throw std::runtime_error("invalid Stage1 tune window");
     }
@@ -640,11 +654,14 @@ struct Profile {
                 if(required(old,key)!=required(sample,key))return false;
             if(is_runtime_stage1_ntt(old)!=runtime)return false;
             if(old.count("sample_target_ms")!=sample.count("sample_target_ms"))return false;
-            if(sample.count("sample_target_ms") && old.count("benchmark_kind")!=sample.count("benchmark_kind"))return false;
+            if(old.count("benchmark_kind")!=sample.count("benchmark_kind") ||
+               (sample.count("benchmark_kind") && required(old,"benchmark_kind")!=required(sample,"benchmark_kind")))return false;
             if(sample.count("sample_target_ms"))
-                for(const char *key:{"repeats","sample_target_ms","curve","b1","naf_window","segments","carry_bits",
+                for(const char *key:{"repeats","sample_target_ms","curve","naf_window","segments","carry_bits",
                                      "uniform_digits","dataflow","program_version"})
                     if(required(old,key)!=required(sample,key))return false;
+            if(sample.count("sample_target_ms") && !is_stratified_naf(sample) &&
+               required(old,"b1")!=required(sample,"b1"))return false;
             if(sample.count("sample_target_ms") && (uint(old,"reference_bits")+4095)/4096!=
                (uint(sample,"reference_bits")+4095)/4096)return false;
             if(runtime)for(const char *key:{"curve","arithmetic_bits","b1","lcm_multiplier","naf_window","valid_curves","dataflow"})

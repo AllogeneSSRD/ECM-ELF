@@ -1,5 +1,6 @@
 """Check the Stage1 tune grid, timed groups and read-only/runtime production selection."""
 import argparse
+import json
 from pathlib import Path
 import re
 import subprocess
@@ -54,6 +55,7 @@ def main():
             ("3554", "256"), ("3557", "512")], log
         summaries = re.findall(r"stage1_ntt_tune: p=\d+ measured=(\d+) reused=(\d+)", log)
         assert len(summaries) == 2
+        assert log.count("stage1_ntt_naf_sample:") == (1 if name == "crossing_cold" else 0)
         if name == "crossing_cold":
             assert all(int(measured) and int(reused) == 0 for measured, reused in summaries)
         else:
@@ -80,7 +82,7 @@ def main():
 
     database = out / "tune.toml"
     spec = "ntt,exp=61-62,naf=6-7,batch=1-2"
-    run("grid", ["-tune", spec, "16"])
+    assert run("grid", ["-tune", spec, "16"]).count("stage1_ntt_naf_sample:") == 2
     data = rows()
     assert {r["naf_window"] for r in data} == {6, 7}
     assert {r["batch"] for r in data} == {1, 2}
@@ -88,7 +90,9 @@ def main():
     assert {r["repeats"] for r in data} == {3, 5}
     for row in data:
         assert row["sample_target_ms"] == 100 and 61 <= row["reference_bits"] <= 62
-        rate = 1000 * row["batch"] * row["timed_steps"] / row["median_ms"]
+        assert row["benchmark_kind"] == "stage1_naf_stratified"
+        assert row["block_steps"] == row["naf_columns"] <= 64
+        rate = 1000 * row["batch"] * row["repeats"] * row["timed_steps"] / row["total_device_ms"]
         assert abs(row["iter_per_s"] / rate - 1) < 1e-8
     snapshot = database.read_bytes()
     hot = run("hot", ["--tune", spec, "16"])
@@ -104,8 +108,29 @@ def main():
     best = max((r for r in rows() if r["batch"] == 1), key=lambda r: r["iter_per_s"])
     assert f'naf={best["naf_window"]} source=tune' in cached
     assert database.read_bytes() == snapshot and "stage1_ntt_runtime_tune:" not in cached
+    cached = run("production_cross_b1", production + ["20"], stdin="2^61-1\n", runtime=True)
+    assert f'naf={best["naf_window"]} source=tune' in cached and "stage1_ntt_runtime_tune:" not in cached
+    assert database.read_bytes() == snapshot
+
+    # Archived middle-slice measurements retain their original B1 scope.
+    header = database.read_text(encoding="utf-8").split("matrix = [", 1)[0]
+    old = rows()
+    for row in old:
+        for column in ("naf_columns", "sample_nonzero", "total_device_ms"):
+            del row[column]
+        row["benchmark_kind"] = "stage1_graph_replay"
+        row["program_version"] = "0.71.1"
+        row["iter_per_s"] = 1000 * row["batch"] * row["timed_steps"] / row["median_ms"]
+    database = out / "legacy.toml"
+    matrix = [list(old[0]), *[list(row.values()) for row in old]]
+    database.write_text(header + "matrix = [\n" + "".join(json.dumps(r) + ",\n" for r in matrix) + "]\n",
+                        encoding="utf-8")
+    assert "source=tune" in run("legacy_same", production + ["16"], stdin="2^61-1\n")
+    assert "naf=0 source=default" in run("legacy_other", production + ["20"], stdin="2^61-1\n")
+
+    database = out / "runtime.toml"
     cold = run("read_only", production + ["20"], stdin="2^61-1\n")
-    assert "naf=0 source=default" in cold and database.read_bytes() == snapshot
+    assert "naf=0 source=default" in cold and not database.exists()
     learned = run("runtime", production + ["20"], stdin="2^61-1\n", runtime=True,
                   settings="ntt_profile = 1")
     assert "stage1_ntt_runtime_tune:" in learned
@@ -122,6 +147,7 @@ def main():
     mont = [r for r in rows() if r["curve"] == "mont0"]
     assert {r["repeats"] for r in mont} == {3, 5} and all(r["sample_target_ms"] == 25 for r in mont)
     assert {r["graph_bits"] for r in mont} == {4, 8, 16, 32, 64}
+    database = out / "default_windows.toml"
     run("default_windows", ["-tune", "exp=61,batch=1,time=0.01", "32"],
         settings="edwards_naf_window_bits = 3\nntt_profile = 1")
     assert {r["naf_window"] for r in rows() if r["b1"] == 32} == {6, 8, 10, 12}

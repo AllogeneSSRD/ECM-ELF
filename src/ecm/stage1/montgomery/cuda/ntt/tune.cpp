@@ -17,6 +17,7 @@
 #include <cmath>
 #include <filesystem>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <random>
 
@@ -71,13 +72,16 @@ struct Measurement {
     std::vector<double> ms;
     size_t owned = 0, observed = 0, budget = 0;
     unsigned steps = 0, blocks = 1;
+    unsigned naf_columns = 0, sample_nonzero = 0;
+    double total_ms() const { return std::accumulate(ms.begin(), ms.end(), 0.0); }
     double time() const {
         auto ordered = ms;
         std::sort(ordered.begin(), ordered.end());
         const auto middle = ordered.size() / 2;
         return ordered.size() % 2 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2;
     }
-    double throughput() const { return 1000.0 * batch / time(); }
+    double group_ms() const { return naf_columns ? total_ms() / ms.size() : time(); }
+    double throughput() const { return 1000.0 * batch / group_ms(); }
 };
 
 unsigned linear_exponent_limit(unsigned length, unsigned bpw) {
@@ -155,13 +159,56 @@ void persist(const std::string& path, const Device& device, std::vector<Fields> 
 struct Cancelled : std::runtime_error { Cancelled() : std::runtime_error("Stage1 NTT tune stopped") {} };
 struct TimeLimit {};
 
+struct NafSample {
+    unsigned columns = 0, nonzero = 0;
+    std::vector<int16_t> digits;
+};
+
+// One scalar per tuning command, one immutable sample per requested window.
+class TuneNafSamples {
+    uint64_t b1_;
+    ecm_edwards::Integer scalar_;
+    std::map<unsigned, NafSample> windows_;
+public:
+    explicit TuneNafSamples(uint64_t b1) : b1_(b1) {}
+
+    const NafSample& get(unsigned window) {
+        const auto found = windows_.find(window);
+        if (found != windows_.end()) return found->second;
+        if (!mpz_sgn(scalar_.v) && !ecm_build_lcm_exponent(scalar_.v, b1_, 48))
+            throw std::runtime_error("cannot build tune scalar");
+        EcmEdwardsNaf encoding(scalar_.v, window);
+        using namespace ecm_stage1;
+        NafSample sample;
+        sample.columns = encoding.bits;
+        const unsigned bits = std::min(sample.columns, naf_tune_span * naf_tune_strata);
+        const unsigned strata = (bits + naf_tune_span - 1) / naf_tune_span;
+        sample.digits.reserve(bits);
+        for (unsigned i = 0; i < strata; ++i) {
+            // MSB-first strata. Short scalars are covered in full without overlaps.
+            const auto first = uint64_t(i) * sample.columns / strata;
+            const auto end = uint64_t(i + 1) * sample.columns / strata;
+            const unsigned size = unsigned(std::min<uint64_t>(end - first, naf_tune_span));
+            const unsigned start = unsigned(first + (end - first - size) / 2);
+            for (unsigned j = 0; j < size; ++j) {
+                const auto digit = int16_t(encoding.digit(sample.columns - 1 - start - j));
+                sample.digits.push_back(digit);
+                sample.nonzero += digit != 0;
+            }
+        }
+        ecm_ts_fprintf(stdout, "stage1_ntt_naf_sample: b1=%llu naf=%u columns=%u sampled=%u nonzero=%u\n",
+                       static_cast<unsigned long long>(b1_), window, sample.columns, bits, sample.nonzero);
+        return windows_.emplace(window, std::move(sample)).first->second;
+    }
+};
+
 class Calibration {
     const Device& device_;
     unsigned p_, bits_;
     std::vector<uint32_t> scalar_;
     unsigned window_ = 0;
+    const NafSample* naf_sample_ = nullptr;
     size_t dictionary_limit_ = 0;
-    std::vector<int16_t> digits_;
     std::vector<uint32_t> dictionary_;
     unsigned reference_batch_ = 0;
     std::vector<uint32_t> reference_;
@@ -172,15 +219,11 @@ public:
         for (auto& word : scalar_) word = random();
     }
 
-    void native(unsigned window, uint64_t b1, size_t dictionary_limit) {
+    void native(unsigned window, const NafSample& sample, size_t dictionary_limit) {
         window_ = window;
         dictionary_limit_ = dictionary_limit;
-        ecm_edwards::Integer k;
-        if (!ecm_build_lcm_exponent(k.v, b1, 48)) throw std::runtime_error("cannot build tune scalar");
-        EcmEdwardsNaf encoding(k.v, window);
-        bits_ = std::min(bits_, encoding.bits);
-        const unsigned end = (encoding.bits + uint64_t(bits_)) / 2;
-        for (unsigned i = end; i > end - bits_; --i) digits_.push_back(int16_t(encoding.digit(i - 1)));
+        naf_sample_ = &sample;
+        bits_ = unsigned(sample.digits.size());
         const unsigned words = (p_ + 31) / 32;
         dictionary_.resize(size_t(4u << (window - 2)) * words);
         ecm_edwards::Integer n, d, x, y, a24, factor;
@@ -215,6 +258,9 @@ public:
         control.sample_target_ms = target_ms;
         Run run;
         if (window_) {
+            m.naf_columns = naf_sample_->columns;
+            m.sample_nonzero = naf_sample_->nonzero;
+            if (m.naf_columns > bits_) control.sample_span_steps = ecm_stage1::naf_tune_span;
             for (unsigned lane = 0; lane < batch; ++lane)
                 active[stride + lane * words] = active[2 * stride + lane * words] = 1;
             const size_t slots = dictionary_.size() / words;
@@ -222,7 +268,7 @@ public:
             for (size_t i = 0; i < slots; ++i)
                 for (unsigned lane = 0; lane < batch; ++lane)
                     std::copy_n(dictionary_.data() + i * words, words, table.data() + i * stride + lane * words);
-            EdwardsNaf naf{window_, digits_, table, dictionary_limit_};
+            EdwardsNaf naf{window_, naf_sample_->digits, table, dictionary_limit_};
             run = edwards_naf(device_.index, p_, batch, active, naf, options, control, samples);
         } else {
             for (unsigned slot=0; slot<6; ++slot) {
@@ -496,12 +542,13 @@ Plan describe(const Device& device, unsigned p, unsigned batch, const Stage1NttO
 bool compatible_workload(const Fields& row, const ecm_stage1::Stage1Request& request, unsigned window) {
     using ecm_stage2::tune::uint;
     return row.count("sample_target_ms") && pt::text(row,"curve") == curve_name(request) &&
-           uint(row,"naf_window") == window && (!window || uint(row,"b1") == uint64_t(request.b1));
+           uint(row,"naf_window") == window &&
+           (!window || pt::is_stratified_naf(row) || uint(row,"b1") == uint64_t(request.b1));
 }
 
 bool same_workload(const Fields& row, const ecm_stage1::Stage1Request& request, unsigned window) {
     return compatible_workload(row,request,window) && row.count("benchmark_kind") &&
-           pt::text(row,"benchmark_kind") == pt::stage1_graph_ntt_kind &&
+           pt::text(row,"benchmark_kind") == (window ? pt::stratified_naf_kind : pt::stage1_graph_ntt_kind) &&
            pt::text(row,"program_version") == ecm_program::version;
 }
 
@@ -537,14 +584,16 @@ class TuneMatrix {
     unsigned p_, window_;
     unsigned group_ms_;
     double deadline_;
+    TuneNafSamples& naf_samples_;
     std::optional<Calibration> calibration_;
     std::vector<Fields> history_, legacy_, pending_;
     std::set<size_t> hits_;
 public:
     unsigned measured = 0;
     TuneMatrix(const Device& device, const ecm_stage1::Stage1Request& request, unsigned p,
-               unsigned window, const pt::Profile& db, unsigned group_ms = 100, double deadline = 0)
-        : device_(device), request_(request), p_(p), window_(window), group_ms_(group_ms), deadline_(deadline) {
+               unsigned window, const pt::Profile& db, TuneNafSamples& naf_samples, unsigned group_ms = 100, double deadline = 0)
+        : device_(device), request_(request), p_(p), window_(window), group_ms_(group_ms), deadline_(deadline),
+          naf_samples_(naf_samples) {
         for (const auto& row : db.stage1_ntt) {
             const auto& condition = db.conditions.at(ecm_stage2::tune::uint(row,"condition"));
             if (!condition.count("uuid_hex") || pt::text(condition,"uuid_hex") != device.uuid ||
@@ -603,7 +652,9 @@ public:
                             "outer=%u graph=%u target_ms=%u iter_per_s=%.0f\n",plan.length,batch,plan.dataflow,
                             plan.tile,plan.outer_max,plan.window,target,ecm_stage2::tune::real(row,"iter_per_s"));
                     return {batch, plan, ecm_stage2::tune::real(row,"iter_per_s"),
-                        1000 * ecm_stage2::tune::real(row,"stddev_seconds") / ecm_stage2::tune::real(row,"median_ms")};
+                        1000 * ecm_stage2::tune::real(row,"stddev_seconds") /
+                            (window_ ? ecm_stage2::tune::real(row,"total_device_ms") / groups :
+                                       ecm_stage2::tune::real(row,"median_ms"))};
                 }
                 return {};
             };
@@ -611,13 +662,19 @@ public:
             if (auto hit = lookup(history_, true); hit.rate) return hit;
             if (deadline_ && now_s() >= deadline_) throw TimeLimit{};
             if (!calibration_) {
-                calibration_.emplace(device_, p_, 64);
-                if (window_) calibration_->native(window_, uint64_t(request_.b1),
+                Calibration prepared(device_, p_, 64);
+                if (window_) prepared.native(window_, naf_samples_.get(window_),
                     size_t(request_.options.execution.naf_memory_mb) * ecm_edwards_memory::mb);
+                calibration_.emplace(std::move(prepared));
             }
             const auto m = calibration_->measure(batch, options, groups, target);
             auto row = encode(m, m.steps);
-            row["benchmark_kind"] = pt::quoted(pt::stage1_graph_ntt_kind);
+            row["benchmark_kind"] = pt::quoted(window_ ? pt::stratified_naf_kind : pt::stage1_graph_ntt_kind);
+            if (window_) {
+                row["total_device_ms"] = pt::numeric(m.total_ms());
+                row["naf_columns"] = std::to_string(m.naf_columns);
+                row["sample_nonzero"] = std::to_string(m.sample_nonzero);
+            }
             row["sample_target_ms"] = std::to_string(target);
             row["reference_bits"] = std::to_string(p_);
             row["timed_steps"] = std::to_string(m.steps);
@@ -634,7 +691,7 @@ public:
             pending_.push_back(std::move(row));
             ++measured;
             print_measurement(m, target);
-            return {batch, m.plan, m.throughput() * m.steps, pt::deviation(m.ms) / m.time()};
+            return {batch, m.plan, m.throughput() * m.steps, pt::deviation(m.ms) / m.group_ms()};
         } catch (const BudgetError& e) {
             ecm_ts_fprintf(stdout, "stage1_ntt_skip: length=%u batch=%u reason=%s\n", options.length,batch,e.what());
             return {};
@@ -698,7 +755,8 @@ void refine_batch(TuneMatrix& matrix, Family& f, unsigned batch, std::map<unsign
 }
 
 bool tune_width(const Device& device, const ecm_stage1::Stage1Request& request, unsigned p,
-                const Candidates& shapes, const ecm_stage1::NttTuneGrid& grid, bool exhaustive, double deadline) {
+                const Candidates& shapes, const ecm_stage1::NttTuneGrid& grid, TuneNafSamples& naf_samples,
+                bool exhaustive, double deadline) {
     using Layout = Stage1NttOptions::MixedLayout;
     const auto& options = request.options.execution.ntt;
     const auto w = naf_window(request);
@@ -720,7 +778,7 @@ bool tune_width(const Device& device, const ecm_stage1::Stage1Request& request, 
         } else families.push_back({shape.options, cap});
     }
     if (families.empty()) return false;
-    TuneMatrix matrix(device, request, p, w, load(options.tune_file), grid.group_ms, deadline);
+    TuneMatrix matrix(device, request, p, w, load(options.tune_file), naf_samples, grid.group_ms, deadline);
     const auto start = now_s();
     try {
         double single = 0, peak = 0;
@@ -854,6 +912,7 @@ int tune_command(const ecm_stage1::Stage1Options& task, double b1, const ecm_sta
         const std::string empty;
         const double deadline = seconds ? now_s()+seconds : 0;
         bool measured = false;
+        TuneNafSamples naf_samples{uint64_t(b1)};
         const auto plan = plan_tune_lengths(task.execution.ntt, grid, edwards, deadline);
         for (const auto& [width, shapes] : plan) {
             for (unsigned w : windows) {
@@ -862,7 +921,7 @@ int tune_command(const ecm_stage1::Stage1Options& task, double b1, const ecm_sta
                 auto options = task;
                 options.execution.naf_w = int(w);
                 const Stage1Request request{nullptr,b1,b1,max_batch,empty,false,empty,options};
-                measured |= tune_width(device,request,width,shapes,grid,exhaustive,deadline);
+                measured |= tune_width(device,request,width,shapes,grid,naf_samples,exhaustive,deadline);
             }
         }
         if (!measured) throw BudgetError("no matching Stage1 NTT length, width or batch fits the requested grid");
@@ -923,7 +982,8 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
             return choices[mode] ? choices[mode]->options : options;
         }
     }
-    TuneMatrix matrix(device,request,p,window,db);
+    TuneNafSamples naf_samples{uint64_t(request.b1)};
+    TuneMatrix matrix(device,request,p,window,db,naf_samples);
     for (unsigned mode=0; mode<CandidateCount; ++mode) {
         if (!options.runtime_enabled || !candidates[mode] || quality[mode]) continue;
         const auto plan=choices[mode] ? choices[mode]->options : candidates[mode]->options;
@@ -1010,6 +1070,7 @@ unsigned production_window(const ecm_stage1::Stage1Request& request, unsigned p,
     }
     auto best = best_window(db);
     if (!best && exec.ntt.runtime_enabled) {
+        TuneNafSamples naf_samples{uint64_t(request.b1)};
         NttTuneGrid grid;
         grid.batch = {fixed_batch ? limit : 1u, limit};
         std::vector<unsigned> windows{configured};
@@ -1020,7 +1081,7 @@ unsigned production_window(const ecm_stage1::Stage1Request& request, unsigned p,
             options.execution.naf_w = int(w);
             const Stage1Request trial{request.modulus,request.b1,request.b2,request.curves,request.save_file,
                                       request.append_save,request.expression,options};
-            try { tune_width(device,trial,p,tune_shapes(p,exec.ntt,w != 0),grid,false,0); }
+            try { tune_width(device,trial,p,tune_shapes(p,exec.ntt,w != 0),grid,naf_samples,false,0); }
             catch (const Cancelled&) { return configured; }
         }
         best = best_window(load(exec.ntt.tune_file));

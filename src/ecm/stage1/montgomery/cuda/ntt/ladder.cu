@@ -1215,8 +1215,13 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                     const int digit = naf->digits[cursor];
                     if (!digit && window) {
                         if (zero_end <= cursor) {
+                            unsigned limit = std::min(window, count - cursor);
+                            if (control && control->sample_span_steps) {
+                                const unsigned span = control->sample_span_steps;
+                                limit = std::min(limit, span - cursor % span);
+                            }
                             zero_end = cursor + 1;
-                            while (zero_end < count && zero_end - cursor < window && !naf->digits[zero_end])
+                            while (zero_end - cursor < limit && !naf->digits[zero_end])
                                 ++zero_end;
                         }
                         unsigned i = 0;

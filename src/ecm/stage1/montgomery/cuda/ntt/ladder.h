@@ -50,6 +50,7 @@ struct Control {
     bool modular_square_probe = false;
     bool describe_only = false;
     unsigned sample_target_ms = 0; // Tune only. Group repeated fixed-cursor blocks after a pilot.
+    unsigned sample_span_steps = 0; // Stop zero-run Graphs at the seams of disjoint NAF spans.
 };
 
 // Initial slots (slot-major, then curve, then little-endian uint32 limbs):
