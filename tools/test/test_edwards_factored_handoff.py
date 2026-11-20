@@ -53,11 +53,14 @@ def main():
         return path
 
     m127 = (1 << 127) - 1
-    for enabled in (False, True):
+    for enabled, sliced in ((False, False), (True, False), (True, True)):
         target = 1009 * 10007
-        path = case(f'handoff_{enabled}',
+        stage1_options = 'target="cpu"\ncpu_implementation="scalar"\nsigma=17'
+        if sliced:
+            stage1_options += '\nhandoff_workers="2[:145], 3[145:]"'
+        path = case('handoff_sliced' if sliced else f'handoff_{enabled}',
                     f'ECMSTAGE1={target},2,127,-{target},"e_input_20.save",40000,0,1',
-                    'target="cpu"\ncpu_implementation="scalar"\nsigma=17',
+                    stage1_options,
                     'stage2_after_factored=true' if enabled else '')
         run(stage1, path, 'stage1')
         original = path / 'e_input_20.save'
@@ -65,14 +68,18 @@ def main():
         assert 'QCHECKSUM=' in original.read_text()
         queue = path / 'worktodo.txt'
         if enabled:
-            task = queue.read_text().strip()
+            rows = queue.read_text().strip().splitlines()
+            if sliced:
+                assert rows.pop(0) == '[Worker #2]', rows
+            task, = rows
             assert task.startswith('ECMSTAGE2=')
             fields = next(csv.reader([task.split('=', 1)[1]]))
             assert fields[-1] == '1009'
             projected, = records(Path(fields[-5]))
             assert projected[0] == 10007 * m127 and projected[2:] == (17, 20, 'POINT')
-            run(stage2, path, 'stage2', '--once')
-            assert not queue.read_text().strip()
+            worker_flags = ('--worker', '2') if sliced else ()
+            run(stage2, path, 'stage2', '--once', *worker_flags)
+            assert 'ECMSTAGE2=' not in queue.read_text()
             result, = map(json.loads, (path / 'stage2.jsonl').read_text().splitlines())
             assert result['stage'] == 2 and result['factors'] == ['10007']
         else:

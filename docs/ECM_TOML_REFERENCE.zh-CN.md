@@ -389,9 +389,9 @@ Prime95 协议不支持该存档时使用的后备方式。
 handoff_workers = ""
 ```
 
-类型 `string` · 范围 `[<n>|<n>,...|<a>-<b>|auto]` · Worker 覆盖 `[worker.N] handoff_workers` · 级别 `高级`。
+类型 `string` · 范围 `[<n>[slice]|<a>-<b>[slice]|comma list|auto]` · Worker 覆盖 `[worker.N] handoff_workers` · 级别 `高级`。
 
-Stage2 接收 worker，可填 1..1000000 内单个编号、逗号列表或区间。选合格候选中任务最少者，并列取较小编号。同队列 auto 优先采用显式的 worker_count，候选须读取该队列并允许 Stage2。未设数量时采用已有分区，无分区时从 worker 1 开始。外部队列优先使用已有分区，缺少分区时才按配置数量选择。留空保留当前 worker。目标不可写时保留待投递记录。
+Stage2 接收 worker，可填 1..1000000 内的编号或闭区间。逗号分隔的每项可加位宽切片，如 2[:4096], 3[4096:]。按实际余因子位宽匹配，包含起点、排除终点。省略方括号、[]、[:] 都匹配任意位宽。选匹配候选中任务最少者，并列取较小编号。无匹配时保留源任务。同队列 auto 使用 worker_count 或已有分区，候选须读取该队列并允许 Stage2。外部队列 auto 优先采用已有分区。留空保留当前 worker。目标不可写时保留待投递记录。
 
 <a id="auto_stage2_worktodo"></a>
 

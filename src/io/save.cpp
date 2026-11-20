@@ -311,6 +311,7 @@ CofactorBatch cofactor_batch(const std::vector<std::string>& records) {
         mpz_divexact(remaining.v, remaining.v, common.v);
     }
     if (batch.factors.empty() || mpz_cmp_ui(remaining.v, 3) <= 0) return batch;
+    batch.modulus_bits = mpz_sizeinbase(remaining.v, 2);
     for (const auto& curve : curves) {
         if (curve.identity) continue;
         if (curve.factor) {

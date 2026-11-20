@@ -15,7 +15,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage1","handoff_unsupported","string","[ecm-elf|keep-save]","stage1","handoff_unsupported","",false},
     {"shared","worktodo","string","<path>","shared","worktodo_file","",false},
     {"shared","b2_ratio","u64","[0|1..1000000]","stage2","b2_ratio","",false},
-    {"stage1","auto_stage2_workers","string","[<n>|<n>,...|<a>-<b>|auto]","stage1","handoff_workers","",false},
+    {"stage1","auto_stage2_workers","string","[<n>[slice]|<a>-<b>[slice]|comma list|auto]","stage1","handoff_workers","",false},
     {"stage1","auto_stage2_worktodo","string","<path>","stage1","handoff_worktodo_file","",false},
     {"shared","priority","int","[0|1|2]","shared","queue_order","enum:file_order|stage1_first|stage2_first",false},
     {"shared","skip","int","[0|1|2]","shared","queue_skip","enum:none|stage1|stage2",false},

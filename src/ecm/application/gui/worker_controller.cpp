@@ -1,5 +1,6 @@
 #include "worker_controller.h"
 #include "worker_proc.h"
+#include "task_display.h"
 #include "ecm/platform/gpu_worker.h"
 #include "toml_file.h"
 #include "../configuration/generated/ecm_config_generated.h"
@@ -12,12 +13,28 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
 namespace ecmgui {
+static void update_local_handoff(WorkerView& worker, Stage1HandoffStatus status = {}) {
+    auto& plan = worker.stage1_handoff;
+    if (plan.local_worker_rules.empty()) return;
+    if (!status.bits) {
+        const auto task = task_display(worker.task);
+        if (!task.has_factors && task.mersenne_bits <= (std::numeric_limits<std::size_t>::max)())
+            status.bits = static_cast<std::size_t>(task.mersenne_bits);
+    }
+    const bool unrestricted = std::all_of(plan.local_worker_rules.begin(), plan.local_worker_rules.end(),
+        [](const auto& rule) { return rule.first_bit == 1 && !rule.end_bit; });
+    plan.local_status = status;
+    plan.local_candidates = status.worker ? std::vector<int>{status.worker} :
+        stage2_workers_for_bits(plan.local_worker_rules, unrestricted && !status.bits ? 1 : status.bits);
+}
+
 bool is_stage2_exe(std::string name) {
     name=file_name(name);for(char &c:name)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return name.find("stage2")!=name.npos;
@@ -204,6 +221,7 @@ bool WorkerController::start(int index,bool detailed_trace,WorkerStart origin) {
         std::string err;refresh_worker_for_queue(w);
         if(w.proc && w.proc->start(err,origin)) {
             w.stage1_execution = {};
+            update_local_handoff(w);
             w.stage1_ntt={};w.progress={};w.resume_pct=-1;w.last_traced_pct=-1;
             trace("worker "+std::to_string(w.index)+": started pid="+std::to_string(w.proc->pid())+
                   (detailed_trace?" cmd="+w.proc->command_line():""));return true;
@@ -321,6 +339,10 @@ WorkerView WorkerController::make_worker(int index) const {
             handoff.local_workers = handoff.edwards_only ? "" : ecm_config::trim(stage1.auto_stage2_workers);
             if (handoff.local_workers.empty())
                 handoff.local_workers = std::to_string(receiver);
+            if (stage2_worker_slices(handoff.local_workers) &&
+                !parse_stage2_worker_slices(handoff.local_workers, handoff.local_worker_rules))
+                handoff.local_worker_rules.clear();
+            update_local_handoff(w);
         }
         if (handoff.prime95) {
             if (!stage1.p95_worktodo_path.empty())
@@ -425,6 +447,7 @@ void WorkerController::tick() {
             w.version_pid=w.proc->pid();
             w.application_version.clear();
             w.stage1_execution = {};
+            update_local_handoff(w);
             w.stage1_ntt={};w.progress={};w.resume_pct=-1;w.last_traced_pct=-1;
         }
         WorkerProc::DrainedOutput d;
@@ -481,6 +504,8 @@ void WorkerController::tick() {
             w.task = d.last_start_line;
             trace("worker " + std::to_string(w.index) + ": task " + w.task);
         }
+        if (!w.stage2 && (d.handoff.bits || !d.last_start_line.empty()))
+            update_local_handoff(w, d.handoff);
         if (!w.stage2 && (d.stage1.valid() || !d.last_start_line.empty()))
             w.stage1_execution = std::move(d.stage1);
         if(d.stage2.valid) {

@@ -343,11 +343,14 @@ void WorkerProc::drain(DrainedOutput &out) {
         if (!spawn_.stage2) {
             if (!pl.start_line.empty()) {
                 out.stage1 = {};
+                out.handoff = {};
                 stage1_ntt_status_.start(task_display(pl.start_line).curves);
                 stage1_ntt_received=true;out.stage1_task_started=true;out.last_progress={};
             }
             if (pl.stage1.valid())
                 out.stage1 = pl.stage1;
+            if (pl.handoff.bits)
+                out.handoff = pl.handoff;
             if(pl.stage1_ntt.kind!=Stage1NttEvent::Kind::None) {
                 stage1_ntt_status_.apply(pl.stage1_ntt,double(mono_ms())/1000.);
                 stage1_ntt_received=true;out.last_progress=stage1_ntt_status_.progress();

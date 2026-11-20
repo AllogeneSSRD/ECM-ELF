@@ -389,9 +389,9 @@ Fallback for saves unsupported by the Prime95 protocol.
 handoff_workers = ""
 ```
 
-Type `string` · Range `[<n>|<n>,...|<a>-<b>|auto]` · Worker override `[worker.N] handoff_workers` · Level `advanced`.
+Type `string` · Range `[<n>[slice]|<a>-<b>[slice]|comma list|auto]` · Worker override `[worker.N] handoff_workers` · Level `advanced`.
 
-Stage2 receiving workers: a single ID, comma list or ranges within 1..1000000. Select the shortest eligible queue; ties use the lowest ID. For auto within the same queue, an explicit worker_count defines the candidate range. Candidates must read that queue and allow Stage2. Without a configured range, auto uses existing worker sections or starts from worker 1. An external queue uses its existing sections before falling back to the configured count. Empty keeps the current worker. Unwritable destinations remain pending for retry.
+Stage2 receiving workers: IDs and inclusive ID ranges within 1..1000000. Each comma-separated entry can have an optional bit slice, e.g. 2[:4096], 3[4096:]. The actual cofactor width is matched against inclusive starts and exclusive stops. Omitted brackets, [] and [:] match any width. Select the shortest eligible queue, breaking ties by lowest ID. If no slice matches, retain the source task. Auto uses worker_count or existing sections for the same queue and considers workers that read it and allow Stage2. For external queues, auto prefers existing sections. Empty keeps the current worker. Unwritable destinations remain pending for retry.
 
 <a id="auto_stage2_worktodo"></a>
 

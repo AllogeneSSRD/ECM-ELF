@@ -86,17 +86,19 @@ worktodo_file = "worktodo.txt"  # string: <path>
 # Fallback for saves unsupported by the Prime95 protocol.
 # Prime95 协议不支持该存档时使用的后备方式。
 
-# handoff_workers = ""  # string: [<n>|<n>,...|<a>-<b>|auto]
-# Stage2 receiving workers: a single ID, comma list or ranges within 1..1000000. Select the shortest
-# eligible queue; ties use the lowest ID. For auto within the same queue, an explicit worker_count
-# defines the candidate range. Candidates must read that queue and allow Stage2. Without a
-# configured range, auto uses existing worker sections or starts from worker 1. An external queue
-# uses its existing sections before falling back to the configured count. Empty keeps the current
-# worker. Unwritable destinations remain pending for retry.
-# Stage2 接收 worker，可填 1..1000000 内单个编号、逗号列表或区间。选合格候选中任务最少者，并列取较小
-# 编号。同队列 auto 优先采用显式的 worker_count，候选须读取该队列并允许 Stage2。未设数量时采用已有分
-# 区，无分区时从 worker 1 开始。外部队列优先使用已有分区，缺少分区时才按配置数量选择。留空保留当前
-# worker。目标不可写时保留待投递记录。
+# handoff_workers = ""  # string: [<n>[slice]|<a>-<b>[slice]|comma list|auto]
+# Stage2 receiving workers: IDs and inclusive ID ranges within 1..1000000. Each comma-separated
+# entry can have an optional bit slice, e.g. 2[:4096], 3[4096:]. The actual cofactor width is
+# matched against inclusive starts and exclusive stops. Omitted brackets, [] and [:] match any
+# width. Select the shortest eligible queue, breaking ties by lowest ID. If no slice matches, retain
+# the source task. Auto uses worker_count or existing sections for the same queue and considers
+# workers that read it and allow Stage2. For external queues, auto prefers existing sections. Empty
+# keeps the current worker. Unwritable destinations remain pending for retry.
+# Stage2 接收 worker，可填 1..1000000 内的编号或闭区间。逗号分隔的每项可加位宽切片，如 2[:4096],
+# 3[4096:]。按实际余因子位宽匹配，包含起点、排除终点。省略方括号、[]、[:] 都匹配任意位宽。选匹配候选
+# 中任务最少者，并列取较小编号。无匹配时保留源任务。同队列 auto 使用 worker_count 或已有分区，候选须
+# 读取该队列并允许 Stage2。外部队列 auto 优先采用已有分区。留空保留当前 worker。目标不可写时保留待投
+# 递记录。
 
 # handoff_worktodo_file = ""  # string: <path>
 # Destination queue when auto_stage2=1. Empty inherits this worker's effective shared worktodo_file.

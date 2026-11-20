@@ -358,12 +358,16 @@ static void stage1_ntt_progress(const fs::path& root,const fs::path& fixture) {
     write(dir/"worktodo.txt","[Worker #1]\nECM2=1,2,15919,-1,44000000,4400000000,1000,\"1782929\"\n");
     const auto cfg=dir/"ecm.toml";
     write(cfg,"config_version=4\n[shared]\nworktodo_file='worktodo.txt'\n[gui]\nstage1_exe='"+fixture.generic_u8string()+
-        "'\n[worker.1]\nautostart=false\nextra_args='--scenario v2-ntt-progress'\n");
+        "'\n[worker.1]\nautostart=false\nextra_args='--scenario v2-ntt-progress'\n"
+        "handoff_workers='2[:15910], 3[15910:]'\n");
     ecmgui_v2::UiState state;
     ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.start(1));
     const auto deadline=GetTickCount64()+5000;
-    while(!app.controller.workers()[0].stage1_ntt.units&&GetTickCount64()<deadline){app.tick();Sleep(10);}
+    while(!app.controller.workers()[0].stage1_handoff.local_status.worker&&GetTickCount64()<deadline){app.tick();Sleep(10);}
     const auto& worker=app.controller.workers()[0];
+    assert(worker.stage1_handoff.local_status.bits==15890);
+    assert(ecmgui_v2::ui::stage1_handoff(worker.stage1_handoff,worker.stage1_execution,false)==
+           "Stage2 → ECM-ELF (Worker2)");
     const auto shown=ecmgui_v2::ui::worker_progress(worker,false);
     assert(shown.label=="14.4%"&&shown.speed=="1.00"&&shown.eta=="856 s");
     const auto batch=ecmgui_v2::ui::stage1_ntt_batch(worker.stage1_ntt);
@@ -443,6 +447,25 @@ static void stage1_details(const fs::path& root) {
     direct.local=true;
     direct.local_workers="2";
     assert(ecmgui_v2::ui::stage1_handoff(direct,prac,false)=="Stage2 → ECM-ELF (Worker2)");
+    const auto sliced_config=root/"stage1-sliced.toml";
+    write(root/"sliced.txt","[Worker #1]\nECM2=1,2,4095,-1,1000,2000,1\n"
+         "[Worker #2]\nECM2=1,2,4096,-1,1000,2000,1\n"
+         "[Worker #3]\nECM2=1,2,4096,-1,1000,2000,1,\"3\"\n"
+         "[Worker #4]\nECM2=1,2,4096,-1,1000,2000,1\n");
+    write(sliced_config,"config_version=4\n[shared]\nworker_count=5\nworktodo_file='sliced.txt'\n"
+        "[stage1]\nhandoff_workers='2[:4096], 3[4096:]'\n"
+        "[worker.4]\nhandoff_workers='2[:4096]'\n[worker.5]\nhandoff_workers='2[], 3[:]'\n");
+    ecmgui_v2::UiState sliced_state;
+    ecmgui_v2::App sliced_app(sliced_state,stdout);
+    assert(sliced_app.load_config(sliced_config.u8string()));
+    const auto target=[&](std::size_t i) {
+        return ecmgui_v2::ui::stage1_handoff(sliced_app.controller.workers().at(i).stage1_handoff,{},false);
+    };
+    assert(target(0)=="Stage2 → ECM-ELF (Worker2)");
+    assert(target(1)=="Stage2 → ECM-ELF (Worker3)");
+    assert(target(2).find("Waiting for cofactor width")!=std::string::npos);
+    assert(target(3).find("No worker matches")!=std::string::npos);
+    assert(target(4)=="Stage2 → ECM-ELF (Worker2, 3)");
     const auto fallback=ecmgui_v2::ui::stage1_handoff(plan,execution,false,true);
     assert(fallback.find("local-queue.txt")!=fallback.npos && fallback.find("prime95.txt")==fallback.npos);
     const auto param3=ecmgui::parse_line("Stage1 execution: curve=mont param=m3 backend=cgbn").stage1;

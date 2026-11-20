@@ -3,13 +3,13 @@
   "sha256": {
     "src/ecm/application/configuration/generated/ecm_config_generated.h": "e2d5842e1144874b6c0648db0472f1f4ad1718481f6ae50ea50a852945982fe7",
     "src/ecm/platform/generated/configuration_defaults.h": "1b0dbd2afaa7927890c21600837acc506cf022a628c5543e8d4461cf96bc5f6a",
-    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "9ec1704217adac46ed45c882b50e76e8c6241821e8926a6b287631b71643d493",
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "927ef904cf10dab05aaf4d953343a6aa477b1b5b58b8a707da374c73eabf03f9",
     "src/ecm/application/configuration/generated/ecm_toml_template.h": "dca7c2ab01bf354de007e218d1a3567a226e1664c30f1d3469d762f86858f278",
     "config/ecm.toml.default": "1dca67ff7d349759cb55f38e2f29866a2dd3cc4f275d199b5730445d2cbcf990",
-    "config/ecm.toml.example": "8e246d21bff09612fbaa7743668f1b89f5b5eb65d8c6d95e847e3ef16f489b30",
-    "docs/ECM_TOML_REFERENCE.en.md": "2ed041d4639094968894e2b320b34d2b7c62fa2c37a68d6b8cb89dd5cd89445e",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "3780965466a347b7fc571485af02eb6411bea1e6c4f51c1e95ae9f87c13e50a8",
-    "config/ecm_options.json": "1eeae610dfe0f260237a748239c05169feb570087e4dc6053fbbbf237cf0bb91",
+    "config/ecm.toml.example": "6fe828d7fab853fd2e548c2a99496f5781f4d13cc4513669ded3317f1ea5a9fd",
+    "docs/ECM_TOML_REFERENCE.en.md": "5852c3bec5944bb093acb9b98dc7a91cdc5a6079a8169271a96e89f6ed02da9c",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "96c4a49fa027e5833b9c3ac28ee7f73141c84eb274f13d5973d2120b82b71d8f",
+    "config/ecm_options.json": "28d32b0f6f3c74eb5e615fe8a03159f18b58e224ca20d6dc73952ea372d5f74b",
     "tools/gen/generate_ecm_config.py": "dd4f75e9f663a20e1aff3d4142959e19e0e5730cd29b1b19b4c419e59effb06f"
   }
 }

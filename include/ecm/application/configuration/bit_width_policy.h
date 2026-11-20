@@ -28,7 +28,8 @@ inline std::string normalize_policy(std::string_view value) {
 }
 
 template<class Algorithm, class Rule, class Parse>
-bool parse_policy_ranges(std::string_view rest, Parse parse, std::vector<Rule>& rules) {
+bool parse_policy_ranges(std::string_view rest, Parse parse, std::vector<Rule>& rules,
+                         bool allow_unsliced = false) {
     const auto parse_bit = [](std::string_view text, std::size_t& bits) {
         const auto end = text.data() + text.size();
         const auto parsed = std::from_chars(text.data(), end, bits);
@@ -38,13 +39,14 @@ bool parse_policy_ranges(std::string_view rest, Parse parse, std::vector<Rule>& 
         const auto comma = rest.find(',');
         const auto item = rest.substr(0, comma);
         const auto bracket = item.find('[');
-        if (item.empty() || bracket == std::string_view::npos || item.back() != ']')
+        if (item.empty() || (bracket == item.npos ? !allow_unsliced : item.back() != ']'))
             return false;
         Algorithm algorithm{};
         if (!parse(item.substr(0, bracket), algorithm))
             return false;
         Rule rule{algorithm, 1, std::nullopt};
-        const auto range = item.substr(bracket + 1, item.size() - bracket - 2);
+        const auto range = bracket == item.npos ? std::string_view{} :
+                                                   item.substr(bracket + 1, item.size() - bracket - 2);
         if (!range.empty()) {
             const auto colon = range.find(':');
             if (colon == std::string_view::npos ||

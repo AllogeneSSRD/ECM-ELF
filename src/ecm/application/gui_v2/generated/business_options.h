@@ -15,7 +15,7 @@ inline constexpr BusinessOption business_options[]={
     {"shared","worktodo","<path>","option_shared_worktodo","string",false,false,0,0},
     {"shared","b2_ratio","[0|1..1000000]","option_shared_b2_ratio","u64",true,true,0,1000000},
     {"stage1","auto_stage2","[0|1]","option_stage1_auto_stage2","int",true,true,0,1},
-    {"stage1","auto_stage2_workers","[<n>|<n>,...|<a>-<b>|auto]","option_stage1_auto_stage2_workers","string",false,false,0,0},
+    {"stage1","auto_stage2_workers","[<n>[slice]|<a>-<b>[slice]|comma list|auto]","option_stage1_auto_stage2_workers","string",false,false,0,0},
     {"stage1","auto_stage2_worktodo","<path>","option_stage1_auto_stage2_worktodo","string",false,false,0,0},
     {"shared","priority","[0|1|2]","option_shared_priority","int",true,true,0,2},
     {"shared","skip","[0|1|2]","option_shared_skip","int",true,true,0,2},

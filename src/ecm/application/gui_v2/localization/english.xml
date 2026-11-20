@@ -402,6 +402,9 @@
       <Item id="worker.stage1_handoff_off" name="Off, keep the Stage1 save" />
       <Item id="worker.stage1_handoff_incompatible" name="Keep the save, this construction is incompatible with the configured route" />
       <Item id="worker.stage1_handoff_workers" name="Worker" />
+      <Item id="worker.stage1_handoff_invalid_workers" name="Invalid worker slices" />
+      <Item id="worker.stage1_handoff_no_worker" name="No worker matches this width" />
+      <Item id="worker.stage1_handoff_waiting_width" name="Waiting for cofactor width" />
       <Item id="worker.stage1_handoff_fallback" name="fallback if Prime95 is unsupported" />
       <Item id="worker.stage1_handoff_keep_unsupported" name="keep save if unsupported" />
       <Item id="worker.stage1_handoff_edwards_only" name="Edwards only" />

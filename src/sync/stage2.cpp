@@ -47,8 +47,20 @@ std::vector<Pending> parse_pending(const std::string& bytes, const std::string& 
 }
 } // namespace
 
+bool ecm_stage2_transfer_parse_workers(const std::string& spec, Stage2TransferConfig& cfg) {
+    std::vector<int> workers;
+    std::vector<Stage2WorkerRule> rules;
+    const bool valid = stage2_worker_slices(spec) ? parse_stage2_worker_slices(spec, rules) :
+                                                    parse_stage2_worker_ids(spec, workers);
+    if (valid) {
+        cfg.workers = std::move(workers);
+        cfg.worker_rules = std::move(rules);
+    }
+    return valid;
+}
+
 bool ecm_stage2_transfer_park(const Stage2TransferConfig& cfg, const std::string& line,
-                              std::string& error, int* receiver) {
+                              std::string& error, int* receiver, std::size_t modulus_bits) {
     error.clear();
     if (cfg.worktodo.empty() || cfg.finished.empty() || cfg.pending.empty() || cfg.worker < 1 ||
         cfg.worker > 1000000 || ecm_queue::task_stage(line) != WorktodoStage::Stage2 ||
@@ -57,6 +69,14 @@ bool ecm_stage2_transfer_park(const Stage2TransferConfig& cfg, const std::string
         return false;
     }
     try {
+        auto workers = cfg.workers;
+        if (!cfg.worker_rules.empty()) {
+            workers = stage2_workers_for_bits(cfg.worker_rules, modulus_bits);
+            if (workers.empty()) {
+                error = "handoff_workers found no Stage2 receiver for " + std::to_string(modulus_bits) + " bits";
+                return false;
+            }
+        }
         const auto file = std::filesystem::u8path(cfg.pending);
         if (!file.parent_path().empty())
             std::filesystem::create_directories(file.parent_path());
@@ -66,7 +86,6 @@ bool ecm_stage2_transfer_park(const Stage2TransferConfig& cfg, const std::string
         auto bytes = read_pending(cfg.pending);
         const auto entries = parse_pending(bytes, cfg.pending);
         int selected = cfg.worker;
-        auto workers = cfg.workers;
         if (cfg.auto_workers || !workers.empty()) {
             std::map<int, size_t> loads;
             std::string load_error;
@@ -93,6 +112,7 @@ bool ecm_stage2_transfer_park(const Stage2TransferConfig& cfg, const std::string
                 }
             }
             std::sort(workers.begin(), workers.end());
+            workers.erase(std::unique(workers.begin(), workers.end()), workers.end());
             if (workers.empty() || workers.front() < 1 || workers.back() > 1000000) {
                 error = "invalid Stage2 receiver worker list";
                 return false;

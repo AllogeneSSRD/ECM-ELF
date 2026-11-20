@@ -517,6 +517,15 @@ ParsedLine parse_line(const std::string &line) {
     out.text = strip_ansi(line);
     split_timestamp(out.text, out.timestamp, out.plain);
     const std::string &p = out.plain;
+    if (starts_with(p, "stage1_handoff:")) {
+        long long bits = 0, worker = 0;
+        if (read_kv_int(p, "bits", bits) && bits > 0 &&
+            read_kv_int(p, "worker", worker) && worker >= 0 && worker <= 1000000) {
+            out.handoff = {static_cast<std::size_t>(bits), static_cast<int>(worker)};
+            out.kind = LogKind::Event;
+            return out;
+        }
+    }
     if(starts_with(p,"stage1_task_done:")) {
         long long processed=0;
         if(read_kv_int(p,"processed",processed) && processed>0){

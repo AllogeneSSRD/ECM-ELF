@@ -14,7 +14,8 @@ def verify(build, root, stage2):
     def scenario(name, mode, curve="m0", fallback="ecm-elf", external=False,
                  prime95_paths=True, blocked=False, expected="off", error=None,
                  local_queue="receiver.txt", log_file="", shared_extra="", stage1_extra="",
-                 overrides="", extra_queue="", local_receiver=None, exponent=127):
+                 overrides="", extra_queue="", local_receiver=None, exponent=127, factors=None,
+                 repair_slice=False):
         case = root / name
         bin_dir, config_dir, p95 = case / "bin", case / "config", case / "prime95"
         for directory in (bin_dir, config_dir, p95):
@@ -28,6 +29,8 @@ def verify(build, root, stage2):
         (p95 / "worktodo.txt").write_text("", encoding="ascii")
         save_name = f"{curve}_m{exponent}_100.save"
         task = f'ECMSTAGE1=1,2,{exponent},-1,"{save_name}",2000,0,1'
+        if factors is not None:
+            task += f',"{factors}"'
         target = p95 / "saves" / save_name
         if blocked:
             target.mkdir(parents=True)
@@ -71,12 +74,19 @@ handoff_unsupported = "{fallback}"
             assert not (bin_dir / save_name).exists()
             return
 
+        if repair_slice:
+            run("unmatched_width", "handoff_workers found no Stage2 receiver for 127 bits")
+            assert queue.read_text(encoding="ascii") == task + "\n" + extra_queue
+            assert (bin_dir / save_name).read_text().count("METHOD=") == 1
+            config.write_text(config.read_text().replace('"2[:127]"', '"2[]"'), encoding="ascii")
         run("first")
         remaining = queue.read_text(encoding="utf-8")
         receiver = config_dir / local_queue
         assert "ECMSTAGE1=" not in remaining, remaining
         assert "ECMSTAGE1=" in finished.read_text(encoding="utf-8")
         assert (bin_dir / save_name).is_file()
+        if repair_slice:
+            assert (bin_dir / save_name).read_text().count("METHOD=") == 1
         assert (("ECMSTAGE2=" in remaining) == (expected == "in-place" or local_receiver is not None)), remaining
         if local_receiver is not None:
             assert f"[Worker #{local_receiver}]\nECMSTAGE2=" in remaining, remaining
@@ -126,6 +136,15 @@ handoff_unsupported = "{fallback}"
     scenario("default_local", None, expected="in-place")
     scenario("explicit_off", "off")
     scenario("local_in_place", "ecm-elf", expected="in-place")
+    scenario("slice_below_boundary", "ecm-elf", local_receiver=2,
+             stage1_extra='handoff_workers = "2[:128], 3[128:]"\n')
+    scenario("slice_at_boundary", "ecm-elf", local_receiver=3,
+             stage1_extra='handoff_workers = "2[:127], 3[127:]"\n')
+    scenario("slice_uses_cofactor", "ecm-elf", curve="e", local_receiver=2,
+             exponent=178, factors=2**89 + 1,
+             stage1_extra='handoff_workers = "2[:100], 3[100:]"\n')
+    scenario("slice_no_match_then_retry", "ecm-elf", local_receiver=2, repair_slice=True,
+             stage1_extra='handoff_workers = "2[:127]"\n')
     scenario("local_wide_to_worker_2", "ecm-elf", "e", exponent=262139, local_receiver=2,
              stage1_extra='handoff_workers = "2"\nhandoff_worktodo_file = ""\n')
     scenario("local_external_shared_finished", "ecm-elf", external=True, expected="external")
@@ -151,7 +170,7 @@ handoff_unsupported = "{fallback}"
              shared_extra='worker_count = 1\nqueue_skip = "stage2"',
              stage1_extra='handoff_workers = "auto"\n',
              error="automatic Stage2 handoff found no eligible worker")
-    print("Stage1 handoff modes: 15 queue scenarios passed")
+    print("Stage1 handoff modes: 19 queue scenarios passed")
 
 
 if __name__ == "__main__":

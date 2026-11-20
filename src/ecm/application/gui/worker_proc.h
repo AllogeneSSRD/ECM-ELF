@@ -85,6 +85,7 @@ public:
         // --worker support (D1/D2) and never entered queue mode. See kOldDriverHint.
         bool old_driver = false;
         Stage1Execution stage1;
+        Stage1HandoffStatus handoff;
         Stage1NttStatus stage1_ntt;
         bool stage1_task_started=false;
         Stage2Status stage2;

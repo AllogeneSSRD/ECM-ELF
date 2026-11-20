@@ -2,6 +2,7 @@
 #include "../../platform/generated/configuration_defaults.h"
 #include "log_parse.h"
 #include "platform.h"
+#include "sync/stage2_worker_policy.h"
 #include <functional>
 #include <memory>
 #include <string>
@@ -17,6 +18,9 @@ const WorkerRunState *all_worker_states(int *count);
 struct Stage1HandoffPlan {
     bool local = false, prime95 = false, local_fallback = false, edwards_only = false, legacy = false;
     std::string local_queue, local_workers, prime95_queue, prime95_workers, prime95_save_dir;
+    std::vector<Stage2WorkerRule> local_worker_rules;
+    Stage1HandoffStatus local_status;
+    std::vector<int> local_candidates;
 };
 
 // Borrowed read-only view; Controller owns records, logs and process lifetime.

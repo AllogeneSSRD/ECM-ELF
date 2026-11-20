@@ -124,6 +124,7 @@ struct CofactorBatch {
     std::vector<std::string> factors;
     std::string lines;
     uint32_t curves = 0;
+    std::size_t modulus_bits = 0;
 };
 CofactorBatch cofactor_batch(const std::vector<std::string>& records);
 } // namespace ecm_edwards

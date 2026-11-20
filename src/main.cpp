@@ -338,6 +338,12 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
     const auto worker = paths.worker;
     const auto full_sync = paths.full_sync;
     const auto marker = item.marker;
+    auto handoff_bits = mpz_sizeinbase(N, 2);
+    const bool sliced_handoff = stage2 && !stage2->worker_rules.empty();
+    if (sliced_handoff) {
+        ecm_ts_fprintf(stdout, "stage1_handoff: bits=%zu worker=0\n", handoff_bits);
+        std::fflush(stdout);
+    }
     auto result = run_stage1_task(item.input.request(), stage1_tasks(opt));
 
     const bool has_factors = result.has_factors();
@@ -446,6 +452,7 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
                 (void)ecm_save::publish_batch(path, projection.lines, false);
                 stage2_line = ecm_stage2_cofactor_line(assignment, path, projection.curves,
                                                        projection.factors);
+                handoff_bits = projection.modulus_bits;
                 if (!auto_stage2_line.empty()) auto_stage2_line = stage2_line;
                 deliver_stage2 = true;
                 ecm_ts_fprintf(stdout, "Stage2 cofactor handoff: curves=%u save=%s\n",
@@ -474,10 +481,14 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
     int stage2_receiver = stage2 ? stage2->worker : worker;
     if (stage2 != nullptr && deliver_stage2) {
         std::string transfer_error;
-        if (!ecm_stage2_transfer_park(*stage2, stage2_line, transfer_error, &stage2_receiver)) {
+        if (!ecm_stage2_transfer_park(*stage2, stage2_line, transfer_error, &stage2_receiver, handoff_bits)) {
+            if (sliced_handoff)
+                ecm_ts_fprintf(stdout, "stage1_handoff: bits=%zu worker=0\n", handoff_bits);
             ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged\n", transfer_error.c_str());
             return false;
         }
+        if (sliced_handoff)
+            ecm_ts_fprintf(stdout, "stage1_handoff: bits=%zu worker=%d\n", handoff_bits, stage2_receiver);
     }
     const auto receipt = paths.worktodo + ".stage1_completed_worker" + std::to_string(worker);
     std::string completion_error;
@@ -657,12 +668,10 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
         stage2cfg.worker = receiver;
         if (all_curves) {
             stage2cfg.auto_workers = ecm_stage1::lower_ascii(auto_workers) == "auto";
-            int ignored = 0;
             if (!stage2cfg.auto_workers && !auto_workers.empty() &&
-                (!ecm_workers::parse_list(auto_workers, 1000000, stage2cfg.workers, ignored) ||
-                 ignored || stage2cfg.workers.empty()))
-                throw std::runtime_error("handoff.workers must be a worker list/range in "
-                                         "1..1000000 or auto");
+                !ecm_stage2_transfer_parse_workers(auto_workers, stage2cfg))
+                throw std::runtime_error("handoff_workers expects worker IDs or ranges in 1..1000000 "
+                                         "with optional bit slices, or auto");
             if (stage2cfg.auto_workers) {
                 const int configured = ecm_config::configured_workflow_worker_count(lines, ini);
                 if (configured > 0)

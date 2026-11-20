@@ -94,6 +94,33 @@ int main(int argc, char **argv) {
         require(ecm_worktodo_first_line(routed.worktodo,3,current) && current==retry_line,
                 "receiver task missing");
 
+        Stage2TransferConfig sliced{(root / "sliced.txt").string(), (root / "sliced.finished").string(),
+                                    (root / "sliced.pending").string(), 1};
+        require(ecm_stage2_transfer_parse_workers("2[:4096], 3[4096:]", sliced), "slice parse failed");
+        require(ecm_stage2_transfer_park(sliced, line, error, &receiver, 4095) && receiver == 2,
+                "width below boundary routed to wrong worker");
+        require(ecm_stage2_transfer_park(sliced, retry_line, error, &receiver, 4096) && receiver == 3,
+                "inclusive slice start did not match boundary");
+        require(ecm_stage2_transfer_flush(sliced.pending, remaining, error), "slice flush failed");
+        for (const auto* spec : {"2, 3", "2-3", "2[], 3[:]", "2-3[:]", "2, 3[:5000]"}) {
+            auto compatible = sliced;
+            compatible.worker_rules.clear();
+            require(ecm_stage2_transfer_parse_workers(spec, compatible), "unbounded slice parse failed");
+            require(ecm_stage2_transfer_park(compatible, line, error, &receiver, 4096) && receiver == 2,
+                    "unbounded syntax changed load tie break");
+            require(ecm_stage2_transfer_flush(compatible.pending, remaining, error), "unbounded flush failed");
+        }
+        sliced.worker_rules.clear();
+        require(ecm_stage2_transfer_parse_workers("2[:4096]", sliced), "single slice parse failed");
+        require(!ecm_stage2_transfer_park(sliced, line, error, &receiver, 4096) &&
+                error.find("no Stage2 receiver for 4096 bits") != error.npos,
+                "unmatched width silently fell back to source worker");
+        for (const auto* spec : {"2[4096:4096]", "2[4096:10]", "2[4096]", "2[0:]", "2[:4096]x"}) {
+            auto invalid = sliced;
+            invalid.worker_rules.clear();
+            require(!ecm_stage2_transfer_parse_workers(spec, invalid), "malformed slice accepted");
+        }
+
         Stage2TransferConfig pending_balance{(root/"new-target.txt").string(),(root/"new-target.finished").string(),
                                              (root/"balanced.pending").string(),4};
         pending_balance.auto_workers=true;pending_balance.configured_workers=3;

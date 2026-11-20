@@ -9,6 +9,7 @@ struct TaskDisplay {
     bool valid=false,has_aid=false,has_factors=false;
     bool from_save=false;
     unsigned long long curves=0;
+    unsigned long long mersenne_bits=0;
     std::string number;
 };
 // Presentation only: never return the raw assignment, AID, factor values or path.
@@ -72,7 +73,10 @@ inline TaskDisplay task_display(const std::string &line) {
     if(values.size()<offset+5)return TaskDisplay{};
     for(size_t i=offset;i<offset+4;++i)if(!numeric(values[i]))return TaskDisplay{};
     if(values[offset+2].find_first_not_of("0123456789")!=values[offset+2].npos)return TaskDisplay{};
-    if(values[offset]=="1" && values[offset+1]=="2" && values[offset+3]=="-1")out.number="M"+values[offset+2];
+    if(values[offset]=="1" && values[offset+1]=="2" && values[offset+3]=="-1") {
+        out.number="M"+values[offset+2];
+        out.mersenne_bits=count(values[offset+2]);
+    }
     else out.number=values[offset]+"*"+values[offset+1]+"^"+values[offset+2]+
         (values[offset+3].front()=='-' || values[offset+3].front()=='+'?"":"+")+values[offset+3];
     const bool saved=keyword=="ECMSTAGE2"||(keyword=="ECMSTAGE1"&&!numeric(values[offset+4]));

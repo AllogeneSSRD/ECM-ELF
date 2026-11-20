@@ -402,6 +402,9 @@
       <Item id="worker.stage1_handoff_off" name="关闭，保留 Stage1 存档" />
       <Item id="worker.stage1_handoff_incompatible" name="当前曲线构造与配置的路线不兼容，保留存档" />
       <Item id="worker.stage1_handoff_workers" name="Worker" />
+      <Item id="worker.stage1_handoff_invalid_workers" name="Worker 切片格式无效" />
+      <Item id="worker.stage1_handoff_no_worker" name="该位宽无匹配 Worker" />
+      <Item id="worker.stage1_handoff_waiting_width" name="等待确认余因子位宽" />
       <Item id="worker.stage1_handoff_fallback" name="Prime95 不支持时备用" />
       <Item id="worker.stage1_handoff_keep_unsupported" name="不支持时保留存档" />
       <Item id="worker.stage1_handoff_edwards_only" name="仅 Edwards" />

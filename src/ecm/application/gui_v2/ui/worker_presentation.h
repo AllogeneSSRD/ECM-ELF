@@ -197,7 +197,21 @@ inline std::string stage1_handoff(const ecmgui::Stage1HandoffPlan& plan,
             line += " (" + std::string(text("worker.stage1_handoff_fallback", zh)) + ")";
         if (plan.edwards_only)
             line += " (" + std::string(text("worker.stage1_handoff_edwards_only", zh)) + ")";
-        append_workers(plan.local_workers);
+        if (!stage2_worker_slices(plan.local_workers)) {
+            append_workers(plan.local_workers);
+        } else if (!plan.local_candidates.empty()) {
+            std::string workers;
+            for (std::size_t i = 0; i < (std::min)(std::size_t{8}, plan.local_candidates.size()); ++i) {
+                if (i) workers += ", ";
+                workers += std::to_string(plan.local_candidates[i]);
+            }
+            if (plan.local_candidates.size() > 8) workers += ", …";
+            append_workers(workers);
+        } else {
+            const char* key = plan.local_worker_rules.empty() ? "worker.stage1_handoff_invalid_workers" :
+                plan.local_status.bits ? "worker.stage1_handoff_no_worker" : "worker.stage1_handoff_waiting_width";
+            line += " (" + std::string(text(key, zh)) + ")";
+        }
     }
     if (details) {
         if (prime95) {
@@ -208,6 +222,8 @@ inline std::string stage1_handoff(const ecmgui::Stage1HandoffPlan& plan,
         }
         if ((local || local_fallback) && !plan.local_queue.empty())
             line += "\n" + std::string(text("worker.stage1_handoff_local_queue", zh)) + "  " + plan.local_queue;
+        if ((local || local_fallback) && stage2_worker_slices(plan.local_workers))
+            line += "\nhandoff_workers = " + plan.local_workers;
     }
     return line;
 }

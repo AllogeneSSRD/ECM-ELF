@@ -1,5 +1,6 @@
 #pragma once
 
+#include "stage2_worker_policy.h"
 #include <cstddef>
 #include <functional>
 #include <string>
@@ -16,11 +17,14 @@ struct Stage2TransferConfig {
     int configured_workers = 1;
     std::function<bool(int)> auto_worker_eligible;
     std::map<int, std::string> finished_by_worker;
+    std::vector<Stage2WorkerRule> worker_rules;
 };
+
+bool ecm_stage2_transfer_parse_workers(const std::string& spec, Stage2TransferConfig& config);
 
 // Park an already-published Stage1 save assignment before advancing its queue.
 bool ecm_stage2_transfer_park(const Stage2TransferConfig& config, const std::string& line,
-                              std::string& error, int* receiver = nullptr);
+                              std::string& error, int* receiver = nullptr, std::size_t modulus_bits = 0);
 
 // Retry every pending handoff. Successful entries are removed from the outbox;
 // active/finished Stage2 entries count as successful during crash recovery.

@@ -226,6 +226,8 @@ Stage1 与 Stage2 共用 `ecm.toml` 和 `worktodo.txt`。新版 TOML 在首个�
 
 `handoff_worktodo_file` 留空时使用当前 worker 生效的 `[shared] worktodo_file`。可填写绝对路径或相对 TOML 所在目录的路径。接收端去重使用 `[shared] finished_file`。在 `[worker.N]` 中使用同名键可覆盖交接设置。
 
+`handoff_workers = "2[:4096], 3[4096:]"` 将小于 4096 bit 的余因子交给 worker 2，将 4096 bit 及以上的交给 worker 3。切片使用 Stage2 实际处理的余因子位宽，Edwards 命中后若继续交接则使用新余因子。编号区间也可以带切片，如 `2-4[:4096]`。`"2, 3"`、`"2-3"`、`"2[], 3[:]"` 等价。位宽重叠时，所有匹配的 worker 一起比较队列长度。如果没有匹配项，保留源任务并报告位宽，修正配置后可重试。
+
 例如，将无因子完成的 Stage1 任务交给当前队列的 worker 2 或 3：
 
 ```toml

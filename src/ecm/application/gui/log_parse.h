@@ -148,6 +148,11 @@ struct Stage1Execution {
     bool valid() const { return !backend.empty(); }
 };
 
+struct Stage1HandoffStatus {
+    std::size_t bits = 0;
+    int worker = 0;
+};
+
 struct ParsedLine {
     LogKind kind = LogKind::Raw;
     std::string text;        // the line as received, ANSI codes removed
@@ -156,6 +161,7 @@ struct ParsedLine {
     std::string application_version; // actual child banner, e.g. ECM-ELF 0.39.0
     ProgressInfo progress;
     Stage1Execution stage1;
+    Stage1HandoffStatus handoff;
     Stage1NttEvent stage1_ntt;
     Stage2Event stage2;
     bool is_hit = false;
