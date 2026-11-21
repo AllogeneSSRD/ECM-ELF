@@ -1,6 +1,7 @@
 #include "ladder.h"
 #include "profiles.h"
 #include "weighted.cuh"
+#include "ecm/stage1/ntt_sizes.h"
 #include "ecm/stage1/ntt_length.h"
 #include "ecm/integer.h"
 #include "../../../../../kernels/cuda/stage1_ntt_radix5.cuh"
@@ -335,7 +336,7 @@ Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions& options,
                                           options.tight_weighted_bound;
         const auto usable = [p, &options, allow_unsigned_bound](unsigned length) {
             const unsigned bpw = (p + length - 1) / length;
-            return length <= p && length <= ecm_stage1::stage1_ntt_max_length && bpw <= 31 &&
+            return length <= p && p <= ecm_stage1::ntt_max_exp(length,true,allow_unsigned_bound) && bpw <= 31 &&
                 (!options.bpw || bpw <= options.bpw) &&
                 options.tile <= ecm_stage1::stage1_ntt_length_log(ecm_stage1::stage1_ntt_radix2_length(length)) &&
                 (exact_ok_terms(2ull * length, bpw) ||
@@ -648,6 +649,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                   ctx.nms ? FUSE_OUTER_THREADS : 0u,
                   unsigned(ctx.passes_fwd) + unsigned(mixed),
                   warp_tile || short_inverse, profile.source, options.weighted, {}, {}, result.dataflow};
+        plan.max_exp = ecm_stage1::ntt_max_exp(s.length,options.weighted,unsigned_bound.has_value());
         plan.field_modulus = GL_P;
         plan.carry_bits = coefficient_bits;
         if (unsigned_bound)

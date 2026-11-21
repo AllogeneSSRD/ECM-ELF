@@ -127,3 +127,9 @@ M1046305、sigma=9、B1=B2=8 时，CPU GMP 标量和两种卷积的原生 Edward
 1. 用 GMP 核对模乘、平方、全传播与最高 limb 屏蔽，再按固定构造、sigma、B1/B2 核对规范末点、因子及临界 B1/B2。覆盖完整梅森数、已知因子承载、NAF 字典分母出因子与异常 x-only 重放。抽查线性↔加权换计划续跑，跨批量对照同 sigma，验证 Stage2 交接。[生产回归](../../tools/test/test_stage1_ntt_production.py) · [已知因子验收](../../tools/test/test_stage1_ntt_known_factors.py) · [NAF 参考](../../tools/test/test_edwards_ntt_naf_reference.py)
 2. 后续每轮保留 GPU UUID／SM、驱动、功率上限、频率／板功耗采样、二进制 SHA、输入、重复数、计时边界、实际计划和逐次结果。`data/experiments/` 保存日志与剖析，`data/benchmarks/` 保存逐格汇总。单曲线与多曲线各出榜，字典、主循环、整任务采用各自时间边界。[矩阵采集](../../tools/bench/bench_stage1_ntt_best.py) · [设备矩阵分析](../../tools/bench/analyze_stage1_ntt_device_matrix.py)
 3. 先交付当前上限的双卡延迟、吞吐与容量矩阵，再决定是否实现更宽进位和新长度。通过算术、正式入口和续跑验证的范围同步到尺寸表；经同设备复测的批量结论更新到 Stage1 性能文档。
+
+## 0.71.10 连续上限与旧表验收
+
+固定长度的生产选长探针覆盖两种加权界，逐项检查连续上限与下一指数，并检查 124、66,050、497,680 三个孤立指数的自动选择和显式短长度拒绝。16,384 点在 2,048 MiB 设备预算、B1=16、NAF=6、单曲线、每阶段 1 组的 GPU 调优中分别完成 linear（p=204,775）和 IBDWT（p=401,408）的精调。本次测量验证候选覆盖，性能图仍沿用既有实测。[选长回归](../../tools/test/stage1_mersenne_ntt.cpp) · [矩阵回归](../../tools/test/test_stage1_ntt_tune_grid.py)
+
+4070 Ti 快照 `1acab57f3132.toml` 的 1,584 行转换为 1,152 行。逐个决策条件核对最大吞吐及胜出行的版本、时间、B1、采样指数和总设备时间；再次读写得到相同字节。验证副本保存在 `data/experiments/stage1_capacity_scan/real_v17.toml`。[字段与迁移口径](../usage/TUNE.md)

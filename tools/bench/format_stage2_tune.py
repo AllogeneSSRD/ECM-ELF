@@ -8,8 +8,8 @@ from stage2_tune_matrix import matrix_row_key
 
 def format_rows(source: str) -> tuple[str, int]:
     document = tomllib.loads(source)
-    if document.get('profile',{}).get('format') not in range(8, 17):
-        raise ValueError('The formatter requires profile format 8–16')
+    if document.get('profile',{}).get('format') not in range(8, 18):
+        raise ValueError('The formatter requires profile format 8–17')
     changed = 0
     section = re.compile(r"(?m)^\[ntt(?:\.(\d+))?\][^\r\n]*\r?\n(?:(?!^\[).)*", re.S | re.M)
 
@@ -24,7 +24,10 @@ def format_rows(source: str) -> tuple[str, int]:
         columns,*values=table["matrix"]
         if len(lines) != len(values):
             raise ValueError("Cannot reorder a table with multiline/commented rows")
-        records = [dict(table, **dict(zip(columns, row))) for row in values]
+        records = [dict(zip(columns, row)) for row in values]
+        for record in records:
+            record.setdefault('condition',int(match[1] or 0))
+            record.setdefault('ntt_type','stage2_convolution')
         order = sorted(range(len(records)), key=lambda i: matrix_row_key(records[i],'ntt'))
         if order != list(range(len(records))):
             changed += 1

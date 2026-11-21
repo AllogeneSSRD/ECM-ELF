@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT / "tools/test"))
 from stage2_tune_tables import summaries
 
 DEFAULT_BASELINE = ROOT / "data/figures/stage1_prime95_mont_wide_20261117"
-SIZE_TABLE = ROOT / "docs/usage/TUNE.md"
+SIZE_TABLE = ROOT / "include/ecm/stage1/ntt_sizes.h"
 # Devices used in the archived main figure. The compact tune table identifies
 # hardware by UUID rather than by model or the current CUDA device index.
 MATRIX_GPUS = {"d9139abeea58ffc8b97d2066e52c9702": "4070ti", "8a67b1f8ef1c3177a822813a7ac2224d": "4060lp"}
@@ -36,31 +36,19 @@ NAF_COLUMNS = (1442105, 1442106, 1442105, 1442106, 1442106, 1442100,
 BINARY_STEPS = {"edwards": 1442104, "mont0": 1442098}
 
 
-def size_ranges():
-    section = SIZE_TABLE.read_text(encoding="utf-8").split("#### NTT and transform sizes", 1)[1]
-    rows = []
-    for line in section.splitlines():
-        if rows and not line.startswith("|"):
-            break
-        if not re.match(r"^\| [\d,]+ \|", line):
-            continue
-        cells = line.strip("|").replace(",", "").split("|")
-        def endpoints(cell):
-            if cell.strip() == "—":
-                return range(0)
-            lo, hi = map(int, cell.strip().split("–"))
-            return range(lo, hi+1)
-        rows.append((int(cells[0]), *map(endpoints, cells[2:5]), set(map(int, re.findall(r"\d+", cells[5])))))
-    if not rows:
+def size_limits():
+    # Use the same continuous capacities as the production packing selector.
+    source = SIZE_TABLE.read_text(encoding="utf-8")
+    table = source.split("ntt_sizes[] = {", 1)[1].split("};", 1)[0]
+    entries = re.findall(r"\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}", table)
+    if not entries:
         raise ValueError(f"Missing transform size matrix in {SIZE_TABLE}")
-    return rows
+    return [tuple(map(int, entry)) for entry in entries]
 
 
-def candidate_lengths(p, native, ranges):
-    linear = next(n for n, interval, _, _, _ in ranges if p in interval)
-    weighted = next((n for n, _, _, _, exceptions in ranges if native and p in exceptions), None)
-    if weighted is None:
-        weighted = next(n for n, _, conservative, edwards, _ in ranges if p in (edwards if native else conservative))
+def candidate_lengths(p, native, limits):
+    linear = next(n for n, maximum, _, _ in limits if p <= maximum)
+    weighted = next(n for n, _, conservative, edwards in limits if p <= (edwards if native else conservative))
     # Auto also tries the shortest safe pure power of two when mixed wins.
     binary = 1 << (weighted-1).bit_length()
     return {("stage1_linear", linear), ("stage1_weighted", weighted), ("stage1_weighted", binary)}
@@ -125,10 +113,10 @@ def main():
     points = reference_points(baseline)
     old_role = "ntt_overlay" if gpu == "4070ti" else "ntt"
     old_version = one_value((v for role, v in points if role == old_role), "historical NTT version")
-    ranges = size_ranges()
+    limits = size_limits()
     audit, projected = [], []
     for p, bits, old_cost, _, _ in sorted(points[old_role, old_version]):
-        candidates = {native: candidate_lengths(p, native, ranges) for native in (False, True)}
+        candidates = {native: candidate_lengths(p, native, limits) for native in (False, True)}
         matching = [r for r in rows if (r["ntt_type"], r["length"]) in candidates[bool(r["naf_window"])]]
         result = dict(p=p, bits=bits, baseline_s_per_curve=old_cost, baseline_version=old_version,
                       sampled_transforms=" ".join(f"{kind}:{n}" for kind,n in sorted({(r["ntt_type"],r["length"]) for r in matching})),

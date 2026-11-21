@@ -35,7 +35,7 @@ matrix = [
     fixture = (f'config_version = 4\n[shared]\ntune_file = "{database.as_posix()}"\nlog_file = ""\n'
                f'[stage1]\ntarget = "gpu"\nparam = "m0"\nstage1_gpu_device = {args.device}\n'
                'gpu_algorithm = "ntt"\ncheckpoint_interval_seconds = 0\nexponent_cache_dir = "off"\n'
-               'handoff_mode = "off"\n')
+               'handoff_mode = "off"\nntt_max_batch = 128\n')
 
     def run(name, flags, cfg=fixture, expression=None, ok=True):
         directory = out / name
@@ -72,19 +72,19 @@ matrix = [
     assert len(set(lengths)) == 2, lengths
     best_lines = re.findall(r"Best +\d+ +\d+ +[01]:[\d:,]+ +\d+c +\d+ iter/s", log)
     mirrored = mirror.read_text(encoding="utf-8")
-    assert legend in mirrored and len(best_lines) == 1 and all(line in mirrored for line in best_lines)
+    assert legend in mirrored and len(best_lines) == 3 and all(line in mirrored for line in best_lines)
     profile = tomllib.loads(database.read_text(encoding="utf-8"))
-    assert profile["profile"]["format"] == 14 and set(profile["ntt"]) == {"matrix"}
+    assert profile["profile"]["format"] == 17 and set(profile["ntt"]) == {"matrix"}
     columns, *values = profile["ntt"]["matrix"]
-    assert columns[:5] == ["length", "log2_length", "iter_per_s", "batch", "ntt_type"]
-    assert not {"p", "exponent", "measurement_ids", "mean_seconds"} & set(columns)
+    assert columns[:5] == ["max_exp", "length", "iter_per_s", "batch", "ntt_type"]
+    assert not {"p", "exponent", "measurement_ids", "mean_seconds", "log2_length"} & set(columns)
     rows = [dict(zip(columns, row)) for row in values]
     stage2, = [r for r in rows if r["ntt_type"] == "stage2_convolution"]
     assert stage2["iter_per_s"] == 100
     for mode in ("linear", "weighted"):
         group = [r for r in rows if r["ntt_type"] == f"stage1_{mode}"]
         assert {1, 128} <= {r["batch"] for r in group}
-        assert all(r["length"] == 1 << r["log2_length"] and
+        assert all(r["max_exp"] >= r["reference_bits"] and
                    0 < r["owned_bytes"] <= r["peak_bytes"] <= r["budget_bytes"] and
                    r["program_version"] and r["updated_at"].endswith("Z") for r in group)
         for r in group:
@@ -92,13 +92,13 @@ matrix = [
             assert r["timed_steps"] % r["block_steps"] == 0 and r["stddev_seconds"] >= 0
     snapshot = database.read_bytes()
     hot = run("hot_matrix", ["--tune", "ntt", "--bits", str(p)], cfg=config)
-    assert "measured=1 " in hot and hot.count("stage1_ntt_recheck:") == 1
+    assert "measured=1 " in hot and hot.count("stage1_ntt_recheck:") == 3
     assert ("status=updated" in hot) == (database.read_bytes() != snapshot)
     assert "source=tune" in run("full_cached", [*flags[:1], "1", *flags[2:]], expression=expression)
     assert re.search(r"95% +\d+ +\d+ +[01]:[\d:,]+ +\d+c +\d+ iter/s", log)
     print("PASS full tune CLI, measured 95% batch and production selection", flush=True)
 
-    direct = run("direct", ["--tune", "ntt", "--bits", "61"],
+    direct = run("direct", ["--tune", "ntt,length=8"],
                  cfg=fixture + "ntt_window_bits = 0\nntt_length = 8\n")
     assert re.search(r"Best +8 +\d+ +[01]:\d+:\d+:0:", direct)
     assert set(re.findall(r"8 +\d+ +([01]):\d+:\d+:0:", direct)) == {"0", "1"}
@@ -114,7 +114,7 @@ matrix = [
     rows = [dict(zip(columns, row)) for row in values]
     assert any(row["ntt_type"] == "stage2_convolution" for row in rows)
     mixed = next(row for row in rows if row["length"] == 2560 and row["batch"] == 1)
-    assert mixed["ntt_type"] == "stage1_weighted" and mixed["log2_length"] == 11
+    assert mixed["ntt_type"] == "stage1_weighted" and mixed["max_exp"] == 64000
     assert mixed["forward"].startswith("r5+") and mixed["inverse"].endswith("+r5")
     cached = database.read_bytes()
     assert "source=tune" in run("mixed_cached", one_curve, expression=wide)
@@ -129,12 +129,11 @@ matrix = [
     # The preceding full matrix already verifies the default timing and reuse.
     log = run("full_mixed", ["--tune", f"ntt,exp={p},time=0.25"])
     lengths = [int(n) for n in re.findall(r"^(?:\[[^\n]*\] )?Best +(\d+) +\d+ +[01]:", log, re.M)]
-    assert len(lengths) == 1
-    assert {2560,4096} < {int(n) for n in re.findall(r"stage1_ntt_plan: p=58631 length=(\d+)", log)}
+    assert lengths == [4096, 2048, 2560, 4096], lengths
     columns, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]
-    mixed_rows = [dict(zip(columns,row)) for row in values if row[0] == 2560]
+    mixed_rows = [dict(zip(columns,row)) for row in values if row[columns.index("length")] == 2560]
     assert {row["dataflow"] & 384 for row in mixed_rows} == {0,128,384}
-    print("PASS full tune compares three lengths and all mixed layouts", flush=True)
+    print("PASS full tune compares four capacity entries and all mixed layouts", flush=True)
 
     limited = fixture + 'ntt_convolution = "linear"\nntt_memory_mib = 1\n'
     log = run("low_budget", ["-gpucurves", "128", "-sigma", "26", "20"],

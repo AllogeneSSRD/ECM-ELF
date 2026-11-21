@@ -4,7 +4,7 @@
 #include "ecm/stage1/scalar.h"
 #include "../../edwards/ntt_dictionary.h"
 #include <set>
-#include "ecm/stage1/ntt_length.h"
+#include "ecm/stage1/ntt_sizes.h"
 #include "../../../cuda/ntt/runtime.h"
 #include "../../edwards/memory.h"
 #include "../../../../io/files.h"
@@ -97,16 +97,11 @@ unsigned linear_exponent_limit(unsigned length, unsigned bpw) {
     return lo * bpw;
 }
 
-unsigned max_exponent(const Plan& plan) {
-    const unsigned limit = plan.weighted ? plan.length * plan.bpw : linear_exponent_limit(plan.length, plan.bpw);
-    return std::min(ecm_stage1::stage1_ntt_max_exponent, limit);
-}
-
 void print_measurement(const Measurement& m, unsigned target) {
     const auto& p = m.plan;
     const auto shape = tune_shape_descriptor(p);
     ecm_ts_fprintf(stdout, "%u %u %s %uc %.0f iter/s dataflow=%u target_ms=%u timed_steps=%u block_steps=%u group_ms=%.3f\n",
-        p.length, max_exponent(p), shape.c_str(), m.batch, m.throughput()*m.steps, p.dataflow,
+        p.length, p.max_exp, shape.c_str(), m.batch, m.throughput()*m.steps, p.dataflow,
         target, m.steps, m.steps / m.blocks, m.group_ms());
 }
 
@@ -131,7 +126,7 @@ Fields encode(const Measurement& m, unsigned iterations) {
     const auto& plan = m.plan;
     Fields row{
         {"length", std::to_string(plan.length)},
-        {"log2_length", std::to_string(ecm_stage1::stage1_ntt_length_log(plan.length))},
+        {"max_exp", std::to_string(plan.max_exp)},
         {"iter_per_s", pt::numeric(m.throughput() * iterations)}, {"batch", std::to_string(m.batch)},
         {"ntt_type", pt::quoted(plan.weighted ? pt::weighted_ntt_type : pt::linear_ntt_type)},
         {"bpw", std::to_string(plan.bpw)}, {"tile", std::to_string(plan.tile)},
@@ -146,8 +141,8 @@ Fields encode(const Measurement& m, unsigned iterations) {
     return row;
 }
 
-void persist(const std::string& path, const Device& device, std::vector<Fields> rows, bool fresh = false,
-             const std::string& replace_scope = {}, bool partial = false) {
+void persist(const std::string& path, const Device& device, std::vector<Fields> rows,
+             const std::string& replace_scope = {}, bool partial = false, bool observation = false) {
     if (path.empty() || rows.empty()) return;
     const auto parent = std::filesystem::path(path).parent_path();
     if (!parent.empty()) std::filesystem::create_directories(parent);
@@ -162,11 +157,23 @@ void persist(const std::string& path, const Device& device, std::vector<Fields> 
         // A shorter interrupted run must not evict a completed search.
         if (partial && std::any_of(db.stage1_ntt.begin(),db.stage1_ntt.end(),
                 [&](const Fields& r) { return belongs(r) && r.count("batch_search"); })) return;
+        // Keep the faster whole measurement even when rebuilding a compact scope.
+        // Explicitly requested batches survive subsequent default compaction.
+        for (auto& row : rows) row["condition"]=condition;
+        for (auto& old : db.stage1_ntt) {
+            if (!belongs(old)) continue;
+            const bool keep=pt::optional_uint(old,"explicit_batch") ||
+                std::any_of(rows.begin(),rows.end(),[&](const Fields& row){
+                    return !pt::matrix_row_less(old,row,pt::ntt_row_order) && !pt::matrix_row_less(row,old,pt::ntt_row_order);
+                });
+            if (keep)
+                for (const char* key:{"batch_scope","batch_search","batch_roles"}) old.erase(key);
+        }
         db.stage1_ntt.erase(std::remove_if(db.stage1_ntt.begin(),db.stage1_ntt.end(),belongs),db.stage1_ntt.end());
     }
     for (auto& row : rows) {
         row["condition"] = condition;
-        db.update_stage1_ntt(std::move(row), fresh);
+        db.update_stage1_ntt(std::move(row),observation);
     }
     ecm_io::write_atomic(path, db.serialize());
 }
@@ -403,9 +410,9 @@ std::optional<Candidate> candidate(unsigned p, Stage1NttOptions options, bool pr
 }
 
 std::optional<Cached> decode(const Fields& row, const Packing& shape, const Device& device,
-                             unsigned batch, const Stage1NttOptions& base) {
+                             unsigned batch, const Stage1NttOptions& base, bool length_hint = false) {
     using ecm_stage2::tune::uint;
-    if (uint(row,"batch") != batch || uint(row,"length") != shape.length || uint(row,"bpw") != shape.bpw ||
+    if (uint(row,"batch") != batch || uint(row,"length") != shape.length || (!length_hint && uint(row,"bpw") != shape.bpw) ||
         uint(row,"peak_bytes") > device.budget) return {};
     const unsigned tile = unsigned(uint(row,"tile")), outer = unsigned(uint(row,"max_radix_bits"));
     const auto window = int(uint(row,"graph_bits")), warp = int(uint(row,"warp_tail"));
@@ -474,66 +481,56 @@ Candidates tune_shapes(unsigned p, const Stage1NttOptions& options, bool native_
     catch (const std::invalid_argument&) { return {}; }
 }
 
-std::map<unsigned, Candidates> plan_tune_lengths(const Stage1NttOptions& options,
-        const ecm_stage1::NttTuneGrid& grid, bool native_edwards, double deadline) {
+// One search per table entry. Competing NAF windows and radix-5 layouts
+// remain local to this transform, including compaction of the four batch roles.
+struct TuneSize {
+    unsigned max_exp, reference_bits;
+    Candidates shapes;
+};
+
+std::vector<TuneSize> plan_tune_lengths(const Stage1NttOptions& options,
+        const ecm_stage1::NttTuneGrid& grid, bool native_edwards) {
     using namespace ecm_stage1;
-    const auto range = grid.exp.first ? grid.exp : TuneRange{stage1_ntt_min_exponent, stage1_ntt_max_exponent};
-    if (range.first == range.last) return {{range.first, tune_shapes(range.first, options, native_edwards)}};
-
-    std::map<unsigned, Candidates> plan;
-    auto add_first = [&](unsigned mode, unsigned length, unsigned first, unsigned last) {
-        if (!grid.length.contains(length)) return;
-        for (unsigned p = std::max(first, range.first); p <= std::min(last, range.last); ++p) {
-            if (ecm_stage1_stop_requested()) throw Cancelled();
-            if (deadline && now_s() >= deadline) throw TimeLimit{};
-            auto shapes = tune_shapes(p, options, native_edwards);
-            if (shapes[mode] && shapes[mode]->shape.length == length) {
-                plan[p][mode] = std::move(shapes[mode]);
-                break;
-            }
+    const bool tight = native_edwards && options.tight_weighted_bound;
+    std::vector<TuneSize> plan;
+    for (const auto& size : ntt_sizes) {
+        if (!grid.length.contains(size.length) || (options.length && options.length != size.length)) continue;
+        for (const bool weighted : {false,true}) {
+            if (!options.automatic && options.weighted != weighted) continue;
+            const unsigned capacity = weighted ? (tight ? size.edwards : size.weighted) : size.linear;
+            if (!capacity) continue;
+            unsigned limit = capacity;
+            if (options.bpw)
+                limit = std::min(limit,weighted ? size.length * options.bpw :
+                                 linear_exponent_limit(size.length,options.bpw));
+            if (limit < stage1_ntt_min_exponent) continue;
+            auto fixed = options;
+            fixed.length = size.length;
+            fixed.weighted = weighted;
+            const auto mode = !weighted ? Linear : stage1_ntt_radix5(size.length) ? Mixed : Weighted;
+            auto shape = candidate(limit,fixed,mode==Mixed,
+                tight ? WeightedBound::UnsignedProducts : WeightedBound::Conservative);
+            if (!shape) continue;
+            TuneSize entry{capacity,limit,{}};
+            entry.shapes[mode] = std::move(shape);
+            plan.push_back(std::move(entry));
         }
-    };
-
-    std::set<unsigned> lengths;
-    for (unsigned n = 2; n <= stage1_ntt_max_length; n *= 2) {
-        lengths.insert(n);
-        if (stage1_ntt_supported_radix5(5 * n)) lengths.insert(5 * n);
     }
-    unsigned previous_linear = 0, previous_binary = 0, previous_weighted = 0;
-    for (unsigned length : lengths) {
-        if (options.length && options.length != length) continue;
-        const bool mixed = stage1_ntt_supported_radix5(length);
-        if (!mixed && (options.automatic || !options.weighted)) {
-            unsigned limit = 0;
-            for (unsigned b = 16; b <= 31; ++b)
-                if (!options.bpw || options.bpw == b)
-                    limit = std::max(limit, linear_exponent_limit(length, b));
-            // Linear packing selects its shortest length before applying the tile constraint.
-            const unsigned first = std::max(range.first, previous_linear + 1);
-            if (first <= limit) add_first(Linear, length, first, first);
-            previous_linear = limit;
-        }
-        if ((!options.automatic && !options.weighted) || options.tile > tile_log(length)) continue;
-
-        // Below 'guaranteed' this length always fits. For native unsigned products,
-        // even the narrow digits contribute at least L*(2^floor(p/L)-1)^2.
-        // Only the band between these bounds can contain isolated admissible p.
-        const unsigned max_bpw = options.bpw ? options.bpw : 31;
-        unsigned safe_bits = max_bpw;
-        while (safe_bits && !exact_ok_terms(2ull * length, safe_bits)) --safe_bits;
-        const unsigned guaranteed = length * safe_bits;
-        unsigned possible = guaranteed;
-        if (native_edwards && options.tight_weighted_bound && safe_bits < max_bpw) {
-            unsigned narrow_bits = safe_bits;
-            while (narrow_bits < max_bpw && exact_ok_terms(length, narrow_bits + 1)) ++narrow_bits;
-            possible = std::min(length * max_bpw, length * (narrow_bits + 1) - 1);
-        }
-        // Automatic binary plans compete only with shorter powers of two. Mixed
-        // plans and forced weighted convolution compete with every shorter length.
-        const unsigned previous = options.automatic && !mixed ? previous_binary : previous_weighted;
-        add_first(mixed ? Mixed : Weighted, length, std::max(length, previous + 1), possible);
-        previous_weighted = std::max(previous_weighted, guaranteed);
-        if (!mixed) previous_binary = std::max(previous_binary, guaranteed);
+    std::stable_sort(plan.begin(),plan.end(),[](const TuneSize& a,const TuneSize& b){
+        return a.max_exp < b.max_exp;
+    });
+    if (grid.exp.first && !plan.empty()) {
+        if (5 * plan.back().max_exp <= 4 * grid.exp.first) return {};
+        const auto first_above = [&](unsigned scaled) {
+            const auto it = std::find_if(plan.begin(),plan.end(),[&](const TuneSize& entry){
+                return 5 * entry.max_exp > scaled;
+            });
+            return it == plan.end() ? plan.back().max_exp : it->max_exp;
+        };
+        const unsigned first = first_above(4 * grid.exp.first), last = first_above(6 * grid.exp.last);
+        plan.erase(std::remove_if(plan.begin(),plan.end(),[&](const TuneSize& entry){
+            return entry.max_exp < first || entry.max_exp > last;
+        }),plan.end());
     }
     return plan;
 }
@@ -612,19 +609,19 @@ Plan describe(const Device& device, unsigned p, unsigned batch, const Stage1NttO
 bool compatible_workload(const Fields& row, const ecm_stage1::Stage1Request& request, unsigned window) {
     using ecm_stage2::tune::uint;
     return row.count("sample_target_ms") && pt::text(row,"curve") == curve_name(request) &&
-           uint(row,"naf_window") == window &&
-           (!window || pt::is_stratified_naf(row) || uint(row,"b1") == uint64_t(request.b1));
+           uint(row,"naf_window") == window;
 }
 
 bool same_workload(const Fields& row, const ecm_stage1::Stage1Request& request, unsigned window) {
     return compatible_workload(row,request,window) && row.count("benchmark_kind") &&
-           pt::text(row,"benchmark_kind") == (window ? pt::stratified_naf_kind : pt::stage1_graph_ntt_kind) &&
-           pt::text(row,"program_version") == ecm_program::version;
+           pt::optional_uint(row,"budget_limit_bytes")==size_t(request.options.execution.ntt.memory_mib)*1048576 &&
+           pt::optional_uint(row,"naf_memory_mb")== (window ? request.options.execution.naf_memory_mb : 0) &&
+           pt::text(row,"benchmark_kind") == (window ? pt::stratified_naf_kind : pt::stage1_graph_ntt_kind);
 }
 
 bool same_dispatch(const Fields& row, unsigned p, const Plan& plan) {
     using ecm_stage2::tune::uint;
-    return uint(row,"bpw") == plan.bpw && (uint(row,"reference_bits")+4095)/4096 == (p+4095)/4096 &&
+    return uint(row,"bpw") == plan.bpw &&
            uint(row,"dataflow") == plan.dataflow && uint(row,"carry_bits") == plan.carry_bits &&
            uint(row,"segments") == (p + 8191) / 8192 &&
            uint(row,"uniform_digits") == unsigned(plan.weighted && p % plan.length == 0) &&
@@ -639,6 +636,18 @@ bool reusable_dispatch(const Fields& row, const Device& device, unsigned p, unsi
     } catch (const BudgetError&) {
         return false;
     }
+}
+
+// An exact dispatch outranks a length-only estimate. Read-only consumers may
+// use an estimate after rebuilding and validating the plan at their actual p.
+unsigned production_quality(const Fields& row, const Device& device, unsigned p, unsigned batch,
+                            const Stage1NttOptions& options, unsigned window, bool allow_hint) {
+    try {
+        const auto plan=describe(device,p,batch,options,window);
+        if (same_dispatch(row,p,plan)) return pt::tested_fine(row) ? 4 : 3;
+        if (allow_hint && p <= pt::optional_uint(row,"max_exp")) return pt::tested_fine(row) ? 2 : 1;
+    } catch (const BudgetError&) {}
+    return 0;
 }
 
 struct Score {
@@ -669,7 +678,7 @@ void report_batches(const std::map<BatchRole,Score>& scores) {
         const auto& s = found->second;
         std::ostringstream rate;
         rate << std::fixed << std::setprecision(0) << s.rate;
-        rows.push_back({label,std::to_string(s.plan.length),std::to_string(max_exponent(s.plan)),
+        rows.push_back({label,std::to_string(s.plan.length),std::to_string(s.plan.max_exp),
                         tune_shape_descriptor(s.plan),std::to_string(s.batch)+"c",rate.str(),
                         std::to_string(s.plan.dataflow)});
         for (size_t i=0; i<widths.size(); ++i)
@@ -692,7 +701,7 @@ std::vector<Fields> compact_batch_rows(std::vector<Fields> rows, const std::stri
     // Compare fine measurements when available. Coarse-only families still
     // establish a genuine upper admission endpoint even if pruned in refinement.
     const auto quality = [&](size_t j) {
-        return std::make_pair(sample_phase(rows[j]),ecm_stage2::tune::real(rows[j],"iter_per_s"));
+        return std::make_pair(pt::tested_fine(rows[j]),ecm_stage2::tune::real(rows[j],"iter_per_s"));
     };
     std::map<unsigned,size_t> winners;
     for (size_t i=0; i<rows.size(); ++i) {
@@ -790,16 +799,16 @@ public:
         using ecm_stage2::tune::real;
         const auto& path = request_.options.execution.ntt.tune_file;
         const auto matches = [&](const Fields& row) {
-            return same_workload(row,request_,window_) && sample_phase(row)==SamplePhase::Fine &&
+            return same_workload(row,request_,window_) &&
                    uint(row,"batch")==best.batch && uint(row,"length")==best.plan.length &&
                    (pt::text(row,"ntt_type")==pt::weighted_ntt_type)==best.plan.weighted &&
-                   uint(row,"repeats")==grid_.fine_repeats && same_dispatch(row,p_,best.plan);
+                   pt::tested_ms(row,2,grid_.fine_repeats) && same_dispatch(row,p_,best.plan);
         };
         unsigned target = 0;
         for (auto i : hits_) {
             const auto& row = history_[i];
             if (matches(row) && real(row,"iter_per_s")==best.rate) {
-                target = unsigned(uint(row,"sample_target_ms"));
+                target = pt::tested_ms(row,2,grid_.fine_repeats);
                 break;
             }
         }
@@ -817,13 +826,13 @@ public:
             const auto belongs = [&](const Fields& row) {
                 const auto& condition = db.conditions.at(uint(row,"condition"));
                 if (!condition.count("uuid_hex") || pt::text(condition,"uuid_hex")!=device_.uuid) return false;
-                if (scope.empty()) return !row.count("batch_scope");
+                if (scope.empty()) return true;
                 return row.count("batch_scope") && pt::text(row,"batch_scope")==scope &&
                        row.count("batch_search") && pt::text(row,"batch_search")==search;
             };
             auto at = db.stage1_ntt.end();
             for (auto it = db.stage1_ntt.begin(); it != db.stage1_ntt.end(); ++it) {
-                if (belongs(*it) && matches(*it) && uint(*it,"sample_target_ms")==target &&
+                if (belongs(*it) && matches(*it) && pt::tested_ms(*it,2,grid_.fine_repeats)==target &&
                     (scope.empty() || (uint(*it,"batch_roles") & Fastest)) &&
                     (at == db.stage1_ntt.end() || real(*it,"iter_per_s") > real(*at,"iter_per_s"))) at = it;
             }
@@ -835,7 +844,7 @@ public:
                     fresh["batch_search"] = at->at("batch_search");
                 }
                 pt::validate_stage1_ntt(fresh);
-                *at = std::move(fresh);
+                pt::merge_stage1_measurement(*at,std::move(fresh));
                 if (!scope.empty()) {
                     std::vector<Fields> group;
                     for (const auto& row : db.stage1_ntt) if (belongs(row)) group.push_back(row);
@@ -885,7 +894,7 @@ public:
     void flush(bool explicit_batch = false) {
         if (explicit_batch) {
             for (auto i : hits_) {
-                if (!history_[i].count("batch_scope")) continue;
+                if (pt::optional_uint(history_[i],"explicit_batch")) continue;
                 auto row = history_[i];
                 row.erase("batch_scope");
                 row.erase("batch_search");
@@ -893,6 +902,7 @@ public:
                 pending_.push_back(std::move(row));
             }
         }
+        if (explicit_batch) for (auto& row : pending_) row["explicit_batch"]="1";
         persist(request_.options.execution.ntt.tune_file, device_, pending_);
         pending_.clear();
     }
@@ -906,7 +916,7 @@ public:
             const auto& row = history_[i];
             if (!row.count("batch_scope") || pt::text(row,"batch_scope") != scope ||
                 !row.count("batch_search") || pt::text(row,"batch_search") != search) continue;
-            if (uint(row,"sample_target_ms") < grid_.group_ms) return false;
+            if (std::max(pt::tested_ms(row,1,grid_.coarse_repeats),pt::tested_ms(row,2,grid_.fine_repeats)) < grid_.group_ms) return false;
             const unsigned batch = unsigned(uint(row,"batch"));
             auto options = request_.options.execution.ntt;
             options.weighted = pt::text(row,"ntt_type") == pt::weighted_ntt_type;
@@ -917,7 +927,7 @@ public:
                 const auto plan = describe(device_,p_,batch,decoded->options,window_);
                 if (!same_dispatch(row,p_,plan)) return false;
                 observe(sample_phase(row),{batch,plan,decoded->rate});
-                if (sample_phase(row) == SamplePhase::Coarse &&
+                if (pt::tested_ms(row,1,grid_.coarse_repeats) >= grid_.group_ms &&
                     (batch > coarse.batch || (batch == coarse.batch && decoded->rate > coarse.rate)))
                     coarse = {batch,plan,decoded->rate};
                 for (auto role : {Single, Capacity, Fastest, Economical})
@@ -946,7 +956,7 @@ public:
         }
         if (!complete && !checkpoint_.empty()) persist(checkpoint_,device_,rows);
         auto retained = compact_batch_rows(std::move(rows),complete ? search : std::string{});
-        persist(request_.options.execution.ntt.tune_file,device_,std::move(retained),false,scope,!complete);
+        persist(request_.options.execution.ntt.tune_file,device_,std::move(retained),scope,!complete);
         if (complete) finish_checkpoint();
     }
     Score sample(const Stage1NttOptions& options, unsigned batch, SamplePhase phase,
@@ -964,7 +974,7 @@ public:
                     const auto& row = rows[i];
                     if (uint(row,"length") != plan.length || uint(row,"bpw") != plan.bpw ||
                         (pt::text(row,"ntt_type") == pt::weighted_ntt_type) != plan.weighted ||
-                        sample_phase(row) != phase || uint(row,"sample_target_ms") < target || uint(row,"repeats") != groups || uint(row,"batch") != batch ||
+                        pt::tested_ms(row,unsigned(phase),groups) < target || uint(row,"batch") != batch ||
                         uint(row,"peak_bytes") > device_.budget || !same_dispatch(row,p_,plan)) continue;
                     // An explicit search owns its existing unscoped rows. Scoped
                     // samples can seed it when that configuration is missing.
@@ -975,7 +985,7 @@ public:
                     selected = i;
                     best = {batch, plan, rate,
                         1000 * ecm_stage2::tune::real(row,"stddev_seconds") /
-                            (window_ ? ecm_stage2::tune::real(row,"total_device_ms") / groups :
+                            (window_ ? ecm_stage2::tune::real(row,"total_device_ms") / uint(row,"repeats") :
                                        ecm_stage2::tune::real(row,"median_ms"))};
                 }
                 if (previous && best.rate && hits_.insert(selected).second)
@@ -1003,6 +1013,8 @@ public:
                 row["naf_columns"] = std::to_string(m.naf_columns);
                 row["sample_nonzero"] = std::to_string(m.sample_nonzero);
             }
+            row["budget_limit_bytes"]=std::to_string(size_t(options.memory_mib)*1048576);
+            row["naf_memory_mb"]=std::to_string(window_ ? request_.options.execution.naf_memory_mb : 0);
             row["sample_phase"] = std::to_string(unsigned(phase));
             row["sample_target_ms"] = std::to_string(target);
             row["reference_bits"] = std::to_string(p_);
@@ -1118,9 +1130,10 @@ struct WindowSearch {
         if (scan_graph)
             for (auto& family : families) family.options.window = 16;
         if (families.empty() || grid.batch_explicit) return;
-        scope << ecm_program::version << '/' << curve_name(request) << '/' << w << '/' << (p-1)/4096
+        scope << curve_name(request) << '/' << w << '/' << (p-1)/4096
               << '/' << options.profile << '/' << options.tile << '/' << options.outer_max
-              << '/' << options.window << '/' << options.warp_tail;
+              << '/' << options.window << '/' << options.warp_tail
+              << '/' << options.memory_mib << '/' << (w ? request.options.execution.naf_memory_mb : 0);
         search << exhaustive << '/' << grid.batch.first << "/final-graph/repeat=" << grid.coarse_repeats << ':' << grid.fine_repeats;
         for (const auto& shape : shapes) {
             if (!shape) continue;
@@ -1349,6 +1362,13 @@ int tune_command(const ecm_stage1::Stage1Options& task, double b1, const ecm_sta
         if (grid.naf.first && !edwards) throw std::invalid_argument("naf requires Edwards (--param e)");
         if (grid.batch.first > task.execution.ntt.max_batch)
             throw std::invalid_argument("requested batch exceeds [stage1] ntt_max_batch");
+        const auto& path=task.execution.ntt.tune_file;
+        if (!path.empty() && std::filesystem::is_regular_file(path)) {
+            ecm_io::FileLock lock(path);
+            auto profile=load(path);
+            if (!profile.stage1_ntt.empty() && pt::optional_uint(profile.metadata,"format")<pt::format)
+                ecm_io::write_atomic(path,profile.serialize());
+        }
         const auto device = device_info(task.execution.device_index, task.execution.ntt.memory_mib);
         ecm_ts_fprintf(stdout,"ntt_type = convolution:tile_bits:max_radix_bits:graph_bits:"
                                "warp_tail:forward_pass_bits:inverse_pass_bits (0=linear, 1=weighted)\n");
@@ -1362,10 +1382,10 @@ int tune_command(const ecm_stage1::Stage1Options& task, double b1, const ecm_sta
         const double deadline = seconds ? now_s()+seconds : 0;
         bool measured = false;
         TuneNafSamples naf_samples{uint64_t(b1)};
-        const auto plan = plan_tune_lengths(task.execution.ntt, grid, edwards, deadline);
-        for (const auto& [width, shapes] : plan) {
+        const auto plan = plan_tune_lengths(task.execution.ntt, grid, edwards);
+        for (const auto& entry : plan) {
             const Stage1Request request{nullptr,b1,b1,task.execution.ntt.max_batch,empty,false,empty,task};
-            measured |= tune_windows(device,request,width,shapes,grid,naf_samples,windows,
+            measured |= tune_windows(device,request,entry.reference_bits,entry.shapes,grid,naf_samples,windows,
                                      !grid.naf.first && windows.size()>1 && !exhaustive,exhaustive,deadline,true);
         }
         if (!measured) throw BudgetError("no matching Stage1 NTT length, width or batch fits the requested grid");
@@ -1408,10 +1428,10 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
         for (unsigned mode=0; mode<CandidateCount; ++mode) {
             const auto& plan = candidates[mode];
             if (!plan || plan->options.weighted!=weighted) continue;
-            auto sample = decode(row,plan->shape,device,batch,plan->options);
+            auto sample = decode(row,plan->shape,device,batch,plan->options,current && !options.runtime_enabled);
             if (!sample) continue;
-            if (current && !reusable_dispatch(row,device,p,batch,sample->options,window)) continue;
-            const unsigned q = current ? unsigned(sample_phase(row)) : 0;
+            const unsigned q = current ? production_quality(row,device,p,batch,sample->options,window,!options.runtime_enabled) : 0;
+            if (current && !q) continue;
             if (!choices[mode] || q>quality[mode] || (q==quality[mode] && sample->rate>choices[mode]->rate)) {
                 choices[mode]=std::move(sample);
                 quality[mode]=q;
@@ -1435,7 +1455,7 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
         auto row=matrix.sample(plan,batch,SamplePhase::Coarse);
         if (!row.rate) continue;
         choices[mode]=Cached{fixed_plan(plan,row.plan),row.rate};
-        quality[mode]=unsigned(SamplePhase::Coarse);
+        quality[mode]=3;
         source="short_tune";
     }
     try { matrix.flush(); }
@@ -1471,7 +1491,7 @@ unsigned production_window(const ecm_stage1::Stage1Request& request, unsigned p,
     const unsigned limit = std::min(request.curves, exec.ntt.max_batch);
     auto best_window = [&](const pt::Profile& db, bool require_fine) -> std::optional<unsigned> {
         std::optional<unsigned> best;
-        std::pair<bool,double> fastest{};
+        std::pair<unsigned,double> fastest{};
         std::map<unsigned,std::array<BatchMemory,CandidateCount>> capacities;
         std::map<unsigned,Candidates> shapes;
         for (const auto& row : db.stage1_ntt) {
@@ -1481,17 +1501,15 @@ unsigned production_window(const ecm_stage1::Stage1Request& request, unsigned p,
             if ((configured && w != configured) || (!edwards && w) || (edwards && !w && !configured) ||
                 batch > limit || (fixed_batch && batch != limit)) continue;
             if (runtime) {
-                if (pt::text(row,"curve") != curve_name(request) || uint(row,"b1") != uint64_t(request.b1) ||
+                if (pt::text(row,"curve") != curve_name(request) ||
                     uint(row,"arithmetic_bits") != p || uint(row,"valid_curves") != batch ||
                     uint(row,"lcm_multiplier") != lcm_multiplier(request) ||
                     pt::optional_uint(row,"target_bits",p) != mpz_sizeinbase(request.modulus,2)) continue;
             } else if (!compatible_workload(row,request,w)) continue;
             const auto& condition = db.conditions.at(uint(row,"condition"));
             if (!condition.count("uuid_hex") || pt::text(condition,"uuid_hex") != device.uuid) continue;
-            if (!runtime && (uint(row,"reference_bits")-1)/4096 != (p-1)/4096) continue;
-            const bool fine = runtime || sample_phase(row) == SamplePhase::Fine;
-            const auto score = std::make_pair(fine,ecm_stage2::tune::real(row,"iter_per_s"));
-            if ((require_fine && !fine) || score <= fastest) continue;
+            const bool fine = runtime || pt::tested_fine(row);
+            if (require_fine && !fine) continue;
             if (!shapes.count(w)) {
                 shapes[w] = production_shapes(p,exec.ntt,w != 0);
                 capacities[w] = production_capacity(request,device,p,w,shapes.at(w));
@@ -1500,8 +1518,12 @@ unsigned production_window(const ecm_stage1::Stage1Request& request, unsigned p,
                 const auto& candidate = shapes.at(w)[mode];
                 if (!candidate || batch > capacities.at(w)[mode].max_curves ||
                     candidate->options.weighted != (pt::text(row,"ntt_type") == pt::weighted_ntt_type)) continue;
-                auto decoded = decode(row,candidate->shape,device,batch,candidate->options);
-                if (!decoded || (!runtime && !reusable_dispatch(row,device,p,batch,decoded->options,w))) continue;
+                const bool hint=!runtime && !exec.ntt.runtime_enabled;
+                auto decoded = decode(row,candidate->shape,device,batch,candidate->options,hint);
+                if (!decoded) continue;
+                const unsigned quality=runtime ? 4 : production_quality(row,device,p,batch,decoded->options,w,hint);
+                const auto score=std::make_pair(quality,ecm_stage2::tune::real(row,"iter_per_s"));
+                if (!quality || score<=fastest) continue;
                 fastest = score;
                 best = w;
             }
@@ -1524,8 +1546,14 @@ unsigned production_window(const ecm_stage1::Stage1Request& request, unsigned p,
         if (edwards && !configured) windows = {6,8,10,12};
         ecm_ts_fprintf(stdout,"stage1_ntt_runtime_tune: p=%u batch=%u-%u\n",p,grid.batch.first,limit);
         try {
-            tune_windows(device,request,p,tune_shapes(p,exec.ntt,edwards),grid,naf_samples,windows,
-                         windows.size()>1,false,0);
+            for (const auto& shape : tune_shapes(p,exec.ntt,edwards)) {
+                if (!shape) continue;
+                Candidates one{};
+                const unsigned mode = !shape->options.weighted ? Linear :
+                    ecm_stage1::stage1_ntt_radix5(shape->shape.length) ? Mixed : Weighted;
+                one[mode] = shape;
+                tune_windows(device,request,p,one,grid,naf_samples,windows,windows.size()>1,false,0);
+            }
         } catch (const Cancelled&) { return configured; }
         best = best_window(load(exec.ntt.tune_file),false);
     }
@@ -1558,7 +1586,7 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
     const auto linear_cap = capacities[Linear].max_curves;
     const auto weighted_cap = std::max(capacities[Weighted].max_curves, capacities[Mixed].max_curves);
     const auto cap = std::min(remaining, std::max({1u, linear_cap, weighted_cap}));
-    std::map<unsigned, BatchRate> production, synthetic, refined;
+    std::map<unsigned, BatchRate> production, synthetic, refined, estimates;
     using ecm_stage2::tune::uint;
     using ecm_stage2::tune::real;
     try {
@@ -1572,25 +1600,26 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
             const bool modern = row.count("sample_target_ms") != 0;
             if (modern && !compatible_workload(row,request,window)) continue;
             if (!modern && window && !pt::is_runtime_stage1_ntt(row)) continue;
-            bool compatible = false;
-            for (unsigned mode = 0; mode < CandidateCount && !compatible; ++mode) {
+            unsigned quality = 0;
+            for (unsigned mode = 0; mode < CandidateCount; ++mode) {
                 const auto& shape = shapes[mode];
                 if (!shape || batch>capacities[mode].max_curves || shape->options.weighted!=weighted) continue;
-                auto decoded=decode(row,shape->shape,device,batch,shape->options);
-                compatible=decoded && (!modern || reusable_dispatch(row,device,p,batch,decoded->options,window));
+                const bool hint = modern && !exec.ntt.runtime_enabled;
+                auto decoded = decode(row,shape->shape,device,batch,shape->options,hint);
+                if (decoded) quality = std::max(quality, modern ?
+                    production_quality(row,device,p,batch,decoded->options,window,hint) : 3u);
             }
-            if (!compatible) continue;
+            if (!quality) continue;
             const bool runtime = pt::is_runtime_stage1_ntt(row);
             if (runtime && (uint(row,"valid_curves") != batch || uint(row,"arithmetic_bits") != p ||
                             pt::optional_uint(row,"target_bits",p) != target_bits ||
-                            uint(row,"b1") != uint64_t(std::floor(request.b1 + 0.0001)) ||
                             uint(row,"lcm_multiplier") != lcm_multiplier(request) ||
                             uint(row,"naf_window") != window ||
                             pt::text(row,"curve") != curve_name(request)))
                 continue;
-            auto& value = (runtime ? production : modern && sample_phase(row)==SamplePhase::Fine ? refined : synthetic)[batch];
-            const auto rate = real(row,runtime ? "curves_per_s" : "iter_per_s");
-            const auto repeats = unsigned(uint(row,"repeats"));
+            auto& value = (runtime ? production : quality < 3 ? estimates : quality == 4 ? refined : synthetic)[batch];
+            const auto rate = real(row,"iter_per_s");
+            const auto repeats = unsigned(pt::optional_uint(row,"runtime_observations",uint(row,"repeats")));
             if ((!value.repeats || rate > value.rate) &&
                 !(runtime && value.repeats >= 2 && repeats < 2))
                 value = {rate, repeats};
@@ -1600,7 +1629,7 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
     } catch (const std::exception& e) {
         ecm_ts_fprintf(stderr, "Stage1 NTT batch tune read: %s\n", e.what());
     }
-    const unsigned tuned = recommended_batch(refined.empty() ? synthetic : refined);
+    const unsigned tuned = recommended_batch(!refined.empty() ? refined : !synthetic.empty() ? synthetic : estimates);
     const unsigned seed = tuned ? tuned : std::min(cap, 64u);
     unsigned selected = recommended_batch(production, 2);
     if (!selected) selected = recommended_batch(production);
@@ -1642,6 +1671,8 @@ void record_production_sample(const ecm_stage1::Stage1Request& request, const Pl
         const double compute_rate = valid / compute_seconds;
         auto row = encode(Measurement{batch, plan, run.device_ms, run.owned_bytes, run.observed_bytes,
                                       run.budget_bytes}, run.completed_bits);
+        row["budget_limit_bytes"]=std::to_string(size_t(exec.ntt.memory_mib)*1048576);
+        row["naf_memory_mb"]=std::to_string(naf_window(request) ? exec.naf_memory_mb : 0);
         row["benchmark_kind"] = pt::quoted(pt::stage1_runtime_ntt_kind);
         row["curve"] = pt::quoted(curve_name(request));
         row["arithmetic_bits"] = std::to_string(ecm_stage1::ntt_arithmetic_bits(request.modulus, request.options));
@@ -1653,7 +1684,7 @@ void record_production_sample(const ecm_stage1::Stage1Request& request, const Pl
         row["iter_per_s"] = pt::numeric(rate);
         row["curves_per_s"] = pt::numeric(compute_rate);
         row["dataflow"] = std::to_string(plan.dataflow);
-        persist(exec.ntt.tune_file, device, {std::move(row)}, true);
+        persist(exec.ntt.tune_file, device, {std::move(row)}, {}, false, true);
         ecm_ts_fprintf(stdout, "stage1_ntt_production_sample: batch=%u valid_curves=%u iter_per_s=%.3f "
             "curves_per_s=%.6f compute_seconds=%.6f\n", batch, valid, rate, compute_rate, compute_seconds);
     } catch (const std::exception& e) {

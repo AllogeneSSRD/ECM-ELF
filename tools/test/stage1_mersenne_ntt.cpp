@@ -1,7 +1,7 @@
 // End-to-end Suyama PARAM0 Stage1 driver and independent GMP oracle.
 #include "../../src/ecm/stage1/cuda/ntt/ladder.h"
 #include "ecm/platform/program_version.h"
-#include "ecm/stage1/ntt_length.h"
+#include "ecm/stage1/ntt_sizes.h"
 #include "ecm/stage1/scalar.h"
 #include <algorithm>
 #include <array>
@@ -179,6 +179,33 @@ int check_carries(int device, unsigned p, bool weighted, unsigned length, unsign
 } // namespace
 
 int main(int argc,char** argv) {
+    if (argc == 2 && !std::strcmp(argv[1], "--check-size-table")) {
+        using namespace ecm_mersenne_ntt;
+        for (const auto& size : ecm_stage1::ntt_sizes) {
+            for (const auto bound : {WeightedBound::Conservative, WeightedBound::UnsignedProducts}) {
+                ecm_stage1::Stage1NttOptions options;
+                options.weighted = true;
+                options.length = size.length;
+                const auto cap = bound == WeightedBound::UnsignedProducts ? size.edwards : size.weighted;
+                if (!cap) continue;
+                if (resolve_packing(cap, options, true, bound).length != size.length) return 1;
+                if (cap == ecm_stage1::stage1_ntt_max_exponent) continue;
+                try { resolve_packing(cap + 1, options, true, bound); return 1; }
+                catch (const std::invalid_argument&) {}
+            }
+        }
+        for (const auto& item : {std::array<unsigned,3>{124,4,8}, {66050,2560,4096}, {497680,20480,32768}}) {
+            ecm_stage1::Stage1NttOptions options;
+            options.weighted = true;
+            const auto bound = WeightedBound::UnsignedProducts;
+            if (resolve_packing(item[0], options, true, bound).length != item[2]) return 1;
+            options.length = item[1];
+            try { resolve_packing(item[0], options, true, bound); return 1; }
+            catch (const std::invalid_argument&) {}
+        }
+        std::puts("PASS continuous weighted bounds and isolated exponent rejection");
+        return 0;
+    }
     const bool weighted = argc > 1 && std::strcmp(argv[1], "--weighted") == 0;
     if (weighted) { ++argv; --argc; }
     unsigned length=0;

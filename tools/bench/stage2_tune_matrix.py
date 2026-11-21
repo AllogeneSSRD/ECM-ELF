@@ -38,7 +38,7 @@ def matrix_row_order():
     for line in path.read_text(encoding='utf-8').splitlines():
         line=line.strip()
         if not line or line.startswith('//'):continue
-        match=re.fullmatch(r'ECM_STAGE2_TUNE_(ECM|NTT)_ROW\(([a-z_][a-z_0-9]*),\s*(integer|optional_integer|string)\)',line)
+        match=re.fullmatch(r'ECM_STAGE2_TUNE_(ECM|NTT)_ROW\(([a-z_][a-z_0-9]*),\s*(integer|optional_integer|string|optional_string)\)',line)
         if not match:raise ValueError('Invalid shared tune row definition')
         keys=result[match[1].lower()]
         if any(name==match[2] for name,_ in keys):raise ValueError('Duplicate tune row sort key')
@@ -49,7 +49,7 @@ def matrix_row_order():
 ROW_ORDER=matrix_row_order()
 
 def matrix_row_key(row,section='ecm'):
-    return tuple(str(row[name]) if kind=='string' else
+    return tuple(str(row.get(name,'')) if kind in ('string','optional_string') else
                  int(row.get(name,0) or 0) if kind=='optional_integer' else int(row[name])
                  for name,kind in ROW_ORDER[section])
 

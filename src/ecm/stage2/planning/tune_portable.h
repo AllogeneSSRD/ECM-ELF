@@ -11,10 +11,10 @@
 #include <charconv>
 #include <ctime>
 #include "ecm/platform/program_version.h"
-#include "ecm/stage1/ntt_length.h"
+#include "ecm/stage1/ntt_sizes.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
-constexpr unsigned format=16;
+constexpr unsigned format=17;
 inline constexpr const char *parallel_columns[]={
     "condition","scope","target_bits","b1","b2","d","required_free_bytes","carrier_exponent","phase_mask","workers","curves",
     "repeats","mean_wall_seconds","mean_middle_seconds","middle_stddev_seconds","program_version","updated_at"
@@ -34,7 +34,7 @@ inline constexpr const char *ntt_matrix_column_order[]={
 #undef ECM_STAGE2_TUNE_COLUMN
 #undef ECM_STAGE2_TUNE_NTT_COLUMN
 };
-enum class MatrixSortKind {integer,optional_integer,string};
+enum class MatrixSortKind {integer,optional_integer,string,optional_string};
 struct MatrixSortKey {const char *name;MatrixSortKind kind;};
 inline constexpr MatrixSortKey ecm_row_order[]={
 #define ECM_STAGE2_TUNE_ECM_ROW(name,kind) {#name,MatrixSortKind::kind},
@@ -127,7 +127,9 @@ inline Word optional_uint(const Fields &f,const char *key,Word fallback=0){retur
 inline double optional_real(const Fields &f,const char *key,double fallback=0){return f.count(key)?real(f,key):fallback;}
 template<size_t N> inline bool matrix_row_less(const Fields &a,const Fields &b,const MatrixSortKey (&keys)[N]) {
     for(const auto &key:keys) {
-        if(key.kind==MatrixSortKind::string) {
+        if(key.kind==MatrixSortKind::optional_string && (!a.count(key.name) || !b.count(key.name))) {
+            if(a.count(key.name)!=b.count(key.name))return !a.count(key.name);
+        } else if(key.kind==MatrixSortKind::string || key.kind==MatrixSortKind::optional_string) {
             const auto x=text(a,key.name),y=text(b,key.name);if(x!=y)return x<y;
         } else {
             const auto x=key.kind==MatrixSortKind::optional_integer?optional_uint(a,key.name):uint(a,key.name);
@@ -196,11 +198,12 @@ inline bool is_stage1_ntt(const Fields &s) {
 }
 inline void validate_stage1_ntt(const Fields &s) {
     validate_provenance(s);
-    const auto n=uint(s,"length"), log=uint(s,"log2_length"), batch=uint(s,"batch");
+    const auto n=uint(s,"length"), batch=uint(s,"batch");
+    const Word log=ecm_stage1::stage1_ntt_length_log(unsigned(n));
     const auto tile=uint(s,"tile"), bpw=uint(s,"bpw"), radix=uint(s,"max_radix_bits");
     const bool mixed=n<=ecm_stage1::stage1_ntt_mixed_limit && ecm_stage1::stage1_ntt_radix5(unsigned(n));
     if(!is_stage1_ntt(s) || log<1 || n>ecm_stage1::stage1_ntt_max_length ||
-       log!=ecm_stage1::stage1_ntt_length_log(unsigned(n)) ||
+       optional_uint(s,"log2_length",log)!=log ||
        (mixed ? text(s,"ntt_type")!=weighted_ntt_type : n!=(Word(1)<<log)))
         throw std::runtime_error("invalid Stage1 NTT length");
     const Word radix2_log=mixed ? log-2 : log;
@@ -265,6 +268,69 @@ inline void validate_stage1_ntt(const Fields &s) {
         if(!s.count("sample_target_ms") || !s.count("batch_scope") || text(s,"batch_scope").empty() ||
            roles>15 || ((roles&1) && batch!=1))
             throw std::runtime_error("invalid Stage1 batch selection");
+    }
+}
+// Search coverage is bookkeeping, separate from the provenance of the peak.
+// Each (phase, group count) remembers the longest group target actually tested.
+using GroupCoverage = std::map<std::pair<unsigned,unsigned>,unsigned>;
+inline GroupCoverage group_coverage(const Fields& row) {
+    GroupCoverage out;
+    if(!row.count("sample_target_ms"))return out;
+    if(row.count("tested_groups")) {
+        std::istringstream in(text(row,"tested_groups"));
+        unsigned phase,groups,ms;
+        char slash,colon;
+        while(in>>phase>>slash>>groups>>colon>>ms) {
+            if(slash!='/' || colon!=':' || phase<1 || phase>2 || !groups ||
+               groups>ecm_stage1::ntt_max_repeats || !ms)throw std::runtime_error("invalid Stage1 test coverage");
+            out[{phase,groups}]=ms;
+            if(in.eof())break;
+            if(in.get()!=',')throw std::runtime_error("invalid Stage1 test coverage separator");
+        }
+        if(!in.eof() || in.fail())throw std::runtime_error("invalid Stage1 test coverage");
+    }
+    const unsigned groups=unsigned(uint(row,"repeats"));
+    const auto phase=unsigned(optional_uint(row,"sample_phase",groups==5 ? 2 : 1));
+    auto& target=out[{phase,groups}];
+    target=std::max(target,unsigned(uint(row,"sample_target_ms")));
+    return out;
+}
+inline unsigned tested_ms(const Fields& row,unsigned phase,unsigned groups) {
+    if(!row.count("tested_groups") && row.count("sample_target_ms"))
+        return optional_uint(row,"sample_phase",uint(row,"repeats")==5 ? 2 : 1)==phase &&
+            uint(row,"repeats")==groups ? unsigned(uint(row,"sample_target_ms")) : 0;
+    const auto coverage=group_coverage(row);
+    const auto at=coverage.find({phase,groups});
+    return at==coverage.end() ? 0 : at->second;
+}
+inline bool tested_fine(const Fields& row) {
+    if(!row.count("tested_groups"))return optional_uint(row,"sample_phase",optional_uint(row,"repeats")==5 ? 2 : 1)==2;
+    const auto coverage=group_coverage(row);
+    return !coverage.empty() && coverage.rbegin()->first.first==2;
+}
+inline void merge_stage1_measurement(Fields& old,Fields sample) {
+    auto coverage=group_coverage(old);
+    for(const auto& entry:group_coverage(sample))
+        coverage[entry.first]=std::max(coverage[entry.first],entry.second);
+    const bool pinned=optional_uint(old,"explicit_batch") || optional_uint(sample,"explicit_batch");
+    const Fields& membership=sample.count("batch_scope") ? sample : old;
+    Fields bookkeeping;
+    for(const char* k:{"batch_scope","batch_search","batch_roles"})
+        if(membership.count(k))bookkeeping[k]=membership.at(k);
+    if(old.count("batch_scope") && sample.count("batch_scope") && old.at("batch_scope")==sample.at("batch_scope") &&
+       old.find("batch_search")!=old.end() && sample.count("batch_search") && old.at("batch_search")==sample.at("batch_search"))
+        bookkeeping["batch_roles"]=std::to_string(optional_uint(old,"batch_roles") | optional_uint(sample,"batch_roles"));
+    if(real(sample,"iter_per_s")>real(old,"iter_per_s"))old=std::move(sample);
+    for(const char* k:{"batch_scope","batch_search","batch_roles"})old.erase(k);
+    old.insert(bookkeeping.begin(),bookkeeping.end());
+    if(pinned)old["explicit_batch"]="1";
+    if(coverage.size()>1 || (!coverage.empty() && coverage.begin()->second>optional_uint(old,"sample_target_ms"))) {
+        std::ostringstream out;
+        for(const auto& entry:coverage) {
+            if(out.tellp()>0)out<<',';
+            out<<entry.first.first<<'/'<<entry.first.second<<':'<<entry.second;
+        }
+        old["tested_groups"]=quoted(out.str());
     }
 }
 inline bool measured(const Fields &sample){return required(sample,"source")=="\"measured\"";}
@@ -656,50 +722,37 @@ struct Profile {
         }
         ntt.push_back(std::move(sample));++revision;return true;
     }
-    void update_stage1_ntt(Fields sample,bool fresh=false) {
+    void update_stage1_ntt(Fields sample,bool observation=false) {
         validate_stage1_ntt(sample);
         if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown Stage1 NTT condition");
-        const bool runtime=is_runtime_stage1_ntt(sample);
-        const auto same=[&](const Fields &old) {
-            for(const char *key:{"condition","length","batch","ntt_type","bpw","tile","max_radix_bits",
-                                "passes_forward","forward","inverse","graph_bits","warp_tail"})
-                if(required(old,key)!=required(sample,key))return false;
-            if(is_runtime_stage1_ntt(old)!=runtime)return false;
-            if(old.count("batch_scope")!=sample.count("batch_scope") ||
-               (sample.count("batch_scope") && required(old,"batch_scope")!=required(sample,"batch_scope")))return false;
-            if(old.count("sample_target_ms")!=sample.count("sample_target_ms"))return false;
-            if(optional_uint(old,"sample_phase",0)!=optional_uint(sample,"sample_phase",0))return false;
-            if(old.count("benchmark_kind")!=sample.count("benchmark_kind") ||
-               (sample.count("benchmark_kind") && required(old,"benchmark_kind")!=required(sample,"benchmark_kind")))return false;
-            if(sample.count("sample_target_ms"))
-                for(const char *key:{"repeats","sample_target_ms","curve","naf_window","segments","carry_bits",
-                                     "uniform_digits","dataflow","program_version"})
-                    if(required(old,key)!=required(sample,key))return false;
-            if(sample.count("sample_target_ms") && !is_stratified_naf(sample) &&
-               required(old,"b1")!=required(sample,"b1"))return false;
-            if(sample.count("sample_target_ms") && (uint(old,"reference_bits")+4095)/4096!=
-               (uint(sample,"reference_bits")+4095)/4096)return false;
-            if(runtime)for(const char *key:{"curve","arithmetic_bits","b1","lcm_multiplier","naf_window","valid_curves","dataflow"})
-                if(required(old,key)!=required(sample,key))return false;
-            if(runtime && optional_uint(old,"target_bits",uint(old,"arithmetic_bits"))!=
-                          optional_uint(sample,"target_bits",uint(sample,"arithmetic_bits")))return false;
-            return true;
+        sample.erase("log2_length");
+        if(!sample.count("budget_limit_bytes")) {
+            // Old rows recorded the effective limit only. A non-MiB value
+            // necessarily came from available device memory, not a fixed cap.
+            const Word effective=uint(sample,"budget_bytes");
+            sample["budget_limit_bytes"]=std::to_string(effective%1048576 ? 0 : effective);
+        }
+        const auto n=unsigned(uint(sample,"length"));
+        const bool weighted=text(sample,"ntt_type")==weighted_ntt_type;
+        const bool native=optional_uint(sample,"naf_window")!=0;
+        const auto bound=ecm_stage1::ntt_max_exp(n,weighted,native);
+        const auto conservative=ecm_stage1::ntt_max_exp(n,weighted,false);
+        if(!sample.count("max_exp"))sample["max_exp"]=std::to_string(bound);
+        const auto limit=uint(sample,"max_exp");
+        if(limit!=bound && limit!=conservative)throw std::runtime_error("invalid Stage1 NTT max_exp");
+        const auto same=[&](const Fields& old) {
+            return !matrix_row_less(old,sample,ntt_row_order) && !matrix_row_less(sample,old,ntt_row_order);
         };
         const auto at=std::find_if(stage1_ntt.begin(),stage1_ntt.end(),same);
         if(at==stage1_ntt.end())stage1_ntt.push_back(std::move(sample));
-        else if(!runtime || !fresh) {
-            if(updated_at(*at)<=updated_at(sample))*at=std::move(sample);
-        } else {
-            const auto n=uint(*at,"repeats"), m=uint(sample,"repeats");
-            if(m>1000000000-n)return;
-            for(const char *key:{"iter_per_s","curves_per_s"}) {
-                const auto previous=real(*at,key);
-                (*at)[key]=numeric(previous+(real(sample,key)-previous)*double(m)/double(n+m));
-            }
-            (*at)["repeats"]=std::to_string(n+m);
-            for(const char *key:{"owned_bytes","peak_bytes","budget_bytes"})
-                (*at)[key]=std::to_string(std::max(uint(*at,key),uint(sample,key)));
-            merge_provenance(*at,sample);
+        else {
+            if(is_runtime_stage1_ntt(sample)) {
+                const Word previous=optional_uint(*at,"runtime_observations",uint(*at,"repeats"));
+                const Word count=optional_uint(sample,"runtime_observations",uint(sample,"repeats"));
+                const auto total=observation ? std::min<Word>(1000000000,previous+count) : std::max(previous,count);
+                merge_stage1_measurement(*at,std::move(sample));
+                (*at)["runtime_observations"]=std::to_string(total);
+            } else merge_stage1_measurement(*at,std::move(sample));
         }
     }
     void update_parallel(Fields sample,bool fresh) {
@@ -886,13 +939,18 @@ struct Profile {
             }
         }
         for(auto s:out.ntt){s["condition"]=std::to_string(remap.at(uint(s,"condition")));normalized.update_ntt(std::move(s),false);}
-        for(auto s:out.stage1_ntt){s["condition"]=std::to_string(remap.at(uint(s,"condition")));normalized.update_stage1_ntt(std::move(s));}
+        for(auto& s:out.stage1_ntt) {
+            s["condition"]=std::to_string(remap.at(uint(s,"condition")));
+            if(uint(out.metadata,"format")<17 && s.count("sample_target_ms") && !s.count("batch_scope"))
+                s["explicit_batch"]="1";
+            normalized.update_stage1_ntt(std::move(s));
+        }
         for(auto s:out.parallel){s["condition"]=std::to_string(remap.at(uint(s,"condition")));normalized.update_parallel(std::move(s),false);}
         normalized.revision=out.revision;return normalized;
     }
     std::string serialize()const {
         if(conditions.empty() && metadata.empty() && !cpu_stage2_tables.empty())return cpu_stage2_tables;
-        std::ostringstream out;out<<"# Stage2 mean timings; identical parameters share one repeated measurement row.\n[profile]\nformat = "<<(samples.empty()&&parallel.empty()?14:format)<<"\nunit = \"full_stage2\"\n";
+        std::ostringstream out;out<<"# Stage2 mean timings; identical parameters share one repeated measurement row.\n[profile]\nformat = "<<(!stage1_ntt.empty() || !ntt.empty() ? format : samples.empty() && parallel.empty() ? 14 : 16)<<"\nunit = \"full_stage2\"\n";
         if(metadata.count("error_limit"))out<<"error_limit = "<<compact_literal(metadata.at("error_limit"))<<'\n';
         for(const auto &c:conditions) {
             out<<"\n[condition."<<c.first<<"]\n";
@@ -909,7 +967,9 @@ struct Profile {
                 columns.assign(std::begin(parallel_columns),std::end(parallel_columns));
                 names.clear();
             } else if(ntt) {
-                columns.assign(std::begin(ntt_matrix_column_order),std::end(ntt_matrix_column_order));
+                for(const char* column:ntt_matrix_column_order)
+                    if(std::any_of(rows.begin(),rows.end(),[&](const Fields& r){return r.count(column)!=0;}))
+                        columns.push_back(column);
                 names.clear();
             } else for(const char *k:matrix_column_order)if(names.erase(k))columns.push_back(k);
             columns.insert(columns.end(),names.begin(),names.end());

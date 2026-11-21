@@ -23,6 +23,8 @@ def main():
     def run(name, flags, *, stdin=None, runtime=False, settings="", convolution="linear", success=True):
         directory = out / name
         directory.mkdir()
+        if "ntt_memory_mib" not in settings:
+            settings += "\nntt_memory_mib = 2048\n"
         cfg = directory / "ecm.toml"
         cfg.write_text(f'config_version = 4\n[shared]\nlog_file = ""\ntune_file = "{database.as_posix()}"\n'
                        f'[stage1]\ntarget = "gpu"\ngpu_algorithm = "ntt"\nstage1_gpu_device = {args.device}\n'
@@ -43,6 +45,13 @@ def main():
     def rows():
         fields, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]
         return [dict(zip(fields, row)) for row in values]
+
+    def coverage(row):
+        tested = {(row["sample_phase"], row["repeats"]): row["sample_target_ms"]}
+        for pair in filter(None, row.get("tested_groups", "").split(",")):
+            phase, groups, ms = map(int, re.split("[/:]", pair))
+            tested[phase, groups] = max(tested.get((phase, groups), 0), ms)
+        return tested
 
     def write_matrix(header, fields, values):
         matrix = "".join(json.dumps(row) + ",\n" for row in [fields, *values])
@@ -68,8 +77,8 @@ def main():
         for scale, status in ((1e-5, "updated"), (1e5, "kept")):
             text = database.read_text(encoding="utf-8")
             fields, *values = tomllib.loads(text)["ntt"]["matrix"]
-            coarse, = (r for r in values if r[fields.index("sample_phase")] == 1)
-            fine, = (r for r in values if r[fields.index("sample_phase")] == 2)
+            fine, = values
+            assert coverage(dict(zip(fields, fine))) == {(1, 2): 4, (2, 2): 4}
             fine[fields.index("iter_per_s")] *= scale
             for key in ("total_device_ms", "median_ms", "stddev_seconds"):
                 fine[fields.index(key)] /= scale
@@ -82,13 +91,39 @@ def main():
             assert "measured=1 " in log and log.count("stage1_ntt_recheck:") == 1
             assert f"status={status}" in log and (previous != database.read_bytes()) == (status == "updated")
             updated = rows()
-            assert len(updated) == 2
-            assert next(r for r in updated if r["sample_phase"] == 1) == dict(zip(fields, coarse))
+            assert len(updated) == 1
             if status == "updated":
                 sample, = (r for r in updated if r["sample_phase"] == 2)
                 assert sample["sample_target_ms"] == 4
                 assert sample["iter_per_s"] > fine[fields.index("iter_per_s")]
                 assert re.search(rf'Best +\d+ +\d+ +\S+ +1c +{sample["iter_per_s"]:.0f} iter/s', log)
+
+    # Import duplicate old decisions in either order. The winning provenance
+    # stays with the original rate even if the slower record is newer.
+    source = tomllib.loads(database.read_text(encoding="utf-8"))
+    modern, best = source["ntt"]["matrix"]
+    baseline = dict(zip(modern, best))
+    for key in ("max_exp", "explicit_batch", "tested_groups", "budget_limit_bytes", "naf_memory_mb"):
+        baseline.pop(key, None)
+    baseline["log2_length"] = baseline["length"].bit_length()-1
+    baseline.update(program_version="0.71.6", b1=32)
+    slow = dict(baseline, b1=64, program_version="0.71.9", updated_at="2026-11-20T23:59:59.000000000Z")
+    slow["iter_per_s"] /= 2
+    for key in ("median_ms", "total_device_ms", "stddev_seconds"):
+        slow[key] *= 2
+    for name, duplicates in (("first", [baseline, slow]), ("last", [slow, baseline])):
+        database = out / f"legacy_{name}.toml"
+        header = text.split("matrix = [",1)[0].replace("format = 17","format = 16")
+        write_matrix(header,list(baseline),[list(r.values()) for r in duplicates])
+        run("migrate_"+name, ["-tune","length=8,naf=6,batch=1,time=0.01","32"])
+        converted = tomllib.loads(database.read_text(encoding="utf-8"))
+        cols = converted["ntt"]["matrix"][0]
+        assert converted["profile"]["format"] == 17 and cols[:5] == ["max_exp","length","iter_per_s","batch","ntt_type"]
+        assert "log2_length" not in cols and all(any(r.get(k)!="" for r in rows()) for k in cols)
+        assert cols[cols.index("program_version")+1] == "updated_at" and cols.index("b1") > cols.index("updated_at")
+        winner, = (r for r in rows() if r["length"] == baseline["length"])
+        assert winner["b1"] == 32 and winner["program_version"] == "0.71.6"
+        assert winner["iter_per_s"] == baseline["iter_per_s"] and winner["updated_at"] == baseline["updated_at"]
 
     database = out / "recheck_roles.toml"
     flags = ["-tune", "exp=127,naf=6,time=0.02", "32"]
@@ -97,7 +132,7 @@ def main():
     text = database.read_text(encoding="utf-8")
     fields, *values = tomllib.loads(text)["ntt"]["matrix"]
     for row in values:
-        if row[fields.index("sample_phase")] == 2:
+        if (2, 2) in coverage(dict(zip(fields, row))):
             b = row[fields.index("batch")]
             rate = 98 + b
             scale = row[fields.index("iter_per_s")] / rate
@@ -109,7 +144,7 @@ def main():
     log = run("roles_raised", flags, settings=limits)
     assert log.count("stage1_ntt_recheck:") == 1 and "status=updated" in log
     assert re.search(r"95% +\d+ +\d+ +\S+ +2c ", log)
-    assert {r["batch"]: r["batch_roles"] for r in rows() if r["sample_phase"] == 2} == {1: 1, 2: 14}
+    assert {r["batch"]: r["batch_roles"] for r in rows() if (2, 2) in coverage(r)} == {1: 1, 2: 14}
 
     for cap in (0, 513):
         log = run(f"invalid_cap_{cap}", ["-tune", "exp=127,batch=1"], settings=f"ntt_max_batch = {cap}", success=False)
@@ -150,7 +185,7 @@ def main():
 
     database = out / "compact.toml"
     settings = "ntt_profile = 1\nnaf_memory_mb = 3"
-    automatic = ["-tune", "ntt,exp=3557,naf=6,batch=,time=0.05", "--tune-exhaustive", "16"]
+    automatic = ["-tune", "ntt,length=512,naf=6,batch=,time=0.05", "--tune-exhaustive", "16"]
     cold = run("compact", automatic, settings=settings)
     assert "stage1_ntt_graph_scan:" not in cold
     compact = rows()
@@ -174,20 +209,23 @@ def main():
     aligned_report(hot)
     assert "measured=1 " in hot and hot.count("stage1_ntt_recheck:") == 1
     assert ("status=updated" in hot) == (database.read_bytes() != snapshot)
-    compatible = [arg.replace("3557", "3558") for arg in automatic[:-1]] + ["500"]
+    compatible = [arg.replace("length=512", "exp=5000-5100") for arg in automatic[:-1]] + ["500"]
     reused = run("compact_other_p_b1", compatible, settings=settings)
     assert "measured=1 " in reused and reused.count("stage1_ntt_naf_sample:") == 1
 
-    explicit = ["-tune", "ntt,exp=3557,naf=6,batch=1-128,time=0.05", "--tune-exhaustive", "16"]
+    explicit = ["-tune", "ntt,length=512,naf=6,batch=1-128,time=0.05", "--tune-exhaustive", "16"]
     run("compact_explicit", explicit, settings=settings)
-    manual = [r for r in rows() if not r["batch_scope"]]
-    assert {r["batch"] for r in manual if r["sample_phase"] == 2} == set(range(1,reports["Max"]+1))
+    manual = [r for r in rows() if r.get("explicit_batch")]
+    assert {r["batch"] for r in manual if (2, 2) in coverage(r)} == set(range(1,reports["Max"]+1))
     run("compact_grow", automatic, settings=settings.replace("mb = 3", "mb = 5"))
-    assert len({r["batch"] for r in rows() if r["batch_scope"]}) <= 4
-    assert [r for r in rows() if not r["batch_scope"]] == manual
+    for budget in (3, 5):
+        retained = {r["batch"] for r in rows() if r.get("batch_scope") and r["naf_memory_mb"] == budget}
+        assert 1 <= len(retained) <= 4
+    by_batch = {r["batch"]: r["iter_per_s"] for r in rows() if r.get("explicit_batch")}
+    assert all(by_batch[r["batch"]] >= r["iter_per_s"] for r in manual)
 
     database = out / "interrupted.toml"
-    timed = ["-tune", "ntt,exp=3557,naf=6,time=1", "--tune-exhaustive"]
+    timed = ["-tune", "ntt,length=512,naf=6,time=1", "--tune-exhaustive"]
     stopped = run("compact_stop", [*timed, "--tune-seconds", "2", "16"], settings=settings)
     assert "status=time_limit" in stopped and len({r["batch"] for r in rows()}) <= 4
     checkpoints = list(out.glob("interrupted.toml.*.partial"))
@@ -202,7 +240,7 @@ def main():
     for name in ("crossing_cold", "crossing_hot"):
         log = run(name, crossing, settings="ntt_profile = 1")
         assert re.findall(r"stage1_ntt_plan: p=(\d+) length=(\d+)", log) == [
-            ("3554", "256"), ("3557", "512")], log
+            ("3556", "256"), ("7140", "512")], log
         summaries = re.findall(r"stage1_ntt_tune: p=\d+ measured=(\d+) reused=(\d+)", log)
         assert len(summaries) == 2
         assert log.count("stage1_ntt_naf_sample:") == 1
@@ -218,16 +256,25 @@ def main():
         return [(int(p), int(length), int(w)) for p, length, w in re.findall(
             r"stage1_ntt_plan: p=(\d+) length=(\d+) bpw=\d+ naf=(\d+)", log)]
 
-    # The shortest native weighted length drops at this isolated even exponent.
+    # The expanded range is ordered by continuous capacity, with independent families.
     isolated = run("isolated", ["-tune", "exp=66049-66051,naf=6,batch=1,time=0.01", "16"],
                    convolution="auto", settings="ntt_profile = 1")
-    assert planned(isolated) == [(66049, 8192, 6), (66049, 4096, 6), (66050, 2560, 6)]
+    assert planned(isolated) == [(53222, 4096, 6), (53248, 2048, 6), (66048, 2560, 6), (104448, 4096, 6)]
+
+    # Exact scaled thresholds are strict. 0.8*66560 = 53248 and 1.2*5950 = 7140.
+    for tag, exp, mode, expected in (
+        ("strict_lower", 66560, "auto", [(66048, 2560, 6), (104448, 4096, 6)]),
+        ("strict_upper", 5950, "linear", [(7140, 512, 6), (13797, 1024, 6)]),
+    ):
+        log = run(tag, ["-tune", f"exp={exp},naf=6,batch=1,time=0.01", "16"],
+                  convolution=mode, settings="ntt_profile = 1")
+        assert planned(log) == expected
 
     # Exercise the entire reported range. An infeasible batch exposes the full
     # production admission plan without benchmarking a hundred matrices.
     broad = run("broad", ["-tune", "ntt,exp=2000-1000000,batch=128"],
                 convolution="auto", settings="ntt_memory_mib = 1", success=False)
-    expected = sorted([2**i for i in range(8, 18)] + [2**i for i in range(7, 17)]
+    expected = sorted([2**i for i in range(7, 18)] + [2**i for i in range(6, 17)]
                       + [2560, 5120, 10240, 20480, 40960])
     for window in (6, 8, 10, 12):
         assert sorted(n for p, n, w in planned(broad) if w == window) == expected
@@ -241,16 +288,16 @@ def main():
     assert {r["naf_window"] for r in data} == {6, 7}
     assert {r["batch"] for r in data} == {1, 2}
     assert {r["graph_bits"] for r in data} == {4, 8, 16, 32, 64}
-    assert {(r["sample_phase"], r["repeats"]) for r in data} == {(1, 2), (2, 2)}
+    assert {pair for r in data for pair in coverage(r)} == {(1, 2), (2, 2)}
     scans = {int(w): int(b) for w, b in re.findall(r"stage1_ntt_graph_scan: p=\d+ naf=(\d+) batch=(\d+)", grid_log)}
     assert set(scans) == {6, 7}
     for w, batch in scans.items():
         for b in (1, 2):
-            fine = {r["graph_bits"] for r in data if r["naf_window"] == w and r["batch"] == b and r["sample_phase"] == 2}
+            fine = {r["graph_bits"] for r in data if r["naf_window"] == w and r["batch"] == b and (2, 2) in coverage(r)}
             assert fine == ({4, 8, 16, 32, 64} if b == batch else {16})
-    assert {r["graph_bits"] for r in data if r["sample_phase"] == 1} == {16}
+    assert {r["graph_bits"] for r in data if (1, 2) in coverage(r)} == {16}
     for row in data:
-        assert row["sample_target_ms"] == 100 and 61 <= row["reference_bits"] <= 62
+        assert row["sample_target_ms"] == 100 and row["reference_bits"] == row["max_exp"] == 93
         assert row["benchmark_kind"] == "stage1_naf_stratified"
         assert 0 < row["block_steps"] <= row["sample_pool_steps"] == row["naf_columns"] <= 64
         rate = 1000 * row["batch"] * row["repeats"] * row["timed_steps"] / row["total_device_ms"]
@@ -260,24 +307,25 @@ def main():
     assert hot.count("measured=1 ") == 2 and hot.count("stage1_ntt_recheck:") == 2
     assert ("status=updated" in hot) == (database.read_bytes() != snapshot)
     run("stronger", ["-tune", "exp=61,naf=6,batch=1,time=2", "16"])
-    stronger = [r for r in rows() if r["sample_target_ms"] == 200]
-    assert {(r["sample_phase"], r["repeats"]) for r in stronger} == {(1, 2), (2, 2)}
+    stronger = [r for r in rows() if 200 in coverage(r).values()]
+    assert {k for r in stronger for k,v in coverage(r).items() if v == 200} == {(1, 2), (2, 2)}
     assert all(r["batch"] == 1 and r["naf_window"] == 6 for r in stronger)
 
     production = ["--param", "e", "-sigma", "26", "-gpucurves", "1", "-save", "result.save"]
     snapshot = database.read_bytes()
-    cached = run("production", production + ["16"], stdin="2^61-1\n")
-    best = max((r for r in rows() if r["batch"] == 1 and r["sample_phase"] == 2), key=lambda r: r["iter_per_s"])
+    cached = run("production", production + ["16"], stdin="2^93-1\n")
+    best = max((r for r in rows() if r["batch"] == 1 and (2, 2) in coverage(r)), key=lambda r: r["iter_per_s"])
     assert f'naf={best["naf_window"]} source=tune' in cached
     assert database.read_bytes() == snapshot and "stage1_ntt_runtime_tune:" not in cached
-    cached = run("production_cross_b1", production + ["20"], stdin="2^61-1\n", runtime=True)
+    cached = run("production_cross_b1", production + ["20"], stdin="2^93-1\n", runtime=True)
     assert f'naf={best["naf_window"]} source=tune' in cached and "stage1_ntt_runtime_tune:" not in cached
     assert database.read_bytes() == snapshot
 
-    # Archived middle-slice measurements retain their original B1 scope.
+    # B1 is measurement provenance, including for archived middle-slice samples.
     header = database.read_text(encoding="utf-8").split("matrix = [", 1)[0]
     old = rows()
     for row in old:
+        row.pop("tested_groups", None)
         row["repeats"] = 3 if row.pop("sample_phase") == 1 else 5
         for column in ("naf_columns", "sample_nonzero", "total_device_ms", "sample_pool_steps"):
             del row[column]
@@ -286,27 +334,27 @@ def main():
         row["iter_per_s"] = 1000 * row["batch"] * row["timed_steps"] / row["median_ms"]
     database = out / "legacy.toml"
     write_matrix(header, list(old[0]), [list(row.values()) for row in old])
-    assert "source=tune" in run("legacy_same", production + ["16"], stdin="2^61-1\n")
-    assert "naf=0 source=default" in run("legacy_other", production + ["20"], stdin="2^61-1\n")
+    assert "source=tune" in run("legacy_same", production + ["16"], stdin="2^93-1\n")
+    assert "source=tune" in run("legacy_other", production + ["20"], stdin="2^93-1\n")
 
     database = out / "runtime.toml"
-    cold = run("read_only", production + ["20"], stdin="2^61-1\n")
+    cold = run("read_only", production + ["20"], stdin="2^93-1\n")
     assert "naf=0 source=default" in cold and not database.exists()
-    learned = run("runtime", production + ["20"], stdin="2^61-1\n", runtime=True,
+    learned = run("runtime", production + ["20"], stdin="2^93-1\n", runtime=True,
                   settings="ntt_profile = 1")
     assert "stage1_ntt_runtime_tune:" in learned
     assert {r["naf_window"] for r in rows() if r["b1"] == 20} == {6, 8, 10, 12}
-    assert saved_points(out/"read_only/result.save", 61, 20, True) == saved_points(
-        out/"runtime/result.save", 61, 20, True)
+    assert saved_points(out/"read_only/result.save", 93, 20, True) == saved_points(
+        out/"runtime/result.save", 93, 20, True)
     snapshot = database.read_bytes()
-    replay = run("runtime_hit", production + ["20"], stdin="2^61-1\n", runtime=True,
+    replay = run("runtime_hit", production + ["20"], stdin="2^93-1\n", runtime=True,
                  settings="ntt_profile = 1")
     assert "stage1_ntt_runtime_tune:" not in replay and database.read_bytes() == snapshot
     log = run("length", ["-tune", ",length=8-9,naf=6,batch=2", "16"], settings="ntt_profile = 1")
     assert set(re.findall(r"stage1_ntt_plan: p=\d+ length=(\d+)", log)) == {"8"}
     run("mont", ["--param", "m0", "-tune", "ntt,exp=127,naf=,batch=1,time=0.25,repeat=3:1", "16"])
     mont = [r for r in rows() if r["curve"] == "mont0"]
-    assert {(r["sample_phase"], r["repeats"]) for r in mont} == {(1, 3), (2, 1)}
+    assert {pair for r in mont for pair in coverage(r)} == {(1, 3), (2, 1)}
     assert all(r["sample_target_ms"] == 25 for r in mont)
     assert {r["graph_bits"] for r in mont} == {4, 8, 16, 32, 64}
 
@@ -316,11 +364,11 @@ def main():
     database = out / "short_blocks.toml"
     for curve, spec, pool in (("e", ",naf=6", 186), ("m0", "", 64)):
         log = run(f"short_blocks_{curve}", ["--param", curve, "-tune",
-            "ntt,exp=27622,batch=32,time=0.01" + spec, "128"],
+            "ntt,length=4096,batch=32,time=0.01" + spec, "128"],
             settings="ntt_profile = 1\nntt_window_bits = 64")
         assert len(re.findall(r"block_steps=\d+ group_ms=\d+\.\d+", log)) == 2
         tested = [r for r in rows() if r["curve"] == ("edwards" if curve == "e" else "mont0")]
-        assert {r["sample_phase"] for r in tested} == {1, 2}
+        assert {phase for r in tested for phase, _ in coverage(r)} == {1, 2}
         for r in tested:
             assert r["graph_bits"] == 64 and r["sample_pool_steps"] == pool
             assert 0 < r["block_steps"] < 64 and r["timed_steps"] % r["block_steps"] == 0
@@ -331,31 +379,30 @@ def main():
     run("default_windows", ["-tune", "exp=61,batch=1,time=0.01", "32"],
         settings="edwards_naf_window_bits = 3\nntt_profile = 1")
     assert {r["naf_window"] for r in rows() if r["b1"] == 32} == {6, 8, 10, 12}
-    assert len({r["naf_window"] for r in rows() if r["sample_phase"] == 2}) == 1
+    assert len({r["naf_window"] for r in rows() if (2, 2) in coverage(r)}) == 1
     database = out / "tiered.toml"
     limits = "ntt_max_batch = 12\nnaf_memory_mb = 20"
-    tiers = ["-tune", "ntt,exp=2000,time=0.02,repeat=1:2", "32"]
+    tiers = ["-tune", "ntt,length=256,time=0.02,repeat=1:2", "32"]
     log = run("tiered", tiers, settings=limits)
-    counters = re.findall(r"stage1_ntt_naf_screen: p=2000 naf=(\d+) capacity=(\d+) iter_per_s=\S+ refine=(\d+)", log)
+    counters = re.findall(r"stage1_ntt_naf_screen: p=3556 naf=(\d+) capacity=(\d+) iter_per_s=\S+ refine=(\d+)", log)
     caps = {int(w): int(cap) for w, cap, _ in counters}
     winners = {int(w) for w, _, advance in counters if advance == "1"}
     assert set(caps) == {6, 8, 10, 12} and caps[6] == caps[8] > caps[10] > caps[12] > 0, caps
     assert sorted(caps[w] for w in winners) == sorted(set(caps.values())), counters
     samples = rows()
-    scans = [(int(w), int(b)) for w, b in re.findall(r"stage1_ntt_graph_scan: p=2000 naf=(\d+) batch=(\d+)", log)]
+    scans = [(int(w), int(b)) for w, b in re.findall(r"stage1_ntt_graph_scan: p=3556 naf=(\d+) batch=(\d+)", log)]
     assert len(scans) == len(winners) and {w for w, b in scans} == winners
     for w, cap in caps.items():
         candidate = [r for r in samples if r["naf_window"] == w]
         measured = {r["batch"] for r in candidate}
         assert 1 in measured and max(measured) == cap and len(measured) <= 4
-        phases = {(r["sample_phase"], r["repeats"]) for r in candidate}
+        phases = {pair for r in candidate for pair in coverage(r)}
         assert phases == ({(1, 1), (2, 2)} if w in winners else {(1, 1)})
         scanned = {r["batch"] for r in candidate if r["graph_bits"] != 16}
         assert scanned == {b for window, b in scans if window == w}
-    def endpoint(w):
-        return max(r["iter_per_s"] for r in samples if r["naf_window"] == w
-                   and r["batch"] == caps[w] and r["sample_phase"] == 1)
-    assert max((6, 8), key=endpoint) in winners
+    endpoints = {int(w): float(rate) for w, rate in re.findall(
+        r"stage1_ntt_naf_screen: p=3556 naf=(\d+) capacity=\d+ iter_per_s=(\S+)", log)}
+    assert max((6, 8), key=endpoints.get) in winners
     snapshot = database.read_bytes()
     hot = run("tiered_hot", tiers, settings=limits)
     assert hot.count("measured=0 ") == 1 and hot.count("measured=1 ") == len(winners)
@@ -363,20 +410,20 @@ def main():
     assert ("status=updated" in hot) == (database.read_bytes() != snapshot)
     loser, = set(caps) - winners
     run("tiered_promote", [tiers[0], tiers[1] + f",naf={loser}", tiers[2]], settings=limits)
-    assert any(r["naf_window"] == loser and r["sample_phase"] == 2 for r in rows())
+    assert any(r["naf_window"] == loser and (2, 2) in coverage(r) for r in rows())
     new_repeat = run("tiered_repeat", [tiers[0], tiers[1].replace("1:2", "1:3") + f",naf={loser}", tiers[2]],
                      settings=limits)
     assert "stage1_ntt_reuse:" in new_repeat
     updated = [r for r in rows() if r["naf_window"] == loser]
-    assert {(r["sample_phase"], r["repeats"]) for r in updated} == {(1, 1), (2, 3)}
+    assert {(1, 1), (2, 3)} <= {pair for r in updated for pair in coverage(r)}
     wide = run("wide", ["-tune", "exp=900001,naf=6,batch=1,time=0.25", "16"],
                convolution="auto", settings="ntt_memory_mib = 128")
     assert "Best " in wide
-    candidates = [r for r in rows() if r["reference_bits"] == 900001]
-    assert {r["length"] for r in candidates} == {40960, 65536, 131072}
+    candidates = [r for r in rows() if r["reference_bits"] >= 720001]
+    assert {r["length"] for r in candidates} == {32768, 40960, 65536, 131072}
     assert {r["dataflow"] & 384 for r in candidates if r["length"] == 40960} == {0, 128, 384}
     bare = run("bare", ["-tune", "--tune-seconds", "1"], settings="ntt_profile = 1")
-    assert "stage1_ntt_plan: p=32" in bare and "status=time_limit" in bare
+    assert "stage1_ntt_plan: p=93" in bare and "status=time_limit" in bare
     print(f"PASS GPU {args.device}: CLI, bounds, Graph grid, timing, cache, runtime and endpoints")
 
 
