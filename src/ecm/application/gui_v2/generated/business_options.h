@@ -56,6 +56,7 @@ inline constexpr BusinessOption business_options[]={
     {"stage1","naf_w","[0|2..12]; CPU: [0|3..12]","option_stage1_naf_w","int",false,false,0,0},
     {"stage1","edwards_doubling","[0|1]","option_stage1_edwards_doubling","int",true,true,0,1},
     {"stage1","naf_memory_mb","[0|1..1048576]","option_stage1_naf_memory_mb","int",true,true,0,1048576},
+    {"stage1","ntt_naf_gpu_min_bits","[auto|0..5242881]","option_stage1_ntt_naf_gpu_min_bits","int|string",true,true,0,5242881},
     {"stage1","lcm","[1|12]","option_stage1_lcm","string",false,false,0,0},
     {"stage1","sigma","<x:Z,0..2^64-1>","option_stage1_sigma","u64",false,false,0,0},
     {"stage1","p95_dir","<dir>","option_stage1_p95_dir","string",false,false,0,0},

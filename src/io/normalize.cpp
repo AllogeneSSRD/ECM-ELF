@@ -289,6 +289,7 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
                          unsigned(cfg.ntt_memory_mib),
                          resolve_rel_local(base, cfg.ntt_tune_file), cfg.ntt_tight_weighted_bound};
     opt.execution.ntt.runtime_enabled = cfg.ntt_tune_runtime;
+    opt.execution.ntt.naf_gpu_min_bits = unsigned(cfg.ntt_naf_gpu_min_bits);
     opt.execution.ntt.max_batch = unsigned(cfg.ntt_max_batch);
     opt.execution.ntt.pad_batch = cfg.ntt_pad_batch != 0;
     opt.execution.ntt.allow_known_factors = cfg.ntt_allow_known_factors != 0;

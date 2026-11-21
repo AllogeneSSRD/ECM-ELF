@@ -1,5 +1,6 @@
 // End-to-end Suyama PARAM0 Stage1 driver and independent GMP oracle.
 #include "../../src/ecm/stage1/cuda/ntt/ladder.h"
+#include "../../src/ecm/stage1/edwards/ntt_dictionary.h"
 #include "ecm/platform/program_version.h"
 #include "ecm/stage1/ntt_sizes.h"
 #include "ecm/stage1/scalar.h"
@@ -179,6 +180,45 @@ int check_carries(int device, unsigned p, bool weighted, unsigned length, unsign
 } // namespace
 
 int main(int argc,char** argv) {
+    if (argc == 2 && !std::strcmp(argv[1], "--check-affine-dictionary")) {
+        using namespace ecm_mersenne_ntt;
+        constexpr unsigned p = 8191, words = (p + 31) / 32;
+        Z n, x, y, d, a24, factor;
+        mpz_setbit(n.v,p);
+        mpz_sub_ui(n.v,n.v,1);
+        if (ecm_edwards::construct(d.v,x.v,y.v,a24.v,factor.v,26,n.v) != ecm_edwards::Setup::Ready)
+            return 1;
+        std::vector<uint32_t> seed(3 * words);
+        mpz_export(seed.data(),nullptr,-1,sizeof(uint32_t),0,0,x.v);
+        mpz_export(seed.data()+words,nullptr,-1,sizeof(uint32_t),0,0,y.v);
+        mpz_export(seed.data()+2*words,nullptr,-1,sizeof(uint32_t),0,0,d.v);
+        const std::vector<int16_t> sample{1};
+        for (unsigned window : {6u,8u,10u}) {
+            std::vector<uint32_t> expected((1u << window) * words), actual(expected.size());
+            if (ecm_edwards::ntt::affine_dictionary(expected,1,0,words,window,x.v,y.v,d.v,n.v,factor.v)
+                    != ecm_edwards::Setup::Ready) return 1;
+            EdwardsNaf naf{window,sample,seed,0,true};
+            naf.affine_output = &actual;
+            for (bool weighted : {false,true}) {
+                std::fill(actual.begin(),actual.end(),UINT32_MAX);
+                ecm_stage1::Stage1NttOptions options;
+                options.weighted = weighted;
+                const auto run = edwards_naf(0,p,1,seed,naf,options,Control{});
+                if (run.dictionary_status != std::vector<uint8_t>{0} || actual != expected) {
+                    std::fprintf(stderr,"affine dictionary mismatch: window=%u weighted=%d\n",window,weighted);
+                    return 1;
+                }
+            }
+        }
+        mpz_set_ui(x.v,1); mpz_set_ui(y.v,0); mpz_set_ui(d.v,2);
+        std::vector<uint32_t> expected((1u << 10) * words), direct(expected.size(),UINT32_MAX);
+        if (ecm_edwards::ntt::affine_dictionary(expected,1,0,words,10,x.v,y.v,d.v,n.v,factor.v)
+                != ecm_edwards::Setup::Ready) return 1;
+        ecm_edwards::ntt::order_four_calibration_dictionary(direct,words,n.v);
+        if (direct != expected) return 1;
+        std::puts("PASS canonical GPU dictionaries match GMP for NAF6/8/10, linear and weighted");
+        return 0;
+    }
     if (argc == 2 && !std::strcmp(argv[1], "--check-size-table")) {
         using namespace ecm_mersenne_ntt;
         for (const auto& size : ecm_stage1::ntt_sizes) {

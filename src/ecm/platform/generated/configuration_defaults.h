@@ -56,6 +56,7 @@ inline constexpr char stage1_exp_cache[]="";
 inline constexpr int stage1_naf_w=0;
 inline constexpr int stage1_edwards_doubling=1;
 inline constexpr int stage1_naf_memory_mb=0;
+inline constexpr int stage1_ntt_naf_gpu_min_bits=0;
 inline constexpr char stage1_lcm[]="1";
 inline constexpr uint64_t stage1_sigma=0;
 inline constexpr char stage1_p95_dir[]="";

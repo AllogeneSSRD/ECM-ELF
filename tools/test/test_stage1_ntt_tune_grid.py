@@ -43,7 +43,7 @@ def main():
                 assert re.fullmatch(prefix + r"=+", lines[i+1]), name
             if "stage1_ntt_round:" in line or "stage1_ntt_graph_scan:" in line or "stage1_ntt_find95:" in line:
                 first_measurement = True
-            header = prefix + "length max_exp ntt_type batch iter/s dataflow actual/target steps/group steps/block"
+            header = prefix + "length max_exp ntt_type batch iter/s dataflow actual/target steps/group steps/block radix5_layout"
             if re.fullmatch(header, line):
                 assert re.match(prefix + r"\d+ \d+ [01]:", lines[i+1]), name
             if re.match(prefix + r"\d+ \d+ [01]:", line):
@@ -75,6 +75,11 @@ def main():
         if index == 0:
             assert "conflict" in log and "length" in log and "exp" in log
     assert not database.exists()
+
+    for i, value in enumerate(("-1", "5242882", '"invalid"')):
+        log = run(f"bad_dictionary_threshold_{i}", ["-tune", "ntt,length=64"],
+                  settings=f"ntt_naf_gpu_min_bits = {value}", success=False)
+        assert "ntt_naf_gpu_min_bits" in log
 
     # Set a valid but deliberately slow/fast device time so both record paths
     # are deterministic even with normal fluctuations in GPU clocks.
@@ -472,7 +477,7 @@ def main():
         log = run(f"short_blocks_{curve}", ["--param", curve, "-tune",
             "ntt,length=4096,batch=32,time=0.01" + spec, "128"],
             settings="ntt_profile = 1\nntt_window_bits = 64")
-        samples = re.findall(r" iter/s (\d+)bit (\d+\.\d{3})/1 ms (\d+) (\d+)$", log, re.M)
+        samples = re.findall(r" iter/s (\d+)bit (\d+\.\d{3})/1 ms (\d+) (\d+) -$", log, re.M)
         assert len(samples) == 2
         for _, actual, steps, block in samples:
             assert float(actual) > 0 and 0 < int(block) < 64 and int(steps) % int(block) == 0
@@ -527,6 +532,7 @@ def main():
     assert {(1, 1), (2, 3)} <= {pair for r in updated for pair in coverage(r)}
     wide = run("wide", ["-tune", "exp=900001,naf=6,batch=1,time=0.25", "16"],
                convolution="auto", settings="ntt_memory_mib = 128")
+    assert {line.split()[-1] for line in wide.splitlines() if " 40960 " in line and "bit " in line} == {"twiddle", "pfa-direct", "pfa-coalesced"}
     assert "Best " in wide
     candidates = [r for r in rows() if r["reference_bits"] >= 720001]
     assert {r["length"] for r in candidates} == {32768, 40960, 65536}

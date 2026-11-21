@@ -35,6 +35,8 @@ inline constexpr int64_t stage1_edwards_doubling_minimum=0;
 inline constexpr int64_t stage1_edwards_doubling_maximum=1;
 inline constexpr int64_t stage1_naf_memory_mb_minimum=0;
 inline constexpr int64_t stage1_naf_memory_mb_maximum=1048576;
+inline constexpr int64_t stage1_ntt_naf_gpu_min_bits_minimum=0;
+inline constexpr int64_t stage1_ntt_naf_gpu_min_bits_maximum=5242881;
 inline constexpr int64_t stage1_ckpt_backups_minimum=0;
 inline constexpr int64_t stage1_ckpt_backups_maximum=16;
 inline constexpr int64_t stage1_ntt_allow_known_factors_minimum=0;
@@ -189,6 +191,7 @@ struct Stage1Values {
     int naf_w=0;
     int edwards_doubling=1;
     int naf_memory_mb=0;
+    int ntt_naf_gpu_min_bits=0;
     std::string scalar_construction="1";
     uint64_t sigma=0;
     std::string p95_dir="";
@@ -282,6 +285,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"naf_w",[](Stage1Values&c,const std::string&v){assign_value(c.naf_w,v);},[](Stage1Values&c,const Stage1Values&v){c.naf_w=v.naf_w;}},
     {"edwards_doubling",[](Stage1Values&c,const std::string&v){c.edwards_doubling=static_cast<int>(bounded_integer(v,"edwards_doubling",0,1));},[](Stage1Values&c,const Stage1Values&v){c.edwards_doubling=v.edwards_doubling;}},
     {"naf_memory_mb",[](Stage1Values&c,const std::string&v){assign_value(c.naf_memory_mb,v);},[](Stage1Values&c,const Stage1Values&v){c.naf_memory_mb=v.naf_memory_mb;}},
+    {"ntt_naf_gpu_min_bits",[](Stage1Values&c,const std::string&v){c.ntt_naf_gpu_min_bits=v=="auto"?0:static_cast<int>(bounded_integer(v,"ntt_naf_gpu_min_bits",0,5242881));},[](Stage1Values&c,const Stage1Values&v){c.ntt_naf_gpu_min_bits=v.ntt_naf_gpu_min_bits;}},
     {"lcm",[](Stage1Values&c,const std::string&v){assign_value(c.scalar_construction,v);},[](Stage1Values&c,const Stage1Values&v){c.scalar_construction=v.scalar_construction;}},
     {"sigma",[](Stage1Values&c,const std::string&v){assign_value(c.sigma,v);},[](Stage1Values&c,const Stage1Values&v){c.sigma=v.sigma;}},
     {"p95_dir",[](Stage1Values&c,const std::string&v){assign_value(c.p95_dir,v);},[](Stage1Values&c,const Stage1Values&v){c.p95_dir=v.p95_dir;}},

@@ -50,6 +50,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage1","naf_w","int","[0|2..12]; CPU: [0|3..12]","stage1","edwards_naf_window_bits","",false},
     {"stage1","edwards_doubling","int","[0|1]","stage1","edwards_doubling","",false},
     {"stage1","naf_memory_mb","int","[0|1..1048576]","stage1","naf_memory_mb","",false},
+    {"stage1","ntt_naf_gpu_min_bits","int|string","[auto|0..5242881]","stage1","ntt_naf_gpu_min_bits","",false},
     {"stage1","lcm","string","[1|12]","stage1","montgomery_lcm_multiplier","",false},
     {"stage1","sigma","u64","<x:Z,0..2^64-1>","stage1","sigma","",false},
     {"stage1","ckpt_backups","int","<x:Z,0..16>","stage1","checkpoint_backups","",false},

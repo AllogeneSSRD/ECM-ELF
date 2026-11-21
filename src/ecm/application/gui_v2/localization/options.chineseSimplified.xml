@@ -56,6 +56,7 @@
       <Item id="option_stage1_naf_w" name="Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 和 OpenCL 从 6 开始。CUDA NTT 中 0 按兼容实测吞吐选择窗口，无记录可用时回退 x-only，2～12 固定 2XY NAF 窗口。CPU、CGBN 和 OpenCL 可根据内存预算为新任务自动降窗。" />
       <Item id="option_stage1_edwards_doubling" name="新 CUDA CGBN 与 OpenCL Edwards NAF 批次的倍点公式。0 选择 HWCD，1 选择 2XY（默认）。续跑沿用检查点中的公式。省略此键时，CUDA CGBN 还支持 ECM_EDWARDS_DBL_ALGO。" />
       <Item id="option_stage1_naf_memory_mb" name="Edwards Stage1 内存上限，1 MB = 1,000,000 字节。约束 CPU NAF 工作集、CUDA CGBN 或 OpenCL 设备缓冲、CUDA NTT 字典及设备乘积树。0 使用后端预算。OpenCL 以报告的全局内存一半为预算，并检查单个缓冲的最大容量。" />
+      <Item id="option_stage1_ntt_naf_gpu_min_bits" name="CUDA NTT 生产和调优使用 GPU 构造 Edwards NAF 字典的最小梅森指数。auto 或 0 使用内置门槛，正整数表示指数达到该值时优先 GPU，仍受内存预算限制。5242881 表示所有支持的指数都用 GMP。调优按一条曲线准备字典。" />
       <Item id="option_stage1_lcm" name="Montgomery Stage1 标量是 montgomery_lcm_multiplier(1..B1) 乘 1 或 12。Edwards 固定使用 48·montgomery_lcm_multiplier，不接受 12。此选择改变输出点，须与 Stage2 存档约定一致。" />
       <Item id="option_stage1_sigma" name="曲线起始 sigma；0 表示随机生成，连续曲线使用 sigma+i 且不得在 64 位处回绕。CUDA PARAM0 接受完整 64 位范围，PARAM2/3 批次须位于 2^32 以下。CPU 路径的 sigma 超出 Prime95 有符号读取范围时会警告，这不是 Stage1 的限制。ECM/ECM2 任务行的非零 sigma 覆盖此键。" />
       <Item id="option_stage1_p95_dir" name="保留旧配置兼容性，设置非空值只产生旧选项提示，不启用新的 Prime95 交接流程。需要交接 ECMSTAGE2 任务时使用 prime95_worktodo_file。" />

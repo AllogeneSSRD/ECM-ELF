@@ -98,12 +98,18 @@ unsigned linear_exponent_limit(unsigned length, unsigned bpw) {
     return lo * bpw;
 }
 
+const char* radix5_layout_name(const Plan& plan) {
+    if (!ecm_stage1::stage1_ntt_radix5(plan.length)) return "-";
+    if (plan.dataflow & CoalescedRadix5) return "pfa-coalesced";
+    return plan.dataflow & PfaRadix5 ? "pfa-direct" : "twiddle";
+}
+
 void print_measurement(const Measurement& m, unsigned target) {
     const auto& p = m.plan;
     const auto shape = tune_shape_descriptor(p);
-    ecm_ts_fprintf(stdout, "%u %u %s %uc %.0f iter/s %ubit %.3f/%u ms %u %u\n",
+    ecm_ts_fprintf(stdout, "%u %u %s %uc %.0f iter/s %ubit %.3f/%u ms %u %u %s\n",
         p.length, p.max_exp, shape.c_str(), m.batch, m.throughput()*m.steps, p.dataflow,
-        m.group_ms(), target, m.steps, m.steps / m.blocks);
+        m.group_ms(), target, m.steps, m.steps / m.blocks, radix5_layout_name(p));
 }
 
 Stage1NttOptions fixed_plan(Stage1NttOptions o, const Plan& plan) {
@@ -284,11 +290,18 @@ public:
         binary_blocks_.push_back({bits, 0, 0, {}});
     }
 
-    void native(unsigned window, const NafSample& sample, size_t dictionary_limit) {
+    void native(unsigned window, const NafSample& sample, size_t dictionary_limit,
+                const Stage1NttOptions& options) {
         window_ = window;
         dictionary_limit_ = dictionary_limit;
         naf_sample_ = &sample;
         const unsigned words = (p_ + 31) / 32;
+        bool use_gpu = ecm_edwards::ntt::prefer_device_dictionary(p_,1,window,options.naf_gpu_min_bits);
+        const bool report_setup = use_gpu || options.naf_gpu_min_bits || p_ >= (1u << 20);
+        const double started = now_s();
+        if (report_setup)
+            ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_dictionary: p=%u naf=%u entries=%u preparing\n",
+                           p_,window,1u << (window-2));
         dictionary_.resize(size_t(4u << (window - 2)) * words);
         ecm_edwards::Integer n, d, x, y, a24, factor;
         mpz_setbit(n.v, p_);
@@ -304,19 +317,39 @@ public:
             mpz_gcd(factor.v, y.v, n.v);
         } while (mpz_cmp_ui(factor.v, 1) != 0);
         ecm_edwards::MersenneConstruction context(n.v);
+        const auto build = [&] {
+            if (use_gpu) {
+                std::vector<uint32_t> seed(3ull * words);
+                auto* dst = seed.data();
+                for (mpz_srcptr coordinate : {x.v,y.v,d.v}) {
+                    mpz_export(dst,nullptr,-1,sizeof(uint32_t),0,0,coordinate);
+                    dst += words;
+                }
+                EdwardsNaf naf{window,sample.digits,seed,dictionary_limit,true};
+                naf.affine_output = &dictionary_;
+                try {
+                    const auto prep = edwards_naf(device_.index,p_,1,seed,naf,options,Control{});
+                    return prep.dictionary_status.at(0) == 0;
+                } catch (const BudgetError&) {
+                    use_gpu = false;
+                }
+            }
+            return ecm_edwards::ntt::affine_dictionary(dictionary_,1,0,words,window,x.v,y.v,d.v,n.v,factor.v)
+                == ecm_edwards::Setup::Ready;
+        };
         for (unsigned sigma = 26; sigma < 42; ++sigma) {
+            if (ecm_stage1_stop_requested()) throw Cancelled();
             if (ecm_edwards::construct(d.v, x.v, y.v, a24.v, factor.v, sigma, n.v, &context)
-                    == ecm_edwards::Setup::Ready &&
-                ecm_edwards::ntt::affine_dictionary(dictionary_, 1, 0, words, window,
-                    x.v, y.v, d.v, n.v, factor.v) == ecm_edwards::Setup::Ready) return;
+                    == ecm_edwards::Setup::Ready && build()) break;
+            if (sigma != 41) continue;
+            // An order-four point also has a valid affine table over this ring.
+            ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_probe: p=%u using order-four calibration point\n", p_);
+            use_gpu = false;
+            ecm_edwards::ntt::order_four_calibration_dictionary(dictionary_,words,n.v);
         }
-        // A composite carrier can factor during every construction. The order-four
-        // point (1,0) still gives a valid affine odd-multiple table over this ring.
-        ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_probe: p=%u using order-four calibration point\n", p_);
-        mpz_set_ui(x.v, 1); mpz_set_ui(y.v, 0); mpz_set_ui(d.v, 2);
-        if (ecm_edwards::ntt::affine_dictionary(dictionary_, 1, 0, words, window,
-                x.v, y.v, d.v, n.v, factor.v) != ecm_edwards::Setup::Ready)
-            throw std::runtime_error("cannot build Edwards tune dictionary");
+        if (report_setup)
+            ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_dictionary: p=%u naf=%u builder=%s setup_ms=%.3f\n",
+                           p_,window,use_gpu ? "gpu" : "host",1000*(now_s()-started));
     }
 
     Measurement measure(unsigned batch, const Stage1NttOptions& options, unsigned samples, unsigned target_ms = 0) {
@@ -340,11 +373,11 @@ public:
                     std::copy(projective_unit_.begin(), projective_unit_.end(),
                               active.begin() + slot*stride + size_t(lane)*words);
             const size_t slots = dictionary_.size() / words;
-            std::vector<uint32_t> table(slots * stride);
-            for (size_t i = 0; i < slots; ++i)
+            std::vector<uint32_t> table(batch > 1 ? slots * stride : 0);
+            for (size_t i = 0; batch > 1 && i < slots; ++i)
                 for (unsigned lane = 0; lane < batch; ++lane)
                     std::copy_n(dictionary_.data() + i * words, words, table.data() + i * stride + lane * words);
-            EdwardsNaf naf{window_, naf_sample_->digits, table, dictionary_limit_};
+            EdwardsNaf naf{window_, naf_sample_->digits, batch == 1 ? dictionary_ : table, dictionary_limit_};
             run = edwards_naf(device_.index, p_, batch, active, naf, options, control, samples);
         } else {
             for (unsigned slot=0; slot<6; ++slot) {
@@ -661,7 +694,7 @@ struct Score {
 enum BatchRole : unsigned { Single = 1, Capacity = 2, Fastest = 4, Economical = 8 };
 
 void table_header() {
-    ecm_ts_fprintf(stdout,"length max_exp ntt_type batch iter/s dataflow actual/target steps/group steps/block\n");
+    ecm_ts_fprintf(stdout,"length max_exp ntt_type batch iter/s dataflow actual/target steps/group steps/block radix5_layout\n");
 }
 
 void round_header(unsigned p, unsigned window, const char* phase) {
@@ -687,7 +720,7 @@ void report_batches(const std::map<BatchRole,Score>& scores, const Score& old95,
                        measured95.batch,measured95.rate,old95.batch,old95.rate,
                        throughput_change(measured95.rate,old95.rate).c_str(),changed ? "updated" : "kept");
     }
-    std::vector<std::array<std::string,7>> rows;
+    std::vector<std::array<std::string,8>> rows;
     std::array<int,6> widths{};
     for (const auto& [role,label] : {std::pair{Single,"Single"}, {Capacity,"Max"},
                                     {Fastest,"Best"}, {Economical,"95%"}}) {
@@ -698,14 +731,14 @@ void report_batches(const std::map<BatchRole,Score>& scores, const Score& old95,
         rate << std::fixed << std::setprecision(0) << s.rate;
         rows.push_back({label,std::to_string(s.plan.length),std::to_string(s.plan.max_exp),
                         tune_shape_descriptor(s.plan),std::to_string(s.batch)+"c",rate.str(),
-                        std::to_string(s.plan.dataflow)});
+                        std::to_string(s.plan.dataflow),radix5_layout_name(s.plan)});
         for (size_t i=0; i<widths.size(); ++i)
             widths[i] = std::max(widths[i],int(rows.back()[i].size()));
     }
     for (const auto& row : rows)
-        ecm_log_accent(EcmLogAccent::BatchResult,"%-*s %*s %*s %-*s %*s %*s iter/s dataflow=%s\n",
+        ecm_log_accent(EcmLogAccent::BatchResult,"%-*s %*s %*s %-*s %*s %*s iter/s dataflow=%s radix5_layout=%s\n",
             widths[0],row[0].c_str(),widths[1],row[1].c_str(),widths[2],row[2].c_str(),
-            widths[3],row[3].c_str(),widths[4],row[4].c_str(),widths[5],row[5].c_str(),row[6].c_str());
+            widths[3],row[3].c_str(),widths[4],row[4].c_str(),widths[5],row[5].c_str(),row[6].c_str(),row[7].c_str());
 }
 
 enum class SamplePhase : unsigned { Coarse = 1, Fine = 2 };
@@ -1049,8 +1082,8 @@ public:
                 }
                 if (previous && best.rate && hits_.insert(selected).second)
                     ecm_ts_fprintf(stdout,"stage1_ntt_reuse: length=%u batch=%u dataflow=%u tile=%u "
-                        "outer=%u graph=%u target_ms=%u iter_per_s=%.0f\n",plan.length,batch,plan.dataflow,
-                        plan.tile,plan.outer_max,plan.window,target,best.rate);
+                        "outer=%u graph=%u target_ms=%u iter_per_s=%.0f radix5_layout=%s\n",plan.length,batch,plan.dataflow,
+                        plan.tile,plan.outer_max,plan.window,target,best.rate,radix5_layout_name(plan));
                 return best;
             };
             if (!remeasurement) {
@@ -1061,7 +1094,7 @@ public:
             if (!calibration_) {
                 Calibration prepared(device_, p_, 64);
                 if (window_) prepared.native(window_, naf_samples_.get(window_),
-                    size_t(request_.options.execution.naf_memory_mb) * ecm_edwards_memory::mb);
+                    size_t(request_.options.execution.naf_memory_mb) * ecm_edwards_memory::mb,options);
                 calibration_.emplace(std::move(prepared));
             }
             const auto m = calibration_->measure(batch, options, groups, target);

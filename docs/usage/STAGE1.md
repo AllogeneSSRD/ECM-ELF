@@ -134,7 +134,7 @@ GPU Edwards 用 `--param e` 和不带参数化前缀的 sigma。已知素因子�
 
 在 `[stage1]` 设置 `gpu_algorithm = "ntt"` 或 `2` 可以显式启用 NTT。线性和加权卷积均支持梅森承载指数 `32 ≤ p ≤ 5242880`，包括完整 `2^p−1` 和保留原指数及已知因子元数据的合格余因子。在 5242880 位上，保守选长使用 262144 点加权 NTT 或 524288 点线性 NTT。Edwards 使用 `param = "e"` 和固定的 `48·lcm(1…B1)`。Montgomery PARAM0 的 `montgomery_lcm_multiplier` 可设为 `"1"` 或 `"12"`。队列任务通过 `e_` 或 `m0_` save 前缀选择曲线构造。[已知因子与分段进位](../architecture/NTT.md#stage1-已知因子与梅森承载)
 
-Edwards NTT 的 `edwards_naf_window_bits = 0` 按调优表选择吞吐最高的可用 NAF 窗口，2～12 选择原生 2XY NAF 窗口。原生路径根据模数位宽、窗口和批量选择主机或 GPU 建表。若仅 GPU 建表的临时缓冲超出显存预算，可自动改用主机。若驻留频谱也放不下，可为新批次减小窗口或批量。两条路径生成同格式的 Edwards save。见 [字典计算和显存口径](../performance/STAGE1_MERSENNE_NTT.md#奇数倍点字典与显存)。
+Edwards NTT 的 `edwards_naf_window_bits = 0` 按调优表选择吞吐最高的可用 NAF 窗口，2～12 选择原生 2XY NAF 窗口。生产和调优共用 `[stage1] ntt_naf_gpu_min_bits = "auto"`。默认按梅森指数 p、NAF 窗口和曲线数选择 GMP 或 GPU；调优按一条曲线计算。也可填写整数，例如 `ntt_naf_gpu_min_bits = 20000` 表示 p ≥ 20000 优先用 GPU，否则用 GMP。0 等同 auto，1 让所有位宽优先用 GPU，5242881 让所有支持的位宽用 GMP。若仅 GPU 建表的临时缓冲超出显存预算，可自动改用主机。若驻留频谱也放不下，可为新批次减小窗口或批量。两条路径生成同格式的 Edwards save。见 [字典计算和显存口径](../performance/STAGE1_MERSENNE_NTT.md#奇数倍点字典与显存)。
 
 暂停后可以修改 `edwards_naf_window_bits`。已有算术快照的子批次以保存的模式、窗口和游标继续，随后开始的子批次使用新设置。日志 `stage1_ntt_naf_resume` 在窗口不同时列出保存值、配置值和恢复位置，`0` 表示 x-only。已有快照仍需为原窗口提供足够内存。见 [NTT 快照格式](../architecture/CHECKPOINT.md#46-cuda-ntt-单批算术快照)。
 

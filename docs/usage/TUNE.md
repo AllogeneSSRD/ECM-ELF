@@ -41,7 +41,9 @@ x-only 的采样池包含 64 个可重现的标量位。原生 Edwards 用指定
 
 一次调优命令仅在首次需要测量时构造 B1 标量。每个 w 编码一次完整 NAF，保留选中的有符号列供整个命令的位宽、变换长度、批量和 Graph 候选复用。日志 `stage1_ntt_naf_sample` 每生成一份采样输出一次。复测使用本次请求的 B1，采样随新纪录一起写入。
 
-Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，覆盖模数位宽且与模数互素，同一位宽和不同批量共用相同初值。这样首批倍点也处理一般位宽的坐标。代表指数构造曲线时若连续遇因子，调优使用四阶点字典；该输入的吞吐是校准工作量的估计值。
+Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，覆盖模数位宽且与模数互素，同一位宽和不同批量共用相同初值。这样首批倍点也处理一般位宽的坐标。代表指数构造曲线时若连续遇因子，调优使用四阶点 (1,0)，按交替出现的 (1,0) 和 (−1,0) 直接填充奇数倍点字典。该输入的吞吐是校准工作量的估计值。
+
+调优器按一条曲线选择 GMP 或 GPU，生成奇数倍点仿射字典，供该轮各批量和 NTT 配置共用。生产与调优共用 `[stage1] ntt_naf_gpu_min_bits`，默认为 `"auto"`。GPU 准备空间超过预算时可改用 GMP。`stage1_ntt_dictionary` 在选择 GPU、大位宽或显式指定门槛时报告条目数、实际构造方式和 `setup_ms`。该耗时包括初值、曲线和字典准备，单独于表中计算 `iter/s` 的 GPU 迭代计时。[生产建表门槛和配置](STAGE1.md#cuda-全宽-ntt)
 
 每个候选先在实际 batch 上试跑最短块。x-only 从 4 位起逐档翻倍。Edwards 的最短块约为池中相邻两次点加的平均间距，包含至少一个真实非零列（池中有非零列时）。更长的块按此长度翻倍，另有完整池可选。短块取连续片段，长块从至多 8 个位置取片段，选择时尽量使累计非零列比例接近整个池。相隔的片段各自结束零列 Graph，点状态沿用。
 
@@ -49,7 +51,7 @@ Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，�
 
 例如 x-only 选中 64 步、窗口为 16 时，每块启动 4 个 Graph。若该块预热实测 0.8 ms，默认每组回放 125 块，即每曲线 8000 步。窗口是每个 Graph 的步数上限。x-only 的正数尾段可独立建图；所选块短于窗口时，测到的是该尾段。原生 NAF 的连续零列使用 1、2、4 等二次幂长度的 Graph，非零列直接执行倍点和点加。例如 186 列含 26 个非零列时，最短块约 7 列。若这 7 列耗时 160 ms，默认正式组只执行一块。100 ms 是每个正式组的软目标，调优命令的总耗时还包含初始化、试跑及核对。
 
-`sample_pool_steps` 是采样池列数，`block_steps` 是一块实际回放的列数，`timed_steps` 是每曲线每个正式组的列数，`repeats` 是正式组数。原生 Edwards 保存完整标量列数 `naf_columns`、一轮的非零列数 `sample_nonzero` 和所有正式组的 CUDA event 总时间 `total_device_ms`。聚合吞吐 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。各组的中位时间 `median_ms` 和标准差用于观察波动。控制台实测行在吞吐之后依次列出 dataflow 掩码（十进制数值加 `bit`）、每组实际/目标设备时间（ms）、每条曲线每组步数（`steps/group`）和每条曲线每个回放块的步数（`steps/block`）。两列步数相除即每组回放块数。原生 Edwards 每步对应一列 NAF，x-only 每步对应一个标量位。原生 Edwards 的 `group_ms` 取各组平均，x-only 取中位数。x-only 仍采用 `1000 × batch × timed_steps / median_ms`。`Single`、`Best`、`95%` 分别报告单曲线、峰值及达到峰值 95% 的最小实测批量。[GPU 回放和计时](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/cuda/ntt/tune.cpp)
+`sample_pool_steps` 是采样池列数，`block_steps` 是一块实际回放的列数，`timed_steps` 是每曲线每个正式组的列数，`repeats` 是正式组数。原生 Edwards 保存完整标量列数 `naf_columns`、一轮的非零列数 `sample_nonzero` 和所有正式组的 CUDA event 总时间 `total_device_ms`。聚合吞吐 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。各组的中位时间 `median_ms` 和标准差用于观察波动。控制台实测行在吞吐之后依次列出 dataflow 掩码（十进制数值加 `bit`）、每组实际/目标设备时间（ms）、每条曲线每组步数（`steps/group`）和每条曲线每个回放块的步数（`steps/block`）。两列步数相除即每组回放块数。末列 `radix5_layout` 显示混合长度的布局：`twiddle`（旋转因子）、`pfa-direct`（直接 PFA）或 `pfa-coalesced`（合并访存 PFA）。二次幂长度显示 `-`。原生 Edwards 每步对应一列 NAF，x-only 每步对应一个标量位。原生 Edwards 的 `group_ms` 取各组平均，x-only 取中位数。x-only 仍采用 `1000 × batch × timed_steps / median_ms`。`Single`、`Best`、`95%` 分别报告单曲线、峰值及达到峰值 95% 的最小实测批量。[GPU 回放和计时](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/cuda/ntt/tune.cpp)
 
 ## Tune 文件
 

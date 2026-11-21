@@ -8,6 +8,31 @@
 
 namespace ecm_edwards::ntt {
 
+inline bool prefer_device_dictionary(size_t p, unsigned curves, unsigned window, unsigned min_bits) {
+    if (min_bits) return p >= min_bits;
+    if (p >= 32768 || (p >= 20000 && window >= 6)) return true;
+    if (window < 8) return false;
+    if (p >= 2000 && curves >= 64) return true;
+    if (p >= 6144) return curves >= 8;
+    return p >= 3500 && curves >= (window >= 10 ? 16u : 32u);
+}
+
+// For the calibration point (1,0), odd multiples alternate between P and -P.
+// Their four affine slots are (x,0,0,x) in canonical limb representation.
+inline void order_four_calibration_dictionary(std::vector<uint32_t>& table, unsigned words, mpz_srcptr n) {
+    Integer minus_one;
+    mpz_sub_ui(minus_one.v,n,1);
+    std::vector<uint32_t> negative(words);
+    mpz_export(negative.data(),nullptr,-1,sizeof(uint32_t),0,0,minus_one.v);
+    std::fill(table.begin(),table.end(),0u);
+    for (size_t offset = 0, entry = 0; offset < table.size(); offset += 4ull * words, ++entry) {
+        auto* x = table.data() + offset;
+        if (entry % 2) std::copy(negative.begin(),negative.end(),x);
+        else x[0] = 1;
+        std::copy_n(x,words,x + 3ull * words);
+    }
+}
+
 // Entries are packed entry / coordinate / curve / limb, as read by the
 // shared NTT packer. One inverse normalizes all odd multiples of a curve.
 inline Setup affine_dictionary(std::vector<uint32_t>& table, unsigned curves, unsigned lane,

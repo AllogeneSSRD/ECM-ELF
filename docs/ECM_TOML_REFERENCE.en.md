@@ -489,6 +489,16 @@ Type `int` · Range `[0,1048576]` · Worker override `[worker.N] ntt_memory_mib`
 
 Total Stage1 NTT VRAM budget in MiB. Zero uses 80% of free VRAM after CUDA initialization. An explicit cap is also bounded by available VRAM.
 
+### ntt_naf_gpu_min_bits
+
+```toml
+ntt_naf_gpu_min_bits = "auto"
+```
+
+Type `int|string` · Range `[auto|0..5242881]` · Worker override `[worker.N] ntt_naf_gpu_min_bits` · Level `advanced`.
+
+Minimum Mersenne exponent for GPU Edwards NAF dictionary construction in CUDA NTT production and tuning. Auto (or 0) uses built-in thresholds. A positive value selects the GPU at and above that exponent, subject to memory limits. 5242881 selects GMP for all supported exponents. Tune prepares one curve.
+
 <a id="ntt_outer_max"></a>
 
 ### ntt_outer_radix_limit

@@ -489,6 +489,16 @@ ntt_memory_mib = 0
 
 Stage1 NTT 总显存预算（MiB）。0 使用 CUDA 初始化后空闲显存的 80%；显式预算也受空闲显存限制。
 
+### ntt_naf_gpu_min_bits
+
+```toml
+ntt_naf_gpu_min_bits = "auto"
+```
+
+类型 `int|string` · 范围 `[auto|0..5242881]` · Worker 覆盖 `[worker.N] ntt_naf_gpu_min_bits` · 级别 `高级`。
+
+CUDA NTT 生产和调优使用 GPU 构造 Edwards NAF 字典的最小梅森指数。auto 或 0 使用内置门槛，正整数表示指数达到该值时优先 GPU，仍受内存预算限制。5242881 表示所有支持的指数都用 GMP。调优按一条曲线准备字典。
+
 <a id="ntt_outer_max"></a>
 
 ### ntt_outer_radix_limit

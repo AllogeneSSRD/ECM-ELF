@@ -446,6 +446,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             control->warmup_iterations || control->modular_square_probe)
             throw std::invalid_argument("invalid Edwards NTT NAF request");
         entries = 1u << (naf->window - 2);
+        if (naf->affine_output && (!naf->build_dictionary || naf->host_fallback ||
+            naf->affine_output->size() != 4 * entries * stride))
+            throw std::invalid_argument("invalid affine dictionary output");
         if (!describe_only && naf->dictionary.size() != (naf->build_dictionary ? 3 : 4 * entries) * stride)
             throw std::invalid_argument("invalid Edwards NTT NAF dictionary size");
         for (int digit : naf->digits)
@@ -543,7 +546,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     auto& ctx=tables.ctx;
     const auto* resolved = control ? &overrides : nullptr;
     fuse_describe(ctx,width,log,omega2,inv2,true,resolved);
-    const size_t dictionary_bytes = 4ull * sizeof(U) * curves * s.length * entries;
+    // A table export needs only the five spectra for 2P and one for d.
+    const unsigned fixed_planes = naf && naf->affine_output ? 6 : naf ? 4 * entries : 2;
+    const size_t dictionary_bytes = naf ? size_t(fixed_planes) * sizeof(U) * curves * s.length : 0;
     bool gpu_dictionary = naf && naf->build_dictionary;
     const size_t dictionary_workspace = gpu_dictionary ? 4ull * entries * stride * sizeof(uint32_t) : 0;
     result.owned_bytes = (naf ? 9 : 11) * sizeof(U) * curves * s.length + dictionary_bytes +
@@ -766,7 +771,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     Buffer<unsigned> carry_headers(segmented ? header_words : 0);
     Buffer<unsigned> start(1);
     Buffer<uint32_t> scalar(std::max(size_t(1), scalar_words.size()));
-    Buffer<U> freq(size_t(5)*curves*s.length), fixed(size_t(naf ? 4 * entries : 2)*curves*s.length);
+    Buffer<U> freq(size_t(5)*curves*s.length), fixed(size_t(fixed_planes)*curves*s.length);
     Buffer<U> modulus(loose || frequency_double ? s.length : 0);
     Buffer<U> inverse(size_t(4)*curves*s.length);
     const size_t mixed_table_words = mixed && !pfa ? size_t(4) * width : 0;
@@ -1147,7 +1152,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             // product tree. Each level overwrites its children with inverses.
             Buffer<uint32_t> work(4ull * entries * stride);
             const size_t plane = size_t(curves) * s.length;
-            const unsigned curve_d = 4 * entries - 1;
+            const unsigned curve_d = fixed_planes - 1;
             const auto xy = [&](unsigned entry, unsigned coord) { return work.data + (2ull * entry + coord) * stride; };
             const auto tree = [&](unsigned node) { return work.data + (2ull * entries + node) * stride; };
             const auto slot = [&](unsigned i) { return state.data + i * stride; };
@@ -1250,6 +1255,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             result.dictionary_inverse_ms = 1000 * (now_s()-inverse_start);
             if (std::any_of(result.dictionary_status.begin(),result.dictionary_status.end(),[](auto flag){return flag==1;}))
                 result.dictionary_factors = std::move(factors);
+            if (naf->affine_output && std::any_of(result.dictionary_status.begin(),result.dictionary_status.end(),
+                    [](auto status){ return status != 0; })) return result;
             CK(cudaMemcpyAsync(tree(1),roots.data(),bytes,cudaMemcpyHostToDevice,q));
             // Descend with inverse_parent * sibling. Both products consume
             // the old children before either child is overwritten.
@@ -1266,10 +1273,17 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 mul(2,1,{x,y},{0},{1},{t});
                 mul(1,1,{t},{0},{5},{D},false,false,{},0,0,curve_d);
                 add_inputs(std::false_type{},1,{{x},{y},{Sum},0},{});
-                forward_inputs(fixed.data + size_t(4) * entry * plane, 4, {{x,y,D,Sum}});
+                if (naf->affine_output) {
+                    auto* out = naf->affine_output->data() + size_t(4) * entry * stride;
+                    for (auto coord : {x,y,D,Sum}) {
+                        CK(cudaMemcpyAsync(out,slot(coord),bytes,cudaMemcpyDeviceToHost,q));
+                        out += stride;
+                    }
+                } else forward_inputs(fixed.data + size_t(4) * entry * plane, 4, {{x,y,D,Sum}});
             }
             CK(cudaStreamSynchronize(q));
             observe_memory();
+            if (naf->affine_output) return result;
         } else {
             const auto& table = naf->build_dictionary ? fallback_table : naf->dictionary;
             for (unsigned entry=0; entry<entries; ++entry) {

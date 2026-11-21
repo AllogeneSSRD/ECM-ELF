@@ -299,6 +299,8 @@ def toml_literal(option, *, example=False):
     conversion = option.get("toml_conversion", "")
     if conversion.startswith("enum:"):
         return json.dumps(conversion[5:].split("|")[value])
+    if option["parser"] == "auto_integer" and value == 0:
+        return '"auto"'
     if conversion in ("bool01", "nonzero_bool"):
         return "true" if value else "false"
     if option["type"] in ("string", "bool|string", "int|string"):

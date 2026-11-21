@@ -217,14 +217,6 @@ void prepare_edwards_batch(mpz_srcptr n, const std::vector<uint64_t>& sigmas, un
     for (auto& job : jobs) job.get();
 }
 
-bool prefer_device_dictionary(size_t p, unsigned curves, unsigned window) {
-    if (p >= 32768) return true;
-    if (window < 8) return false;
-    if (p >= 24576 || (p >= 2000 && curves >= 64)) return true;
-    if (p >= 6144) return curves >= 8;
-    return p >= 3500 && curves >= (window >= 10 ? 16u : 32u);
-}
-
 std::vector<uint32_t> build_host_naf_fallback(ecm_mersenne_ntt::Run& run, mpz_srcptr modulus,
         const std::vector<uint32_t>& seeds, unsigned curves, unsigned words, unsigned window) {
     const size_t entries = size_t(1) << (window - 2);
@@ -337,7 +329,8 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         phase = FailureSource::Preparation;
 
         const size_t entries = naf_window ? size_t(1) << (naf_window - 2) : 0;
-        bool gpu_dictionary = naf_window && prefer_device_dictionary(p, curves, naf_window);
+        bool gpu_dictionary = naf_window && ecm_edwards::ntt::prefer_device_dictionary(
+            p,curves,naf_window,opt.execution.ntt.naf_gpu_min_bits);
         bool automatic_dictionary = true;
         if (naf_window) {
             if (const char* override = std::getenv("ECM_EDWARDS_NTT_DICTIONARY")) {

@@ -336,6 +336,15 @@ target = "gpu"  # string: [cpu|gpu]
 # 冲、CUDA NTT 字典及设备乘积树。0 使用后端预算。OpenCL 以报告的全局内存一半为预算，并检查单个缓冲的
 # 最大容量。
 
+# ntt_naf_gpu_min_bits = "auto"  # int|string: [auto|0..5242881]
+# Minimum Mersenne exponent for GPU Edwards NAF dictionary construction in CUDA NTT production and
+# tuning. Auto (or 0) uses built-in thresholds. A positive value selects the GPU at and above that
+# exponent, subject to memory limits. 5242881 selects GMP for all supported exponents. Tune prepares
+# one curve.
+# CUDA NTT 生产和调优使用 GPU 构造 Edwards NAF 字典的最小梅森指数。auto 或 0 使用内置门槛，正整数表
+# 示指数达到该值时优先 GPU，仍受内存预算限制。5242881 表示所有支持的指数都用 GMP。调优按一条曲线准备
+# 字典。
+
 # montgomery_lcm_multiplier = "1"  # string: [1|12]
 # Montgomery Stage1 scalar is montgomery_lcm_multiplier(1..B1) multiplied by 1 or 12. Edwards uses
 # its fixed 48*montgomery_lcm_multiplier scalar and rejects 12. This choice changes the output point

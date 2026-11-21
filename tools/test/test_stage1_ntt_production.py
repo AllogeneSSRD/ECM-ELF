@@ -396,6 +396,17 @@ def main():
         # spectra and 1,048,576 more for the GPU builder. A 3 MB limit
         # admits the spectra, but only with the host dictionary builder.
         automatic = {key: val for key, val in env.items() if key != "ECM_EDWARDS_NTT_DICTIONARY"}
+        reference = None
+        for threshold, backend in (("auto", "host"), (8192, "host"), (8191, "gpu"), (1, "gpu")):
+            value = '"auto"' if threshold == "auto" else threshold
+            work, cmd = fixture(f"naf_threshold_{threshold}", model="ed",
+                                extra=f"edwards_naf_window_bits = 6\nntt_naf_gpu_min_bits = {value}\n")
+            call, data = direct(work, cmd, 8191, 20, 26, 1)
+            log = run(work, call, text=data, env_override=automatic)
+            assert f"backend={backend} root_inverse_ms=" in log
+            points = saved_points(work / "out.save", 8191, 20, True)
+            assert set(points) == {26} and (reference is None or reference == points)
+            reference = points
         dictionary_config = 'edwards_naf_window_bits = 6\nntt_convolution = "weighted"\nntt_length = 2560\n'
         expected = None
         for limit, builder, workspace in ((0, "gpu", 1048576), (3, "host", 0)):
