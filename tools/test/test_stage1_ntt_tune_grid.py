@@ -138,6 +138,7 @@ def main():
     baseline["log2_length"] = baseline["length"].bit_length()-1
     baseline.update(program_version="0.71.6", b1=32)
     slow = dict(baseline, b1=64, program_version="0.71.9", updated_at="2026-11-20T23:59:59.000000000Z")
+    slow["carry_bits"] = 1 if slow["carry_bits"] != 1 else 2
     slow["iter_per_s"] /= 2
     for key in ("median_ms", "total_device_ms", "stddev_seconds"):
         slow[key] *= 2
@@ -152,6 +153,8 @@ def main():
         assert "log2_length" not in cols and all(any(r.get(k)!="" for r in rows()) for k in cols)
         assert cols[cols.index("program_version")+1] == "updated_at" and cols.index("b1") > cols.index("updated_at")
         winner, = (r for r in rows() if r["length"] == baseline["length"])
+        assert winner["carry_bits"] == baseline["carry_bits"]
+        assert cols.index("segments") > cols.index("budget_limit_bytes")
         assert winner["b1"] == 32 and winner["program_version"] == "0.71.6"
         assert winner["iter_per_s"] == baseline["iter_per_s"] and winner["updated_at"] == baseline["updated_at"]
 

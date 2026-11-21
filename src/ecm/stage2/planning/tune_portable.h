@@ -230,7 +230,7 @@ inline void validate_stage1_ntt(const Fields &s) {
             throw std::runtime_error("invalid Stage1 NTT production measurement");
     }
     if(s.count("sample_target_ms")) {
-        const auto window=uint(s,"naf_window"), width=uint(s,"reference_bits");
+        const auto window=uint(s,"naf_window"), width=optional_uint(s,"reference_bits");
         const auto steps=uint(s,"timed_steps"), block=uint(s,"block_steps"), target=uint(s,"sample_target_ms");
         const auto curve=text(s,"curve");
         const auto ms=real(s,"median_ms");
@@ -250,8 +250,8 @@ inline void validate_stage1_ntt(const Fields &s) {
             group_ms=real(s,"total_device_ms")/groups;
         }
         if(!block || (!stratified && block>64) || !steps || steps>UINT32_MAX || steps%block || (!grouped && steps>64*block) ||
-           width<ecm_stage1::stage1_ntt_min_exponent || width>ecm_stage1::stage1_ntt_max_exponent ||
-           uint(s,"segments")!=(width+8191)/8192 || (grouped ? !target || target>UINT32_MAX : target!=20 && target!=50) ||
+           (width && (width<ecm_stage1::stage1_ntt_min_exponent || width>ecm_stage1::stage1_ntt_max_exponent ||
+                      uint(s,"segments")!=(width+8191)/8192)) || (grouped ? !target || target>UINT32_MAX : target!=20 && target!=50) ||
            (s.count("sample_phase") ? !grouped || groups>ecm_stage1::ntt_max_repeats ||
                 uint(s,"sample_phase")<1 || uint(s,"sample_phase")>2 :
                 grouped ? groups!=3 && groups!=5 : groups!=(target==20 ? 3u : 5u)) ||
