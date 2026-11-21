@@ -185,7 +185,7 @@ CurveKind prepare_edwards_lane(mpz_srcptr n, uint64_t sigma, mpz_ptr factor, uin
 }
 
 void prepare_edwards_batch(mpz_srcptr n, const std::vector<uint64_t>& sigmas, unsigned words,
-        unsigned threads, bool use_prefix, std::vector<CurveKind>& kinds, ecm_edwards::Array& factors,
+        unsigned threads, bool use_prefix, unsigned carrier_bits, std::vector<CurveKind>& kinds, ecm_edwards::Array& factors,
         std::vector<uint32_t>& initial, uint32_t* seeds) {
     const unsigned curves = unsigned(sigmas.size());
     std::vector<unsigned> order(curves);
@@ -196,7 +196,7 @@ void prepare_edwards_batch(mpz_srcptr n, const std::vector<uint64_t>& sigmas, un
     }
     const auto prepare = [&](unsigned worker) {
         std::optional<ecm_edwards::MersenneConstruction> scratch;
-        if (use_prefix) scratch.emplace(n);
+        if (use_prefix) scratch.emplace(n,carrier_bits);
         ecm_edwards::Integer d, px, py;
         for (unsigned j = curves * worker / threads; j < curves * (worker + 1) / threads; ++j) {
             const unsigned i = order[j];
@@ -397,7 +397,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         if (edwards) {
             const unsigned available = opt.execution.worker_cpu_count ? opt.execution.worker_cpu_count :
                 std::max(1u, std::thread::hardware_concurrency());
-            const unsigned automatic = p >= 4096 && curves >= 8 ? 4 : 1;
+            const unsigned automatic = (p >= 4096 && curves >= 8) || (carrier && p >= (1u << 20)) ? 4 : 1;
             const unsigned requested = opt.execution.gpu_init_threads ? opt.execution.gpu_init_threads : automatic;
             // Reserve complete prefix snapshots plus ordinary GMP temporaries per worker.
             const size_t scratch_bytes = size_t(3 * 64 + 48) * words * sizeof(uint32_t);
@@ -407,8 +407,8 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             std::vector<uint32_t> host_seeds(host_seed_words);
             auto* seeds = !naf_window ? nullptr : gpu_dictionary ? dictionary.data() : host_seeds.data();
             const auto curve_started = Clock::now();
-            const bool prefix = affordable != 0 && !carrier;
-            prepare_edwards_batch(N, sigmas, words, workers, prefix,
+            const bool prefix = affordable != 0 && (!carrier || (p >= 8192 && p - target_bits <= 256));
+            prepare_edwards_batch(N, sigmas, words, workers, prefix, carrier ? unsigned(p) : 0,
                                   kinds, factors, lanes_initial, seeds);
             curve_setup_ms = milliseconds_since(curve_started);
             ecm_ts_fprintf(stdout, "stage1_ntt_edwards_setup: threads=%u ms=%.3f prefix=%u fold=%u\n",

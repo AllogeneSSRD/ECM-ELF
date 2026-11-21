@@ -34,7 +34,18 @@ inline Setup inverse(mpz_t out, const mpz_t value, const mpz_t n, mpz_t factor) 
 
 // One worker owns this state for a single immutable Mersenne modulus.
 struct MersenneConstruction {
-    explicit MersenneConstruction(mpz_srcptr modulus) : n(modulus), bits(mpz_sizeinbase(n, 2)) {
+    explicit MersenneConstruction(mpz_srcptr modulus, mp_bitcnt_t carrier_bits = 0)
+        : n(modulus), bits(carrier_bits ? carrier_bits : mpz_sizeinbase(n, 2)), cofactor(carrier_bits != 0) {
+        if (cofactor) {
+            // Folding is valid modulo every divisor of 2^bits-1. All exceptional
+            // branches and inverse checks still need canonical residues modulo n.
+            Integer carrier;
+            mpz_setbit(carrier.v,bits);
+            mpz_sub_ui(carrier.v,carrier.v,1);
+            if (mpz_sgn(n) <= 0 || !mpz_divisible_p(carrier.v,n))
+                throw std::invalid_argument("invalid Edwards construction carrier");
+            return;
+        }
         if (mpz_sgn(n) <= 0 || mpz_scan0(n, 0) != bits)
             throw std::invalid_argument("Edwards Mersenne construction requires a full Mersenne modulus");
     }
@@ -44,6 +55,7 @@ struct MersenneConstruction {
     };
     const mpz_srcptr n;
     const mp_bitcnt_t bits;
+    const bool cofactor;
     Integer high;
     std::array<Jacobian, 64> before_bit;
     uint64_t previous_sigma = 0;
@@ -60,7 +72,9 @@ struct MersenneConstruction {
             mpz_tdiv_r_2exp(value, value, bits);
             mpz_add(value, value, high.v);
         }
-        if (mpz_cmp(value, n) == 0) mpz_set_ui(value, 0);
+        if (cofactor) {
+            if (mpz_cmp(value,n) >= 0) mpz_mod(value,value,n);
+        } else if (mpz_cmp(value, n) == 0) mpz_set_ui(value, 0);
         if (negative && mpz_sgn(value)) mpz_sub(value, n, value);
     }
 };

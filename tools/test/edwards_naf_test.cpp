@@ -147,9 +147,9 @@ struct ConstructionOutput {
     ecm_edwards::Integer d, x, y, a24, factor;
 };
 
-static std::array<unsigned, 3> compare_construction(mpz_srcptr n, const std::vector<uint64_t>& sigmas) {
+static std::array<unsigned, 3> compare_construction(mpz_srcptr n, const std::vector<uint64_t>& sigmas, unsigned carrier = 0) {
     using ecm_edwards::Setup;
-    ecm_edwards::MersenneConstruction worker(n);
+    ecm_edwards::MersenneConstruction worker(n,carrier);
     ConstructionOutput generic, optimized;
     std::array<unsigned, 3> counts{};
     for (const uint64_t sigma : sigmas) {
@@ -193,6 +193,13 @@ static void check_mersenne_construction() {
         const auto result = compare_construction(modulus.v, sigmas);
         for (size_t i = 0; i < counts.size(); ++i)
             counts[i] += result[i];
+    }
+    for (unsigned bits : {12u, 8192u}) {
+        ecm_edwards::Integer target;
+        mpz_setbit(target.v,bits);
+        mpz_sub_ui(target.v,target.v,1);
+        mpz_divexact_ui(target.v,target.v,3);
+        compare_construction(target.v,{26,27,28,UINT64_MAX,UINT64_MAX-1},bits);
     }
     if (!counts[0] || !counts[1] || !counts[2])
         throw std::runtime_error("missing ready, factor or degenerate construction coverage");
