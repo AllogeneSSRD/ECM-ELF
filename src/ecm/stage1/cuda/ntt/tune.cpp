@@ -13,6 +13,7 @@
 #include "ecm/platform/program_version.h"
 #include "ecm/platform/stop.h"
 #include <algorithm>
+#include <cstdio>
 #include <array>
 #include <climits>
 #include <cmath>
@@ -100,9 +101,9 @@ unsigned linear_exponent_limit(unsigned length, unsigned bpw) {
 void print_measurement(const Measurement& m, unsigned target) {
     const auto& p = m.plan;
     const auto shape = tune_shape_descriptor(p);
-    ecm_ts_fprintf(stdout, "%u %u %s %uc %.0f iter/s dataflow=%u target_ms=%u timed_steps=%u block_steps=%u group_ms=%.3f\n",
+    ecm_ts_fprintf(stdout, "%u %u %s %uc %.0f iter/s %ubit %.3f/%u ms %u %u\n",
         p.length, p.max_exp, shape.c_str(), m.batch, m.throughput()*m.steps, p.dataflow,
-        target, m.steps, m.steps / m.blocks, m.group_ms());
+        m.group_ms(), target, m.steps, m.steps / m.blocks);
 }
 
 Stage1NttOptions fixed_plan(Stage1NttOptions o, const Plan& plan) {
@@ -256,7 +257,7 @@ public:
             }
         }
         prepare_blocks(sample);
-        ecm_ts_fprintf(stdout, "stage1_ntt_naf_sample: b1=%llu naf=%u columns=%u sampled=%u nonzero=%u\n",
+        ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_naf_sample: b1=%llu naf=%u columns=%u sampled=%u nonzero=%u\n",
                        static_cast<unsigned long long>(b1_), window, sample.columns, bits, sample.nonzero);
         return windows_.emplace(window, std::move(sample)).first->second;
     }
@@ -311,7 +312,7 @@ public:
         }
         // A composite carrier can factor during every construction. The order-four
         // point (1,0) still gives a valid affine odd-multiple table over this ring.
-        ecm_ts_fprintf(stdout, "stage1_ntt_probe: p=%u using order-four calibration point\n", p_);
+        ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_probe: p=%u using order-four calibration point\n", p_);
         mpz_set_ui(x.v, 1); mpz_set_ui(y.v, 0); mpz_set_ui(d.v, 2);
         if (ecm_edwards::ntt::affine_dictionary(dictionary_, 1, 0, words, window,
                 x.v, y.v, d.v, n.v, factor.v) != ecm_edwards::Setup::Ready)
@@ -660,12 +661,11 @@ struct Score {
 enum BatchRole : unsigned { Single = 1, Capacity = 2, Fastest = 4, Economical = 8 };
 
 void table_header() {
-    ecm_ts_fprintf(stdout,"length max_exp ntt_type batch iter/s\n");
+    ecm_ts_fprintf(stdout,"length max_exp ntt_type batch iter/s dataflow actual/target steps/group steps/block\n");
 }
 
 void round_header(unsigned p, unsigned window, const char* phase) {
-    ecm_ts_fprintf(stdout,"stage1_ntt_round: p=%u naf=%u phase=%s\n",p,window,phase);
-    table_header();
+    ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_round: p=%u naf=%u phase=%s\n",p,window,phase);
 }
 
 void report_batches(const std::map<BatchRole,Score>& scores) {
@@ -685,7 +685,7 @@ void report_batches(const std::map<BatchRole,Score>& scores) {
             widths[i] = std::max(widths[i],int(rows.back()[i].size()));
     }
     for (const auto& row : rows)
-        ecm_log_accent(EcmLogAccent::Report,"%-*s %*s %*s %-*s %*s %*s iter/s dataflow=%s\n",
+        ecm_log_accent(EcmLogAccent::BatchResult,"%-*s %*s %*s %-*s %*s %*s iter/s dataflow=%s\n",
             widths[0],row[0].c_str(),widths[1],row[1].c_str(),widths[2],row[2].c_str(),
             widths[3],row[3].c_str(),widths[4],row[4].c_str(),widths[5],row[5].c_str(),row[6].c_str());
 }
@@ -753,6 +753,7 @@ class TuneMatrix {
         return score;
     }
 public:
+    bool header_pending = true;
     unsigned measured = 0;
     TuneMatrix(const Device& device, const ecm_stage1::Stage1Request& request, unsigned p,
                unsigned window, const pt::Profile& db, TuneNafSamples& naf_samples, const ecm_stage1::NttTuneGrid& grid = {}, double deadline = 0)
@@ -814,10 +815,12 @@ public:
         }
         if (!target || path.empty()) return;
         round_header(p_,window_,"recheck");
+        header_pending = true;
         Fields fresh;
         auto options = fixed_plan(request_.options.execution.ntt,best.plan);
         const auto test = sample(options,best.batch,SamplePhase::Fine,&fresh,target);
-        const double previous = best.rate;
+        double previous = best.rate;
+        auto accent = EcmLogAccent::Retained;
         const char* status = test.rate ? "kept" : "unavailable";
         if (test.rate > previous) {
             // Another process may have raised the record or changed this search while the GPU ran.
@@ -837,7 +840,8 @@ public:
                     (at == db.stage1_ntt.end() || real(*it,"iter_per_s") > real(*at,"iter_per_s"))) at = it;
             }
             if (at == db.stage1_ntt.end()) status = "superseded";
-            if (at != db.stage1_ntt.end() && test.rate > real(*at,"iter_per_s")) {
+            else previous = real(*at,"iter_per_s");
+            if (at != db.stage1_ntt.end() && test.rate > previous) {
                 fresh["condition"] = at->at("condition");
                 if (!scope.empty()) {
                     fresh["batch_scope"] = at->at("batch_scope");
@@ -856,13 +860,17 @@ public:
                 ecm_io::write_atomic(path,db.serialize());
                 best = test;
                 status = "updated";
+                accent = EcmLogAccent::Improved;
             }
         }
-        const char* format = "stage1_ntt_recheck: p=%u naf=%u length=%u batch=%u graph=%u previous_iter_per_s=%.9g measured_iter_per_s=%.9g status=%s\n";
-        if (best.rate > previous)
-            ecm_log_accent(EcmLogAccent::Improved,format,p_,window_,best.plan.length,best.batch,best.plan.window,previous,test.rate,status);
-        else
-            ecm_ts_fprintf(stdout,format,p_,window_,best.plan.length,best.batch,best.plan.window,previous,test.rate,status);
+        char change[64] = "n/a";
+        if (test.rate > 0) {
+            const double percent = 100 * ((test.rate - previous) / previous);
+            std::snprintf(change,sizeof(change),percent == 0 ? "%.2f%%" : "%+.2f%%",percent);
+        }
+        ecm_log_accent(accent,"stage1_ntt_recheck: p=%u naf=%u length=%u batch=%u graph=%u\n",
+            p_,window_,best.plan.length,best.batch,best.plan.window);
+        ecm_log_accent(accent,"%.9g vs %.9g (old)  %s, status=%s\n",test.rate,previous,change,status);
     }
     std::optional<Stage1NttOptions> previous_plan(const Stage1NttOptions& options, unsigned batch,
                                                   const Plan& plan) const {
@@ -1033,6 +1041,10 @@ public:
             if (remeasurement) *remeasurement = std::move(row);
             else pending_.push_back(std::move(row));
             ++measured;
+            if (header_pending) {
+                table_header();
+                header_pending = false;
+            }
             print_measurement(m, target);
             return observe(phase,{batch,m.plan,m.throughput()*m.steps,pt::deviation(m.ms)/m.group_ms()});
         } catch (const BudgetError& e) {
@@ -1115,7 +1127,7 @@ struct WindowSearch {
             if (!shapes[mode]) continue;
             const auto& shape = *shapes[mode];
             const unsigned cap = std::min(caps[mode].max_curves, grid.batch.last);
-            ecm_ts_fprintf(stdout,"stage1_ntt_plan: p=%u length=%u bpw=%u naf=%u capacity=%u%s\n",
+            ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_plan: p=%u length=%u bpw=%u naf=%u capacity=%u%s\n",
                 p,shape.shape.length,shape.shape.bpw,w,cap,cap ? "" : " reason=memory_budget");
             if (cap < grid.batch.first) continue;
             if (mode == Mixed) {
@@ -1242,9 +1254,9 @@ struct WindowSearch {
         if (scan_graph) {
             auto& winner = best->second;
             auto options = fixed_plan(families.front().options,winner.plan);
-            ecm_ts_fprintf(stdout,"stage1_ntt_graph_scan: p=%u naf=%u batch=%u length=%u\n",
+            ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_graph_scan: p=%u naf=%u batch=%u length=%u\n",
                            p,w,winner.batch,winner.plan.length);
-            table_header();
+            matrix.header_pending = true;
             for (int steps : {4, 8, 32, 64}) {
                 options.window = steps;
                 const auto score = matrix.sample(options,winner.batch,SamplePhase::Fine);
@@ -1315,10 +1327,12 @@ bool tune_windows(const Device& device, const ecm_stage1::Stage1Request& request
             if (!trial.capacity.rate) continue;
             const double started = now_s();
             const bool advance = !compete || leaders.at(trial.capacity.batch) == &trial;
-            if (advance)
+            if (advance) {
                 round_header(p,trial.w,"fine");
+                trial.matrix.header_pending = true;
+            }
             if (compete)
-                ecm_ts_fprintf(stdout,"stage1_ntt_naf_screen: p=%u naf=%u capacity=%u iter_per_s=%.0f refine=%u\n",
+                ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_naf_screen: p=%u naf=%u capacity=%u iter_per_s=%.0f refine=%u\n",
                                p,trial.w,trial.capacity.batch,trial.capacity.rate,unsigned(advance));
             const bool refined = advance && trial.refine(exhaustive);
             finished |= refined;
@@ -1331,6 +1345,7 @@ bool tune_windows(const Device& device, const ecm_stage1::Stage1Request& request
             trial.matrix.report_lengths();
             ecm_log_accent(EcmLogAccent::Report,"stage1_ntt_tune: p=%u measured=%u reused=%zu seconds=%.3f naf=%u\n",
                            p,trial.matrix.measured,trial.matrix.reused(),trial.seconds+now_s()-started,trial.w);
+            ecm_ts_fprintf(stdout,"============================================================\n");
         }
     } catch (...) {
         for (auto& trial : searches)

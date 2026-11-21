@@ -37,9 +37,18 @@ def main():
         assert (result.returncode == 0) == success, (name, result.stdout[-2500:])
         lines = result.stdout.splitlines()
         prefix = "" if "--no-log-timestamp" in flags else r"\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\] "
+        first_measurement = True
         for i, line in enumerate(lines):
+            if "stage1_ntt_tune:" in line:
+                assert re.fullmatch(prefix + r"=+", lines[i+1]), name
             if "stage1_ntt_round:" in line or "stage1_ntt_graph_scan:" in line:
-                assert re.fullmatch(prefix + "length max_exp ntt_type batch iter/s", lines[i+1]), name
+                first_measurement = True
+            header = prefix + "length max_exp ntt_type batch iter/s dataflow actual/target steps/group steps/block"
+            if re.fullmatch(header, line):
+                assert re.match(prefix + r"\d+ \d+ [01]:", lines[i+1]), name
+            if re.match(prefix + r"\d+ \d+ [01]:", line):
+                assert bool(re.fullmatch(header, lines[i-1])) == first_measurement, name
+                first_measurement = False
         return result.stdout
 
     def rows():
@@ -90,6 +99,14 @@ def main():
             log = run(f"recheck_{mode}_{status}", shorter, settings=settings)
             assert "measured=1 " in log and log.count("stage1_ntt_recheck:") == 1
             assert f"status={status}" in log and (previous != database.read_bytes()) == (status == "updated")
+            comparison = re.search(r"stage1_ntt_recheck: p=\d+ naf=6 length=\d+ batch=1 graph=\d+\n"
+                                   r"(?:\[[^\n]+?\] )?(\S+) vs (\S+) \(old\)  ([+-][\d.]+)%, status="
+                                   + status + r"$", log, re.M)
+            assert comparison, log
+            measured, historical, percent = map(float, comparison.groups())
+            assert abs(historical / fine[fields.index("iter_per_s")] - 1) < 1e-8
+            assert abs(percent - 100 * (measured / historical - 1)) <= 0.0051 + abs(percent) * 1e-8
+            assert (comparison[3][0] == "+") == (status == "updated")
             updated = rows()
             assert len(updated) == 1
             if status == "updated":
@@ -244,7 +261,7 @@ def main():
         summaries = re.findall(r"stage1_ntt_tune: p=\d+ measured=(\d+) reused=(\d+)", log)
         assert len(summaries) == 2
         assert log.count("stage1_ntt_naf_sample:") == 1
-        assert log.count("length max_exp ntt_type batch iter/s") >= 4
+        assert log.count("length max_exp ntt_type batch iter/s") == (4 if name == "crossing_cold" else 2)
         assert re.findall(r"stage1_ntt_length_done: p=\d+ naf=6 length=(\d+) phase=fine", log) == ["256", "512"]
         assert "\x1b[" not in log
         if name == "crossing_cold":
@@ -366,7 +383,10 @@ def main():
         log = run(f"short_blocks_{curve}", ["--param", curve, "-tune",
             "ntt,length=4096,batch=32,time=0.01" + spec, "128"],
             settings="ntt_profile = 1\nntt_window_bits = 64")
-        assert len(re.findall(r"block_steps=\d+ group_ms=\d+\.\d+", log)) == 2
+        samples = re.findall(r" iter/s (\d+)bit (\d+\.\d{3})/1 ms (\d+) (\d+)$", log, re.M)
+        assert len(samples) == 2
+        for _, actual, steps, block in samples:
+            assert float(actual) > 0 and 0 < int(block) < 64 and int(steps) % int(block) == 0
         tested = [r for r in rows() if r["curve"] == ("edwards" if curve == "e" else "mont0")]
         assert {phase for r in tested for phase, _ in coverage(r)} == {1, 2}
         for r in tested:

@@ -33,7 +33,7 @@
 
 重复运行显式 `-tune` 时，每个全部命中的精调窗口只复测原 `Best` 一次，沿用其 batch、NTT 形状、Graph 步数、精测组数及原记录的每组目标时长。一次复测包含正常的预热、正式组和末点核对。新 `iter/s` 严格高于记录时更新完整采样，并按已保留批量重算 95% 档；持平或较慢时保留原记录。只通过粗筛的窗口继续复用粗测。生产任务照常直接使用匹配记录。容量变化或计时精度提高时，补测搜索仍缺的候选。限时或中断时，以 tune 文件名加搜索标识及 `.partial` 保存续跑所需的中间测量，同条件搜索完成后清除临时文件。
 
-粗测、精测、最终 Graph 扫描和缓存复测开始时，各显示一次普通文本表头。表头单独成行，时间戳与其他控制台日志使用相同设置。蓝色的 `stage1_ntt_length_done` 汇报本轮该长度最高的精测吞吐，只有粗测时标为 `coarse`。复测行 `stage1_ntt_recheck` 给出旧吞吐和实测吞吐，成功写入时以红色显示 `status=updated`，保留原记录时显示 `status=kept`。重定向输出和镜像日志使用纯文本，设置 `NO_COLOR` 可关闭终端强调色。
+粗测、精测、最终 Graph 扫描和缓存复测各自在首条实测数据前显示一次普通文本表头。全轮仅复用缓存时省略表头。轮次、计划、NAF 采样与筛选、校准探针和 Graph 扫描的小标题使用亮青色（`#61D6D6`），表头列名使用默认颜色。发布区的 `Single`、`Max`、`Best`、`95%` 四行使用绿色，随后的 `stage1_ntt_length_done` 和 `stage1_ntt_tune` 两行使用蓝色。每轮汇总 `stage1_ntt_tune` 后打印一行 `=` 分隔各轮。各行遵循控制台时间戳设置。蓝色的 `stage1_ntt_length_done` 汇报本轮该长度最高的精测吞吐，只有粗测时标为 `coarse`。复测分两行显示。首行 `stage1_ntt_recheck` 列出参数，次行例如 `258389.438 vs 258160.555 (old)  +0.09%, status=updated`，依次为本次吞吐、历史最优吞吐（均为 iter/s）、相对变化和状态。正号表示超过历史最优，负号表示下降，持平显示 `0.00%`，无有效测量显示 `n/a`。成功写入时以黄色显示 `status=updated`，保留原记录时以红色显示 `status=kept`。重定向输出和镜像日志使用纯文本，设置 `NO_COLOR` 可关闭终端强调色。
 
 x-only 的采样池包含 64 个可重现的标量位。原生 Edwards 用指定 B1、w 编码完整 NAF。总长不超过 512 列时，全部列进入采样池。更长时按从高到低的列序等分为 8 段，各取居中连续的 64 列。调优按设备实测速率，从池中选择正式组使用的块长。
 
@@ -47,7 +47,7 @@ Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，�
 
 例如 x-only 选中 64 步、窗口为 16 时，每块启动 4 个 Graph。若该块预热实测 0.8 ms，默认每组回放 125 块，即每曲线 8000 步。窗口是每个 Graph 的步数上限。x-only 的正数尾段可独立建图；所选块短于窗口时，测到的是该尾段。原生 NAF 的连续零列使用 1、2、4 等二次幂长度的 Graph，非零列直接执行倍点和点加。例如 186 列含 26 个非零列时，最短块约 7 列。若这 7 列耗时 160 ms，默认正式组只执行一块。100 ms 是每个正式组的软目标，调优命令的总耗时还包含初始化、试跑及核对。
 
-`sample_pool_steps` 是采样池列数，`block_steps` 是一块实际回放的列数，`timed_steps` 是每曲线每个正式组的列数，`repeats` 是正式组数。原生 Edwards 保存完整标量列数 `naf_columns`、一轮的非零列数 `sample_nonzero` 和所有正式组的 CUDA event 总时间 `total_device_ms`。聚合吞吐 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。各组的中位时间 `median_ms` 和标准差用于观察波动。控制台每条测量同时显示 `target_ms`、`timed_steps`、`block_steps` 和实测 `group_ms`。原生 Edwards 的 `group_ms` 取各组平均，x-only 取中位数。x-only 仍采用 `1000 × batch × timed_steps / median_ms`。`Single`、`Best`、`95%` 分别报告单曲线、峰值及达到峰值 95% 的最小实测批量。[GPU 回放和计时](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/cuda/ntt/tune.cpp)
+`sample_pool_steps` 是采样池列数，`block_steps` 是一块实际回放的列数，`timed_steps` 是每曲线每个正式组的列数，`repeats` 是正式组数。原生 Edwards 保存完整标量列数 `naf_columns`、一轮的非零列数 `sample_nonzero` 和所有正式组的 CUDA event 总时间 `total_device_ms`。聚合吞吐 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。各组的中位时间 `median_ms` 和标准差用于观察波动。控制台实测行在吞吐之后依次列出 dataflow 掩码（十进制数值加 `bit`）、每组实际/目标设备时间（ms）、每条曲线每组步数（`steps/group`）和每条曲线每个回放块的步数（`steps/block`）。两列步数相除即每组回放块数。原生 Edwards 每步对应一列 NAF，x-only 每步对应一个标量位。原生 Edwards 的 `group_ms` 取各组平均，x-only 取中位数。x-only 仍采用 `1000 × batch × timed_steps / median_ms`。`Single`、`Best`、`95%` 分别报告单曲线、峰值及达到峰值 95% 的最小实测批量。[GPU 回放和计时](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/cuda/ntt/tune.cpp)
 
 ## Tune 文件
 

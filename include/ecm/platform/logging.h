@@ -34,5 +34,5 @@ void ecm_enable_console_ansi();
 // Timestamped wrappers for C stdio output.
 int ecm_ts_vfprintf(FILE *stream, const char *fmt, va_list ap);
 int ecm_ts_fprintf(FILE *stream, const char *fmt, ...);
-enum class EcmLogAccent { Report, Improved };
+enum class EcmLogAccent { Subtitle, BatchResult, Report, Improved, Retained };
 void ecm_log_accent(EcmLogAccent accent, const char *fmt, ...);

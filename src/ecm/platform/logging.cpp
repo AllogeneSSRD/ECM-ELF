@@ -506,8 +506,15 @@ void ecm_log_accent(EcmLogAccent accent, const char *fmt, ...) {
 #else
     const bool terminal = isatty(fileno(stdout));
 #endif
-    if (terminal && !std::getenv("NO_COLOR"))
-        color = accent == EcmLogAccent::Report ? "\033[94m" : "\033[91m";
+    if (terminal && !std::getenv("NO_COLOR")) {
+        switch (accent) {
+        case EcmLogAccent::Subtitle:   color = "\033[38;2;97;214;214m"; break;
+        case EcmLogAccent::BatchResult: color = "\033[32m"; break;
+        case EcmLogAccent::Report:     color = "\033[94m"; break;
+        case EcmLogAccent::Retained:   color = "\033[91m"; break;
+        case EcmLogAccent::Improved:   color = "\033[93m"; break;
+        }
+    }
     va_list ap;
     va_start(ap, fmt);
     write_timestamped(stdout, fmt, ap, color);
