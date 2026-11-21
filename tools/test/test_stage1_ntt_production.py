@@ -291,11 +291,14 @@ def main():
 
         # All layouts evaluate the same points. The full tile and a split
         # outer plan independently exercise the unfused path.
+        p = 65521
+        n = (1 << p) - 1
         reference = None
         for length, tile, outer, graph, fused in (
             (4096, 12, 4, 16, False), (4096, 11, 4, 16, True),
             (8192, 11, 4, 0, True), (8192, 10, 4, 16, True),
             (8192, 10, 1, 16, False),
+            (32768, 12, 4, 16, True), (32768, 12, 1, 16, False),
         ):
             work, cmd = fixture(f"packed_outer_{length}_{tile}_{outer}", model="ed",
                                 extra=f'edwards_naf_window_bits = 6\nntt_convolution = "weighted"\n'

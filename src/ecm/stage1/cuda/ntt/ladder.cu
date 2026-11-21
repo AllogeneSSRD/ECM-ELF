@@ -612,7 +612,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool cached = (requested & CachedCarry) && options.weighted && !segmented && !warp_reduce && s.words <= 32 * threads;
     const bool deferred = segmented && !packed && (requested & DeferredPack);
     const bool packed_outer = (requested & PackedWeightedOuter) && options.weighted && !mixed && !deferred &&
-        forward_input && (s.length == 4096 || s.length == 8192) &&
+        forward_input && (s.length == 4096 || s.length == 8192 || s.length == 32768) &&
         ctx.nms == 1 && ctx.ms[0] >= 1 && ctx.ms[0] <= 3;
     if (packed_outer) result.dataflow |= PackedWeightedOuter;
     if (routed) result.dataflow |= DirectRoute;

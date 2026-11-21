@@ -79,7 +79,7 @@ Edwards 的 `edwards_naf_window_bits=0` 在当前 GPU 的兼容记录中优先�
 
 下表列出每种卷积首选最短长度的连续位宽区间。x-only 和关闭收紧界的原生 NAF 使用保守界。原生 Edwards 开启收紧界时采用连续的原生区间，自动选型和显式指定长度都检查该上限。例如 20,480 点的上限为 497,665，497,666 位起使用 32,768 点，497,680 位也归入这一档。[生产选长](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [连续上限](../../include/ecm/stage1/ntt_sizes.h)
 
-RTX 4070 Ti 的两列实测峰值按 tune 记录的卷积类型（`stage1_linear` 或 `stage1_weighted`）和实际 NTT 长度分组。每格先列组内最高聚合吞吐 `iter/s`，再列用未舍入吞吐换算的 `µs/iter = 1,000,000 / (iter/s)`。一次迭代指一条曲线的一列 Edwards NAF。换算值是按批内所有曲线的总列数分摊的设备时间。两列各自在全部代表指数、NAF 窗口、批量、Graph 和粗精测记录中取最大值。峰值列的「—」表示文件中没有该组合的实测记录。
+RTX 4070 Ti 的两列实测峰值按 tune 记录的卷积类型（`stage1_linear` 或 `stage1_weighted`）和实际 NTT 长度分组。每格先列组内最高聚合吞吐 `iter/s`，再列用未舍入吞吐换算的 `µs/iter = 1,000,000 / (iter/s)`。一次迭代指一条曲线的一列 Edwards NAF。换算值是按批内所有曲线的总列数分摊的设备时间。两列各自在全部代表指数、NAF 窗口、批量、Graph 和粗精测记录中取最大值。峰值列的「—」表示文件中没有该组合的实测记录。其中加权 32,768 点只有四条粗测，111.819 µs 来自 p=401409、单曲线、w12。50 万位批量的实际列吞吐见[同卡生产复测](../performance/STAGE1_MERSENNE_NTT.md#50-万位-edwards-列吞吐与-32768-点热点)。
 
 | N（点） | 分解 | linear 的 p | IBDWT 保守界的 p | IBDWT 原生 Edwards 的 p（常规） | linear 峰值（iter/s · µs/iter） | IBDWT 峰值（iter/s · µs/iter） |
 | ---: | :--- | ---: | ---: | ---: | ---: | ---: |
