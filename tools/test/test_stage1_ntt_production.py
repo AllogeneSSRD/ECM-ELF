@@ -28,6 +28,8 @@ FIXED_WIDE_FORWARD = 1 << 19
 SEGMENTED_CARRY = 1 << 5
 CACHED_FUSED_WEIGHTED_CARRY = 1 << 14
 WARP_WEIGHTED_CARRY = 1 << 20
+PACKED_WEIGHTED_OUTER = 1 << 21
+FIXED_CARRY_OFFSETS = 1 << 22
 
 
 def ntt_executions(log):
@@ -225,24 +227,25 @@ def main():
         assert graph_points[sigma] == x * pow(z, -1, n) % n
         print("PASS Edwards 2XY inverse input dispatch, Graph/direct and integer endpoint", flush=True)
 
-        p, b1, sigma = 104729, 16, 26
+        b1, sigma = 16, 26
         reduction = SEGMENTED_CARRY | CACHED_FUSED_WEIGHTED_CARRY
-        by_batch = {}
-        for batch in (31, 32):
-            work, cmd = fixture(f"edwards_8192_carry_{batch}", model="ed",
-                                extra='edwards_naf_window_bits = 6\nntt_convolution = "weighted"\nntt_length = 8192\n')
-            call, data = direct(work, cmd, p, b1, sigma, batch)
-            log = run(work, call, text=data)
-            [flow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
-            assert int(flow) & reduction == (reduction if batch == 32 else 0), log
-            by_batch[batch] = saved_points(work / "out.save", p, b1, True)
-            assert set(by_batch[batch]) == set(range(sigma, sigma + batch))
-        assert all(by_batch[32][seed] == x for seed, x in by_batch[31].items())
-        n = (1 << p) - 1
-        for seed in (sigma, sigma + 31):
-            _, x, z = edwards_stage1(n, seed, b1)
-            assert by_batch[32][seed] == x * pow(z, -1, n) % n
-        print("PASS 8192-point Edwards carry dispatch, common lanes and integer endpoints", flush=True)
+        for length, p in ((4096, 81919), (8192, 104729)):
+            by_batch = {}
+            for batch in (31, 32):
+                work, cmd = fixture(f"edwards_{length}_carry_{batch}", model="ed",
+                                    extra=f'edwards_naf_window_bits = 6\nntt_convolution = "weighted"\nntt_length = {length}\n')
+                call, data = direct(work, cmd, p, b1, sigma, batch)
+                log = run(work, call, text=data)
+                [flow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
+                assert int(flow) & reduction == (reduction if batch == 32 else 0), log
+                by_batch[batch] = saved_points(work / "out.save", p, b1, True)
+                assert set(by_batch[batch]) == set(range(sigma, sigma + batch))
+            assert all(by_batch[32][seed] == x for seed, x in by_batch[31].items())
+            n = (1 << p) - 1
+            for seed in (sigma, sigma + 31):
+                _, x, z = edwards_stage1(n, seed, b1)
+                assert by_batch[32][seed] == x * pow(z, -1, n) % n
+        print("PASS 4096/8192-point Edwards carry dispatch, common lanes and integer endpoints", flush=True)
 
         for p, expects_direct in ((3433, True), (3457, False)):
             work, cmd = fixture(f"edwards_inverse_input_128_{p}", model="ed",
@@ -285,6 +288,46 @@ def main():
         _, x, z = edwards_stage1(n, last_sigma, b1)
         assert batch_points[24, 16][last_sigma] == x * pow(z, -1, n) % n
         print("PASS Edwards fixed wide forward/inverse, 23/24-curve dispatch and Graph/direct", flush=True)
+
+        # All layouts evaluate the same points. The full tile and a split
+        # outer plan independently exercise the unfused path.
+        reference = None
+        for length, tile, outer, graph, fused in (
+            (4096, 12, 4, 16, False), (4096, 11, 4, 16, True),
+            (8192, 11, 4, 0, True), (8192, 10, 4, 16, True),
+            (8192, 10, 1, 16, False),
+        ):
+            work, cmd = fixture(f"packed_outer_{length}_{tile}_{outer}", model="ed",
+                                extra=f'edwards_naf_window_bits = 6\nntt_convolution = "weighted"\n'
+                                      f'ntt_length = {length}\nntt_tile = {tile}\n'
+                                      f'ntt_outer_radix_limit = {outer}\nntt_window_bits = {graph}\n')
+            call, data = direct(work, cmd, p, b1, sigma, 5)
+            log = run(work, call, text=data)
+            [flow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
+            assert bool(int(flow) & PACKED_WEIGHTED_OUTER) == fused, log
+            points = saved_points(work / "out.save", p, b1, True)
+            assert set(points) == set(range(sigma, sigma + 5))
+            if reference is None:
+                reference = points
+            assert points == reference
+        _, x, z = edwards_stage1(n, sigma, b1)
+        assert reference[sigma] == x * pow(z, -1, n) % n
+        print("PASS weighted pack with one, two and three outer layers", flush=True)
+
+        offset_points = {}
+        for batch in (7, 8):
+            work, cmd = fixture(f"weighted_offsets_5120_{batch}", model="ed",
+                                extra='edwards_naf_window_bits = 6\nntt_convolution = "weighted"\nntt_length = 5120\n')
+            call, data = direct(work, cmd, 106531, 16, 26, batch)
+            log = run(work, call, text=data)
+            [flow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
+            assert bool(int(flow) & FIXED_CARRY_OFFSETS) == (batch == 8), log
+            offset_points[batch] = saved_points(work / "out.save", 106531, 16, True)
+            assert set(offset_points[batch]) == set(range(26, 26 + batch))
+        assert all(offset_points[8][seed] == point for seed, point in offset_points[7].items())
+        modulus = (1 << 106531) - 1
+        _, x, z = edwards_stage1(modulus, 33, 16)
+        assert offset_points[8][33] == x * pow(z, -1, modulus) % modulus
 
         default_points = None
         for mode, flags, length, upper in (
@@ -521,7 +564,7 @@ def main():
 
     p, b1, sigma = 131071, 20, 26
     wide_n = (1 << p) - 1
-    for model, curves, dataflow in (("mont", 2, 1575), ("ed", 1, 1639)):
+    for model, curves, dataflow in (("mont", 2, 1575 | PACKED_WEIGHTED_OUTER), ("ed", 1, 1639)):
         work, cmd = fixture(f"wide_segments_{model}", extra='ntt_convolution = "weighted"\n'
                             'ntt_length = 8192\nntt_tile = 12\n', model=model)
         call, data = direct(work, cmd, p, b1, sigma, curves)

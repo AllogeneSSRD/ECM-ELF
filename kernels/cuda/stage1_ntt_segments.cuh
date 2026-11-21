@@ -164,7 +164,7 @@ struct WeightedLimbSource {
     const WeightedLimb* spans;
 };
 
-template<class Coefficient>
+template<unsigned FixedLength = 0, class Coefficient>
 __device__ __forceinline__ WeightedWord gather_carry_limb(const WeightedLimbSource& source,
                                                         unsigned p, unsigned word, Coefficient coefficient) {
     const unsigned bit = 32 * word;
@@ -177,7 +177,13 @@ __device__ __forceinline__ WeightedWord gather_carry_limb(const WeightedLimbSour
     for (unsigned wrap = 0; wrap < wraps; ++wrap) {
         const unsigned lo = bit + wrap * p;
         for (unsigned j = span.first[wrap]; j < span.end[wrap]; ++j) {
-            sum += weighted_limb_fragment(coefficient(j), source.digits[j].bit, lo, mask);
+            unsigned start;
+            if constexpr (FixedLength) {
+                // p <= 31 * length. The numerator fits even at the last digit.
+                static_assert(31ull * FixedLength * FixedLength <= UINT32_MAX);
+                start = (p * j + FixedLength - 1) / FixedLength;
+            } else start = source.digits[j].bit;
+            sum += weighted_limb_fragment(coefficient(j), start, lo, mask);
         }
     }
     return sum;
@@ -226,7 +232,7 @@ inline unsigned weighted_segment_cache_bytes(const std::vector<WeightedLimb>& sp
     return capacity * sizeof(WeightedWord);
 }
 
-template<bool Routed, bool Cached = false>
+template<bool Routed, bool Cached = false, unsigned FixedLength = 0>
 __global__ __launch_bounds__(stage1_carry_segment, 2)
 void weighted_segment_limb_sums(uint32_t* state, WeightedLimbSource source, unsigned* headers,
                                 Shape s, Indices out, Cursor cursor) {
@@ -247,7 +253,7 @@ void weighted_segment_limb_sums(uint32_t* state, WeightedLimbSource source, unsi
     const auto gather = [&](unsigned word) {
         if constexpr (Cached) {
             if (word >= 2)
-                return gather_carry_limb(source, s.p, word, [&](unsigned digit) { return coefficients[digit - first]; });
+                return gather_carry_limb<FixedLength>(source, s.p, word, [&](unsigned digit) { return coefficients[digit - first]; });
         }
         return gather_carry_limb(source, s.p, word, load);
     };

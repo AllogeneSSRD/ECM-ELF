@@ -46,7 +46,7 @@ flowchart LR
 
 原生 Edwards 2XY 分别归约四个乘积时，倍点将 \(E=2XY\)、\(H=X^2-Y^2\) 和 \(F=X^2+Y^2-2Z^2\) 留给下一次 pack。计算 \(F\) 之前仍写回规范的 \(G=X^2+Y^2\) 和 \(2Z^2\)。第一层频域融合时，四路输出都可留给 pack。非零 NAF 列中的 \(Y\pm X\) 和最后一批只供打包使用的加减项也可延迟。全组输出都由 pack 消费时，省去整个写回 kernel。点坐标在每列结束时完成进位，GPU 字典、回读和检查点由此获得规范整数。 [实测](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-延迟进位)
 
-加权变换在 \(p>114688\) 时启用分段进位。原生 Edwards 的 8192 点加权路径在 98,305–114,688 位、每批至少 32 条曲线时也启用分段进位，并在共享内存预算内将去权、limb 汇集和段内进位合并到同一内核。5120 点在 \(p\ge106497\) 时各批量均可提前启用，2560／5120 点单曲线从 \(p=53249\) 起可提前启用。线性变换在 \(p>262144\) 时启用同一分段进位。它先对逆变换的系数做 digit 进位，再按 \(2^p\equiv1\bmod M\) 合并乘积的高低两半。预算容不下摘要时使用单块归约。混合 radix-5 或单曲线可在 pack 中解析进位，二次幂多曲线独立写回。见 [宽位宽归约剖析](../performance/STAGE1_MERSENNE_NTT.md#gpu1-宽位宽归约热点) 和 [归约对照](../performance/STAGE1_MERSENNE_NTT.md#加权归约与-16384-点单曲线调优)，以及 [双卡实测](../performance/STAGE1_MERSENNE_NTT.md#8192-点-edwards-批量归约)。
+加权变换在 \(p>114688\) 时启用分段进位。原生 Edwards 的 8192 点加权路径在 98,305–114,688 位、每批至少 32 条曲线时也启用分段进位，并在共享内存预算内将去权、limb 汇集和段内进位合并到同一内核。同批量下，4096 点的原生 Edwards 加权输入从 2560 个 32 位 limb 起启用相同归约。5120 点在 \(p\ge106497\) 时各批量均可提前启用，2560／5120 点单曲线从 \(p=53249\) 起可提前启用。线性变换在 \(p>262144\) 时启用同一分段进位。它先对逆变换的系数做 digit 进位，再按 \(2^p\equiv1\bmod M\) 合并乘积的高低两半。预算容不下摘要时使用单块归约。混合 radix-5 或单曲线可在 pack 中解析进位，二次幂多曲线独立写回。见 [宽位宽归约剖析](../performance/STAGE1_MERSENNE_NTT.md#gpu1-宽位宽归约热点) 和 [归约对照](../performance/STAGE1_MERSENNE_NTT.md#加权归约与-16384-点单曲线调优)，以及 [双卡实测](../performance/STAGE1_MERSENNE_NTT.md#8192-点-edwards-批量归约)。
 
 ### 短加权乘积的 warp 归约
 
@@ -61,6 +61,8 @@ flowchart LR
 融合后直接生成段内结果与摘要。需规范化的输出由独立写回消费摘要，只供下一次 pack 的槽由 pack 解析。每步三批乘法各少一次独立汇集 kernel 和一次 limb 和的全局中转。实现见 [段进位内核](../../kernels/cuda/stage1_ntt_segments.cuh) 与 [批次调度](../../src/ecm/stage1/cuda/ntt/ladder.cu)。
 
 ### 原生 Edwards 的共享去权缓存
+
+5120 点计划启用共享去权缓存时，段内普通 limb 汇集按 $\lceil p j/5120\rceil$ 计算第 $j$ 个 digit 的起始位，省去每个片段对 digit 表的一次读取。选长检查保证 $p\le 31\times5120$，因此分子 $pj+5119$ 可用 32 位无符号整数计算。两端的回卷片段仍从原表取得位偏移。[归约实现](../../kernels/cuda/stage1_ntt_segments.cuh) · [生产实测](../performance/STAGE1_MERSENNE_NTT.md#4096-至-8192-点加权变换)
 
 每个 256-limb CTA 先合作去权并缓存当前段及前一 limb 所需的连续系数。正常位置的 limb 汇集和 warp 首 lane 的进位使用同一缓存。低两 limb 的循环项及最低 limb 需要的高端系数从逆变换缓冲直接读取。这样每段内的相邻 limb 不必反复对同一系数乘逆权，而且不生成全局 limb 和中间表。跨段进位及规范化写回沿用现有规则。缓存大于 16 KiB 时使用原归约路径。启用条件和收益见 [两卡加权归约对照](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-共享去权缓存)。
 
@@ -109,6 +111,8 @@ $E$、$G$、$H$ 的去权系数至多为 $2U$，$F$ 至多为 $4U$，且所有�
 输入置换合入加权 pack，逆置换合入五点逆变换的写回。每个线程拥有同一列 \(i=n\bmod W\) 的五个值，只在本线程的共享内存槽中轮换，保持各平面的全局读写连续。不同线程的逆变换写回互不相交，因此可以原位执行。256 线程块使用 10 KiB 动态共享内存。每个方向省去 \(4W\) 次 Goldilocks 域乘，长度 10240 时两张旋转因子表合计少用 128 KiB 设备内存。实现与调度见 [radix-5 内核](../../kernels/cuda/stage1_ntt_radix5.cuh) 和 [Stage1 NTT ladder](../../src/ecm/stage1/cuda/ntt/ladder.cu)。
 
 ## Stage1 前向 tile
+
+4096 和 8192 点的加权二次幂计划在只有一趟 1–3 层 outer、启用前向 tile 寄存器读入且无需 pack 解析延迟进位时，将打包和整趟 outer 合并。设 tile 宽度为 $W$、外层数为 $m$，同一线程读取 $j+iW$ 处的 $2^m$ 个加权 digit，在寄存器中做 DIF，再按原顺序写入各 tile 的输入。根来自当前计划已有的 pass 表和 radix 表。每次前向批处理省去一次启动，以及每个变换 $16L$ 字节的中间数组逻辑读写。初始化共用的模数频谱仍按原计划生成。见 [加权打包与 outer 调度](../../src/ecm/stage1/cuda/ntt/ladder.cu) 和 [双卡实测](../performance/STAGE1_MERSENNE_NTT.md#4096-至-8192-点加权变换)。
 
 对于独立 pack 后至少九层的 tile，每个线程读取第一组 radix-4 的四个操作数，在寄存器中完成首两层 DIF，再将结果写入共享内存。块同步后继续剩余 DIF 和 warp 尾层。这样省去原始数据的共享写入、首组读取和一次块同步。混合 radix-5 的各二次幂平面使用同一索引合同。
 

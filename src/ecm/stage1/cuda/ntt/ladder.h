@@ -34,9 +34,10 @@ enum Dataflow : unsigned {
     InverseWarpInput = 512, ForwardTileInput = 1024, ForwardTileCompact = 2048,
     FusedWeightedCarry = 4096, ShortInverseTile = 8192, CachedFusedWeightedCarry = 16384,
     Edwards2XYFrequency = 32768, Edwards2XYInverseInput = 65536, TightCarrySpans = 131072,
-    FixedWideInverse = 262144, FixedWideForward = 524288, WarpWeightedCarry = 1048576
+    FixedWideInverse = 262144, FixedWideForward = 524288, WarpWeightedCarry = 1048576,
+    PackedWeightedOuter = 2097152, FixedCarryOffsets = 4194304
 };
-inline constexpr unsigned experimental_dataflow_limit = (WarpWeightedCarry << 1) - 1;
+inline constexpr unsigned experimental_dataflow_limit = (FixedCarryOffsets << 1) - 1;
 
 struct TuneBlock {
     unsigned steps, span, nonzero;

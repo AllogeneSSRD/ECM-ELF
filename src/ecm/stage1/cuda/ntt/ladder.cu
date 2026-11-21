@@ -95,6 +95,49 @@ __global__ void pack(const uint32_t* state, U* out, Shape s, Indices in,
     }
 }
 
+// With a single outer pass, column j contains one digit from each tile.
+// Pack the column straight into its DIF butterflies before writing the tiles.
+template<int Layers>
+__global__ void pack_weighted_outer(const uint32_t* state, U* dest, Shape s, Indices in,
+                                    const WeightedDigit* digits, const U* roots, const U* radix) {
+    constexpr unsigned count = 1u << Layers;
+    const unsigned width = s.length / count;
+    const unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= width) return;
+    const unsigned curve = blockIdx.y % s.curves;
+    const auto* row = state + limb(s, in.x[blockIdx.y / s.curves], curve, 0);
+    U x[count];
+#pragma unroll
+    for (unsigned i = 0; i < count; ++i)
+        x[i] = stage1_ntt_pack_digit<true>(row, s, digits, j + i * width);
+    U root = roots[j];
+    if constexpr (Layers == 1 || Layers == 3) {
+#pragma unroll
+        for (unsigned i = 0; i < count / 2; ++i) {
+            const auto a = x[i], b = x[i + count / 2];
+            x[i] = gl_add_dev(a, b);
+            x[i + count / 2] = gl_mul(gl_sub_dev(a, b), i ? gl_mul(root, radix[i]) : root);
+        }
+        if constexpr (Layers == 3) root = gl_mul(root, root);
+    }
+    if constexpr (Layers >= 2) {
+        // The radix-4 row starts after the larger radix rows (count - 4 entries).
+        const U rotated = gl_mul(root, radix[(count - 4) + 1]);
+        const U squared = gl_mul(root, root);
+#pragma unroll
+        for (unsigned i = 0; i < count; i += 4) {
+            const auto q = tile_radix4_dif(x[i], x[i+1], x[i+2], x[i+3], root, rotated, squared);
+            x[i] = q.x0;
+            x[i+1] = q.x1;
+            x[i+2] = q.x2;
+            x[i+3] = q.x3;
+        }
+    }
+    auto* out = dest + size_t(blockIdx.y) * s.length + j;
+#pragma unroll
+    for (unsigned i = 0; i < count; ++i) out[i * width] = x[i];
+}
+
 struct ProductInputs {
     const U* left[4];
     const U* right[4];
@@ -391,7 +434,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     CK(cudaMemGetInfo(&free_before, &total));
     Run result;
     unsigned defaults = FusedMultiplyAdd | LooseDifference | DirectRoute | PackedForward |
-                        PfaRadix5 | CoalescedRadix5 | InverseWarpInput | ShortInverseTile | WarpWeightedCarry;
+                        PfaRadix5 | CoalescedRadix5 | InverseWarpInput | ShortInverseTile | WarpWeightedCarry |
+                        PackedWeightedOuter | FixedCarryOffsets;
     // Wider weighted reductions showed a batch-dependent cache tradeoff.
     if (p <= 65536) defaults |= CachedCarry;
     // The mixed pack can consume the segment carries directly. The 5120
@@ -399,9 +443,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool early_segments = (curves == 1 && p >= 53249 && (s.length == 2560 || s.length == 5120)) ||
                                 (s.length == 5120 && p >= 106497);
     const auto segment_count = stage1_segment_count(s.words);
-    // The 8192-point Edwards batch amortizes cached segment reduction at 13 segments.
-    const bool wide_segments = segment_count > 14 ||
-        (naf && options.weighted && s.length == 8192 && curves >= 32 && segment_count >= 13);
+    // Wide Edwards batches amortize a separate pass to resolve segment carries.
+    const bool wide_segments = segment_count > 14 || (naf && options.weighted && curves >= 32 &&
+        ((s.length == 8192 && segment_count >= 13) ||
+         (s.length == 4096 && s.words >= 10 * stage1_carry_segment)));
     if (options.weighted ? wide_segments || early_segments : segment_count > 32) {
         defaults |= SegmentedCarry;
         if (mixed || curves == 1) defaults |= DeferredPack;
@@ -565,6 +610,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (warp_reduce) result.dataflow |= WarpWeightedCarry;
     const bool cached = (requested & CachedCarry) && options.weighted && !segmented && !warp_reduce && s.words <= 32 * threads;
     const bool deferred = segmented && !packed && (requested & DeferredPack);
+    const bool packed_outer = (requested & PackedWeightedOuter) && options.weighted && !mixed && !deferred &&
+        forward_input && (s.length == 4096 || s.length == 8192) &&
+        ctx.nms == 1 && ctx.ms[0] >= 1 && ctx.ms[0] <= 3;
+    if (packed_outer) result.dataflow |= PackedWeightedOuter;
     if (routed) result.dataflow |= DirectRoute;
     if (packed) result.dataflow |= PackedForward;
     if (cached) result.dataflow |= CachedCarry;
@@ -584,6 +633,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         ? weighted_segment_cache_bytes(weights.limbs) : 0;
     // Keep the shared coefficient tile small enough to allow several CTAs per SM.
     const bool cached_fused = carry_cache_smem && carry_cache_smem <= 16 * 1024;
+    const bool fixed_carry_offsets = (requested & FixedCarryOffsets) && s.length == 5120 && cached_fused;
+    if (fixed_carry_offsets) result.dataflow |= FixedCarryOffsets;
     const bool fused_weighted = options.weighted && segmented && (cached_fused || (requested & FusedWeightedCarry));
     if (fused_weighted) result.dataflow |= FusedWeightedCarry;
     if (cached_fused) result.dataflow |= CachedFusedWeightedCarry;
@@ -717,20 +768,33 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     CK(cudaMemcpyAsync(state.data,initial.data(),initial.size()*4,cudaMemcpyHostToDevice,q));
     if (!scalar_words.empty())
         CK(cudaMemcpyAsync(scalar.data,scalar_words.data(),scalar_words.size()*4,cudaMemcpyHostToDevice,q));
+    const auto forward_tiles = [&](U* dest, unsigned batch) {
+        forward_kernel<<<dim3(width >> ctx.t, batch),forward_threads,forward_smem,q>>>(dest,width,ctx.t,ctx.tblF);
+        CK(cudaGetLastError());
+    };
     const auto forward_spectra = [&](U* dest, unsigned batch) {
         if (!forward_input) {
             ntt_forward_fused(dest,ctx,omega2,batch,q);
             return;
         }
         ntt_forward_outer_fused(dest,ctx,omega2,batch,q);
-        forward_kernel<<<dim3(width >> ctx.t, batch),forward_threads,forward_smem,q>>>(dest,width,ctx.t,ctx.tblF);
-        CK(cudaGetLastError());
+        forward_tiles(dest,batch);
     };
     const auto forward_inputs = [&](U* dest, unsigned count, Indices in, unsigned pending = 0) {
         if (packed) {
             packed_kernel<<<dim3(1,count*curves),forward_threads,forward_smem,q>>>(
                 state.data,dest,s,in,digit_table.data,ctx.t,ctx.tblF);
             CK(cudaGetLastError());
+            return;
+        }
+        if (packed_outer) {
+            const std::array kernels{pack_weighted_outer<1>, pack_weighted_outer<2>, pack_weighted_outer<3>};
+            const unsigned columns = 1u << ctx.t;
+            const dim3 blocks((columns + threads - 1) / threads, count * curves);
+            const auto kernel = kernels[ctx.ms[0] - 1];
+            kernel<<<blocks,threads,0,q>>>(state.data,dest,s,in,digit_table.data,ctx.passF[0],ctx.radF[0]);
+            CK(cudaGetLastError());
+            forward_tiles(dest,count*curves);
             return;
         }
         if (pfa) {
@@ -901,7 +965,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             } else if (fused_weighted) {
                 const auto launch = [&](auto route) {
                     constexpr bool routed = decltype(route)::value;
-                    auto kernel = cached_fused ? weighted_segment_limb_sums<routed,true>
+                    auto kernel = fixed_carry_offsets ? weighted_segment_limb_sums<routed,true,5120>
+                                  : cached_fused ? weighted_segment_limb_sums<routed,true>
                                                : weighted_segment_limb_sums<routed,false>;
                     kernel<<<segment_grid(outputs),stage1_carry_segment,cached_fused ? carry_cache_smem : 0,q>>>(
                         state.data,source,carry_headers.data,s,out,cursor);
