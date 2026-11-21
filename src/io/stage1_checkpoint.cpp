@@ -1,4 +1,5 @@
 #include "stage1_checkpoint.h"
+#include "stage1_checkpoint_identity.h"
 #include "io/files.h"
 #include "stage1_binary.h"
 
@@ -32,6 +33,7 @@ namespace {
 constexpr char record_prefix[] = "ecm-batch-record:";
 
 struct DecodedBatch {
+    std::string identity;
     std::vector<std::string> records;
     std::vector<uint64_t> sigmas;
     bool binary = false;
@@ -43,10 +45,12 @@ bool replace_file(const std::string& source, const std::string& target) {
 }
 
 Decode decode_batch(const std::string& bytes, const std::string& identity, uint32_t curves,
-                    const std::vector<std::string>& compatible_identities, DecodedBatch& decoded) {
+                    const std::vector<std::string>& compatible_identities, DecodedBatch& decoded,
+                    const std::function<bool(std::string_view)>& compatible = {}) {
     const auto identity_matches = [&](const std::string& saved) {
         return saved == identity || std::find(compatible_identities.begin(), compatible_identities.end(),
-                                              saved) != compatible_identities.end();
+                                              saved) != compatible_identities.end() ||
+               (compatible && compatible(saved));
     };
     if (ecm_stage1_binary::is_batch(bytes)) {
         using namespace ecm_stage1_binary;
@@ -89,6 +93,7 @@ Decode decode_batch(const std::string& bytes, const std::string& identity, uint3
 
         if (count != curves || !identity_matches(saved_identity))
             return Decode::Incompatible;
+        decoded.identity = std::move(saved_identity);
         decoded.records = std::move(records);
         decoded.sigmas = std::move(sigmas);
         decoded.binary = true;
@@ -131,6 +136,7 @@ Decode decode_batch(const std::string& bytes, const std::string& identity, uint3
     if (!valid || in.peek() != std::char_traits<char>::eof())
         return Decode::Corrupt;
 
+    decoded.identity = std::move(saved_identity);
     decoded.records = std::move(records);
     decoded.sigmas = std::move(sigmas);
     decoded.binary = false;
@@ -169,6 +175,25 @@ std::string ecm_stage1_curve_record(uint32_t curve) {
 }
 
 namespace ecm_stage1_checkpoint {
+std::vector<std::string> find_identity_aliases(
+    const std::string& path, uint32_t curves, unsigned backups,
+    const std::function<bool(std::string_view)>& compatible) {
+    std::vector<std::string> aliases;
+    if (path.empty() || !compatible) return aliases;
+    for (unsigned generation = 0; generation <= std::min(backups, ECM_STAGE1_MAX_BACKUPS); ++generation) {
+        const auto candidate = generation ? ecm_stage1_backup_path(path, generation) : path;
+        std::ifstream file(candidate, std::ios::binary);
+        if (!file) continue;
+        const std::string bytes((std::istreambuf_iterator<char>(file)), {});
+        if (file.bad()) continue;
+        DecodedBatch decoded;
+        if (decode_batch(bytes, "", curves, {}, decoded, compatible) == Decode::Valid &&
+            std::find(aliases.begin(), aliases.end(), decoded.identity) == aliases.end())
+            aliases.push_back(std::move(decoded.identity));
+    }
+    return aliases;
+}
+
 bool matches(const std::string& path, const std::string& identity, uint32_t curves,
              unsigned backups, const std::vector<std::string>& compatible_identities) {
     if (path.empty()) return false;

@@ -53,11 +53,11 @@ param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 
 | CPU 附加 1 | 标量编码身份 | Edwards 写入 `edwards-cpu-v2`，Montgomery 写入现有窗口设置 |
 | CPU 附加 2 | 实现枚举 | 0=auto、1=IFMA SIMD、2=GMP scalar |
 | CUDA NTT 附加 | 曲线后端 | Montgomery 为 `ntt-v1`，Edwards 为 `ntt-edwards-v2` |
-| CUDA 拆批 NTT 追加 | 任务载荷版本和总曲线数 | 在 NTT 身份末尾追加 `ntt-task-v1` 和十进制总曲线数 |
+| CUDA 拆批 NTT 追加 | 拆批任务标识 | 在 NTT 身份末尾追加 `ntt-task-v2`，不绑定请求曲线数 |
 | CUDA NTT 梅森承载追加 | 算术模数 | 在公式身份之后追加 `ntt-carrier-v1` 和原始梅森指数 |
 | 其他 GPU Montgomery 附加 | CGBN 算法文本 | 由驱动写入有效的 CGBN 算法 |
 
-一般路径用外层头比较曲线数，并在记录头中保存各 sigma。固定 sigma 任务要求每条非零已存 sigma 等于请求起点+i，随机任务采用已存种子。拆批 NTT 的外层固定为一条记录，使用 identity 核对任务总曲线数，从任务载荷恢复起始 sigma。Edwards NTT 的旧身份 `ntt-v1` 和 `ntt-edwards-naf-v1|窗口` 仍可匹配同一任务，写入时使用当前身份。CPU Edwards 也接受包括历史窗口值的旧身份，实际 NAF 窗口从曲线记录恢复。GPU Edwards 从对应载荷恢复适用的窗口、binary/NAF 模式及倍点变体。见 [Stage1 身份构造](../../src/ecm/stage1/task.cpp#L268)。
+一般路径用外层头比较曲线数，并在记录头中保存各 sigma。固定 sigma 任务要求每条非零已存 sigma 等于请求起点+i，随机任务采用已存种子。拆批 NTT 的外层固定为一条记录，从任务载荷恢复起始 sigma、已完成前缀和当前批次，请求曲线数由当前 worktodo 提供。旧 `ntt-task-v1|总曲线数` 身份在其余数学及后端字段一致时作为兼容别名读取，外层与记录校验、记录数及载荷校验仍须通过；后续写入使用当前身份。Edwards NTT 的旧身份 `ntt-v1` 和 `ntt-edwards-naf-v1|窗口` 仍可匹配同一任务。CPU Edwards 也接受包括历史窗口值的旧身份，实际 NAF 窗口从曲线记录恢复。GPU Edwards 从对应载荷恢复适用的窗口、binary/NAF 模式及倍点变体。见 [Stage1 身份构造](../../src/ecm/stage1/task.cpp#L268)。
 
 设备编号、GPU 型号、驱动版本、D、B2、输出路径不在该外层身份中。不能据此推断任意设备或后端之间均可恢复：内部布局、构建包含的内核和算法约束仍须满足。CPU auto 切换实际实现的情况还受各后端的分块恢复条件约束。
 
@@ -285,7 +285,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 ### 4.7 NTT 拆批任务载荷
 
-CUDA NTT 的队列任务按工作行的请求量拆批。直接任务超过配置上限或单批预算时也进入拆批调度。恢复时按检查点中的单批或拆批格式继续。调整 `ntt_max_batch` 后，已保存的批次按原宽度完成，后续新批按当前配置和预算选型。尾批默认运行剩余曲线。启用 `ntt_pad_batch` 时，资源和 sigma 范围允许就用新曲线补齐尾批，最多增加本批所选批量减一条。新增曲线与同批其他曲线共用恢复游标，各自保存结果。显存不足且尚无算术快照时，调度器可缩小批量后重试。[生产批量规则](../usage/STAGE1.md#任务曲线数与设备批量) · [拆批入口](../../src/ecm/stage1/task.cpp) · [调度与重试](../../src/ecm/stage1/cuda/ntt/batches.cpp)
+CUDA NTT 的队列任务按工作行的请求量拆批。直接任务超过配置上限或单批预算时也进入拆批调度。恢复时按检查点中的单批或拆批格式继续。调整 `ntt_max_batch` 后，已保存的批次按原宽度完成，后续新批按当前配置和预算选型。尾批默认运行剩余曲线。启用 `ntt_pad_batch` 时，资源和 sigma 范围允许就用新曲线补齐尾批，最多增加本批所选批量减一条。新增曲线与同批其他曲线共用恢复游标，各自保存结果。新分配批次显存不足且尚无算术快照时，调度器可缩小批量后重试；恢复存档中的批次保持原宽度，仍须满足该批次所需资源。[生产批量规则](../usage/STAGE1.md#任务曲线数与设备批量) · [拆批入口](../../src/ecm/stage1/task.cpp) · [调度与重试](../../src/ecm/stage1/cuda/ntt/batches.cpp)
 
 所有子批使用同一个标准命名的 `.ckpt` 及其轮转备份。例如 Edwards M4423、B1=1024 使用 `.e_s1_m4423_1024.ckpt`。V2 外层记录 0 封装以下载荷，偏移从载荷首字节算起。
 
@@ -303,7 +303,7 @@ CUDA NTT 的队列任务按工作行的请求量拆批。直接任务超过配�
 
 每条完成记录为 1 字节结果类型、u32 数值长度及相应的无符号小端整数。类型 1 保存真因子，类型 2 保存归一化 Stage2 点（Edwards 保存其对应的 Montgomery 坐标 `u`），类型 3 表示算术完成但无可交接点，类型 4 表示 Edwards 构造退化。类型 3 和 4 的数值长度均为 0，类型 4 在恢复时以同一 sigma 重新验证 GCD=N。子批启动前先落盘批次范围和容量，周期写入或正常停止再补入仅含活跃曲线的算术快照。子批验证成功后，一次原子替换同时追加完成记录并清空当前快照，将 `curves`、`capacity` 和 `native bytes` 置零。下一个子批据此领取新的 sigma 区间。见 [任务载荷编码和验证](../../src/ecm/stage1/cuda/ntt/batches.cpp#L18)、[写入及提交子批](../../src/ecm/stage1/cuda/ntt/batches.cpp#L155)。
 
-任务身份仍使用原始请求量。若请求 1000 条，在调整后的尾批上总计完成 1050 条，尾批写入的 `curves` 已含新增曲线，完成后记录 `completed=1050`。恢复使用同一条原始 worktodo 行，按检查点已有范围继续运行或发布。发布的 `finished` 和 Stage2 交接范围由实际写入 `.save` 的记录数确定。
+任务身份不包含请求量，允许恢复前调整同一 worktodo 行的曲线数。例如已完成 128 条且当前批为 32 条，将请求量改为 100 后仍先恢复并完成当前批，再以实际完成的 160 条发布；改为 600 时则从 160 条起继续规划。若没有当前批且完成前缀已达到新上限，直接发布。启用尾批补齐后额外完成的真实曲线同样保留。发布的 `finished` 和 Stage2 交接范围由实际写入 `.save` 的记录数确定。调整不改变载荷布局或已有曲线的 σ。
 
 #### 示例：每批 32 条，第五批运行中停止
 
@@ -442,6 +442,7 @@ GPU 保存前的回传量由后端决定：Montgomery ladder/OpenCL 要取回其
 - [Stage1 完整/停止恢复](../../tools/test/test_stage1_usability.py)、[兼容及队列](../../tools/test/test_stage1_checkpoint_compat.py)。
 - [独立外层解码](../../tools/test/stage1_checkpoint_decode.py)、[Edwards 点与载荷检查](../../tools/test/test_edwards_gpu_pipeline.py)。
 - [NTT 拆批恢复](../../tools/test/test_stage1_ntt_task_batches.py)覆盖保留已完成前缀、按保存的 NAF 窗口恢复批内游标、后续子批切换到新窗口、尾批补齐与单次 Stage2 交接，并逐字节对比中断续跑和连续运行的 save。[NTT 生产测试](../../tools/test/test_stage1_ntt_production.py)覆盖原生 NAF 和 x-only 互换配置后的单批恢复。
+- [NTT 请求数量调整](../../tools/test/test_stage1_ntt_curve_limit.py)覆盖新旧任务身份、缩小及增加 worktodo 曲线数、重复调整、批间直接发布和仅预留范围的恢复，核对实际 save、NF、finished 和 Stage2 交接数量，并用独立点乘验证完成前缀、恢复批及新增曲线的代表末点。
 - [GUI 检查点识别](../../src/ecm/application/gui/platform_win32.cpp#L107)：只识别主文件更新时间作为辅助信号，不能代替 worker 完成安全停止。
 
 这些入口说明可复核的范围，不意味着每次构建都已经执行全部验证。新增格式或语义须同时更新写入、读取、身份、错误路径和本文；不要只修改 magic 或文件名。损坏资料和原始实验保留在忽略的 `data/`，不作为正式格式的新规则来源。

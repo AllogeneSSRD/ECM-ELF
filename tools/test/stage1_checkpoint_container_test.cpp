@@ -1,4 +1,5 @@
 #include "io/stage1_checkpoint.h"
+#include "io/stage1_checkpoint_identity.h"
 #include "ecm/stage1/montgomery/cuda/checkpoint.h"
 #include "../../src/ecm/stage1/edwards/cuda/checkpoint.h"
 #include "../../src/ecm/stage1/edwards/cuda/host_math.h"
@@ -19,6 +20,28 @@ static std::string v1(const std::string &id,const std::vector<uint64_t> &sigmas,
     std::ostringstream out;out<<"ECM_STAGE1_BATCH_V1\n"<<id<<'\n'<<records.size()<<'\n';
     for(size_t i=0;i<records.size();++i)out<<sigmas[i]<<' '<<records[i].size()<<'\n'<<records[i]<<'\n';
     const auto body=out.str();return body+"CHECKSUM "+std::to_string(ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED,body.data(),body.size()))+'\n';
+}
+static void identity_aliases(ecm_stage1_checkpoint::Context& checkpoint,const fs::path& dir) {
+    fs::create_directories(dir);const auto path=(dir/"aliases.ckpt").string();
+    const std::string legacy="target|ntt-task-v1|65",current="target|ntt-task-v2";
+    const auto approve=[&](std::string_view identity){return identity==legacy;};
+    write(path,v1(legacy,{0},{"native"}));
+    auto aliases=ecm_stage1_checkpoint::find_identity_aliases(path,1,0,approve);
+    check(aliases==std::vector<std::string>{legacy},"legacy identity alias not discovered");
+    check(!ecm_stage1_checkpoint::matches(path,current,1,0),"identity alias matched without opt-in");
+    check(ecm_stage1_checkpoint::matches(path,current,1,0,aliases),"approved legacy identity did not match");
+    check(ecm_stage1_checkpoint::find_identity_aliases(path,2,0,approve).empty(),"alias relaxed record count");
+    check(ecm_stage1_checkpoint::find_identity_aliases(path,1,0,[](auto){return false;}).empty(),"unapproved identity accepted");
+    checkpoint.set_path(path);checkpoint.begin(current,1,false,0,true,aliases);
+    checkpoint.validate_pending([](const auto& records,auto&){return records==std::vector<std::string>{"native"};});
+    check(checkpoint.write_blob(ecm_stage1_curve_record(0),"verified"),"alias rewrite failed");checkpoint.close(false);
+    check(ecm_stage1_checkpoint::matches(path,current,1,0),"rewritten alias is not canonical");
+    // Discovery verifies binary and text checksums; Context still enforces ownership and payload validity.
+    check(ecm_stage1_checkpoint::find_identity_aliases(path,1,0,[&](auto id){return id==current;})==
+          std::vector<std::string>{current},"binary alias not discovered");
+    auto corrupt=read(path);corrupt.back()^=1;write(path,corrupt);
+    check(ecm_stage1_checkpoint::find_identity_aliases(path,1,0,[&](auto){return true;}).empty(),"corrupt identity alias accepted");
+    std::cout<<"checkpoint_identity_aliases=PASS\n";
 }
 static void container(ecm_stage1_checkpoint::Context& checkpoint, const fs::path &dir) {
     check(ecm_stage1_binary::crc32c("123456789")==0xe3069283u,"CRC32C reference vector");
@@ -237,7 +260,7 @@ int main(int argc,char **argv) {
     try {
         check(argc>=2,"output required");const fs::path out=argv[1];
         check(!fs::exists(out),"use a fresh test directory");fs::create_directories(out);
-        container(checkpoint, out/"container");edwards(checkpoint, out/"ed_small",{});edwards(checkpoint, out/"ed_binary",{},false);deferred_restore(checkpoint, out/"deferred");construction_publication(checkpoint, out/"construction");
+        identity_aliases(checkpoint,out/"aliases");container(checkpoint, out/"container");edwards(checkpoint, out/"ed_small",{});edwards(checkpoint, out/"ed_binary",{},false);deferred_restore(checkpoint, out/"deferred");construction_publication(checkpoint, out/"construction");
         if(argc==5){edwards(checkpoint, out/"ed_audit",argv[2]);legacy(checkpoint, out/"mont_audit",argv[3],argv[4]);}
         std::cout<<"checkpoint_container_checks=PASS\n";return 0;
     }catch(const std::exception &e){checkpoint.close(false);std::cerr<<e.what()<<'\n';return 1;}

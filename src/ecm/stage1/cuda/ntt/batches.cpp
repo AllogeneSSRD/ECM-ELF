@@ -65,8 +65,7 @@ bool restore(std::string_view bytes, const Stage1Request& request, TaskProgress&
         const auto modulus_bytes = (mpz_sizeinbase(request.modulus, 2) + 7) / 8;
         const auto arithmetic_bytes = (ntt_arithmetic_bits(request.modulus, request.options) + 7) / 8;
         const uint64_t scheduled = uint64_t(completed) + saved.curves;
-        if (scheduled > UINT32_MAX || scheduled >= uint64_t(request.curves) + stage1_ntt_max_curves ||
-            (saved.curves && completed >= request.curves) ||
+        if (scheduled > UINT32_MAX ||
             !sigma_batch_fits(saved.first, std::max(request.curves, uint32_t(scheduled)), 1) ||
             (saved.random && (request.options.execution.selection.curve != CurveModel::Edwards ||
                               saved.first < 6 || saved.first >= (uint64_t(1) << 53))) ||
@@ -218,7 +217,7 @@ ecm_stage1::ComputationResult run_ntt_batches(
     }
     state.completed.curves.reserve(request.curves);
     std::string scratch((mpz_sizeinbase(request.modulus, 2) + 7) / 8, '\0');
-    while (offset < request.curves) {
+    while (offset < request.curves || state.curves) {
         if (ecm_stage1_stop_requested()) {
             failure.stop();
             return failure;
@@ -258,8 +257,9 @@ ecm_stage1::ComputationResult run_ntt_batches(
             });
         auto result = deps.execute(batch, execution, child);
         child.close(false);
+        const bool restored_batch = resumed;
         resumed = false;
-        if (result.retry_smaller_ntt_batch && state.native.empty() && state.curves > 1) {
+        if (result.retry_smaller_ntt_batch && !restored_batch && state.native.empty() && state.curves > 1) {
             const auto left = request.curves - offset;
             state.curves = state.curves > left ? left : state.curves / 2;
             state.preferred = state.curves;

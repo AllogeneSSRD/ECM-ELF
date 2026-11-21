@@ -2,6 +2,7 @@
 #include "edwards/memory.h"
 #include "edwards/cpu/ecm_edwards_cpu.h"
 #include "../../io/stage1_checkpoint.h"
+#include "../../io/stage1_checkpoint_identity.h"
 #include "ecm/stage1/selection.h"
 #include "ecm/stage1/ntt_target.h"
 #include "ecm/io/save.h"
@@ -309,11 +310,29 @@ static CheckpointIdentity checkpoint_identity(const Stage1Request& request,
 }
 
 #if ECM_HAS_CUDA_STAGE1
-static CheckpointIdentity ntt_task_identity(CheckpointIdentity key, uint32_t curves) {
-    const auto suffix = "|ntt-task-v1|" + std::to_string(curves);
-    key.current += suffix;
-    for (auto& legacy : key.compatible)
-        legacy += suffix;
+static CheckpointIdentity ntt_task_identity(CheckpointIdentity key, const std::string& path, unsigned backups) {
+    auto bases = key.compatible;
+    bases.push_back(key.current);
+    key.current += "|ntt-task-v2";
+    for (auto& legacy : key.compatible) legacy += "|ntt-task-v2";
+    const auto aliases = ecm_stage1_checkpoint::find_identity_aliases(path, 1, backups,
+        [&](std::string_view saved) {
+            for (const auto& base : bases) {
+                const auto prefix = base + "|ntt-task-v1|";
+                if (saved.substr(0, prefix.size()) != prefix) continue;
+                const auto count = saved.substr(prefix.size());
+                if (count.empty() || count.size() > 10) continue;
+                uint64_t value = 0;
+                bool valid = true;
+                for (const auto c : count) {
+                    if (c < '0' || c > '9') { valid = false; break; }
+                    value = value * 10 + unsigned(c - '0');
+                }
+                if (valid && value && value <= UINT32_MAX) return true;
+            }
+            return false;
+        });
+    key.compatible.insert(key.compatible.end(), aliases.begin(), aliases.end());
     return key;
 }
 
@@ -332,7 +351,7 @@ std::optional<GpuAlgorithm> stage1_checkpoint_gpu_algorithm(const Stage1Request&
         const auto id = checkpoint_identity(request, ExecutionOptions(options), 0);
         const auto count = !request.curves && algorithm == GpuAlgorithm::Ntt ? 1u : request.curves;
         if (algorithm == GpuAlgorithm::Ntt) {
-            const auto split = ntt_task_identity(id, count);
+            const auto split = ntt_task_identity(id, path, backups);
             if (ecm_stage1_checkpoint::matches(path, split.current, 1, backups, split.compatible))
                 return algorithm;
         }
@@ -428,8 +447,8 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
         if (selection.target == ExecutionTarget::Gpu && selection.gpu_algorithm == GpuAlgorithm::Ntt) {
             split_ntt = curves > opt.execution.ntt.max_batch || opt.persistence.retain_completed_checkpoint;
             if (curves <= stage1_ntt_max_curves && has_arithmetic_checkpoint()) {
-                const auto split = ntt_task_identity(identity, curves);
                 const auto backups = opt.persistence.ckpt_backups;
+                const auto split = ntt_task_identity(identity, path, backups);
                 if (ecm_stage1_checkpoint::matches(path, split.current, 1, backups, split.compatible))
                     split_ntt = true;
                 else if (ecm_stage1_checkpoint::matches(path, identity.current, curves, backups, identity.compatible))
@@ -444,7 +463,7 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
 #endif
         if (split_ntt) {
 #if ECM_HAS_CUDA_STAGE1
-            const auto split = ntt_task_identity(std::move(identity), curves);
+            const auto split = ntt_task_identity(std::move(identity), path, opt.persistence.ckpt_backups);
             session.begin(split.current, 1, false, 0, true, split.compatible);
 #endif
         } else

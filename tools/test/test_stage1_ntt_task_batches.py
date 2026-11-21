@@ -246,16 +246,25 @@ def main():
         assert list(saved_points(work / "direct.save", p, 64, edwards=True)) == [SIGMA]
         passed(f"default_{backend}", p=p, seconds=wall)
 
-    # Establish a small incumbent without trying larger batches.
+    # Establish small production samples without trying larger batches. The
+    # live tuner may split 35 into a preferred width and a short tail.
     work, command, small_tune = fixture("trial_seed_35", requested=35, pad=0)
     log, _ = run(work, command)
-    assert [row["curves"] for row in batch_launches(log)] == [35]
-    assert any(row["batch"] == 35 for row in tune_rows(small_tune, EXPONENT))
+    seed_launches = batch_launches(log)
+    offset = 0
+    for row in seed_launches:
+        assert row["offset"] == offset and row["total"] == 35 and 0 < row["curves"] <= 35, seed_launches
+        offset += row["curves"]
+    assert offset == 35, seed_launches
+    assert_finished(work, 35)
+    incumbents = {row["batch"] for row in tune_rows(small_tune, EXPONENT)}
+    assert incumbents == {row["curves"] for row in seed_launches}, incumbents
 
     work, command, _ = fixture("trial_at_capacity", requested=128, pad=0, tune=small_tune)
     log, _ = run(work, command)
     selections = log_records(log, "stage1_ntt_batch_selection:")
-    assert (selections[0]["remaining"], selections[0]["capacity"], selections[0]["batch"]) == ("128", "128", "35")
+    assert (selections[0]["remaining"], selections[0]["capacity"], selections[0]["source"]) == ("128", "128", "production")
+    assert int(selections[0]["batch"]) in incumbents, selections
     assert all(row["source"] != "production_trial" for row in selections)
     assert_finished(work, 128)
 
@@ -281,8 +290,8 @@ def main():
     assert list(saved_points(save, 127, 64, edwards=True)) == list(range(SIGMA, SIGMA + 129))
     passed("direct_splits_129", p=127, launches=schedule, seconds=wall)
 
-    # Reproduce the production cap with a short scalar. At 64 curves the
-    # weighted L=1024 plan fits, while the linear L=2048 plan exceeds NAF memory.
+    # Reproduce plan-specific memory caps with a short scalar. The live tuner
+    # must use a weighted batch larger than the linear plan could admit.
     for memory, expected in ((6144, (54, 98)), (1024, (14, 25))):
         work, command, _ = fixture(f"per_plan_capacity_{memory}", pad=0, naf_window=12,
                                   extra_stage1=f"naf_memory_mb = 4096\nntt_memory_mib = {memory}\n")
@@ -291,9 +300,11 @@ def main():
         log, wall = run(work, command)
         selection = log_records(log, "stage1_ntt_batch_selection:")[0]
         assert tuple(int(selection[f"{mode}_capacity"]) for mode in ("linear", "weighted")) == expected, selection
-        assert int(selection["batch"]) == min(64, expected[1]), selection
+        assert int(selection["capacity"]) == min(95, max(expected)), selection
+        assert 0 < int(selection["batch"]) <= int(selection["capacity"]), selection
         launch = log_records(log, "Stage1 execution:")[0]
         assert launch["ntt_type"] == "weighted" and int(launch["ntt_batch"]) > expected[0], launch
+        assert int(launch["ntt_batch"]) == int(selection["batch"]), (selection, launch)
         assert int(launch["ntt_memory_per_curve_bytes"]) == 41867520, launch
         assert int(launch["ntt_memory_config_mib"]) == memory and int(launch["ntt_naf_memory_mb"]) == 4096, launch
         assert int(launch["ntt_memory_device_bytes"]) >= int(launch["ntt_batch"]) * 41867520, launch
