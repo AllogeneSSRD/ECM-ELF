@@ -12,3 +12,7 @@
 - 六档 NTT 长度的 1–8 曲线扫描共 176 个筛选进程、96 个复测进程；最长档另以 B1=256 复核。性能记录使用当时的 0.58.11 实验构建。独立入口随 0.59.0 纳入版本控制；该版本重新构建后在 GPU1 通过进位、已知因子和大 sigma 资格检查，见 `qualify_0590/`。
 
 正式边界和数据见[全宽 NTT Stage1](../performance/STAGE1_MERSENNE_NTT.md)。本草稿完成后保留，待用户处理；原始证据为 `data/experiments/stage1_mersenne_ntt_20261109/`。
+
+## Edwards 辅助点乘的验收
+
+0.72.5 将宽位 Edwards 构造中的 `[sigma]Q` 接入设备端 NTT。批内 sigma 可以有不同的有效位数。独立探针的 `--check-auxiliary` 覆盖线性和加权卷积、不同位数的混合批、余因子和异常点。生产回归使用 `p=1048576`、`sigma=1048576`、`B1=8` 触发非单位 Z，检查 CPU 重算日志和保存因子 9615。生产队列另在 M3024653 上配对比较单曲线及双曲线的最终保存文件。实现边界见[Stage1 架构](../architecture/STAGE1.md)，计时和证据见[全宽 NTT Stage1](../performance/STAGE1_MERSENNE_NTT.md)。

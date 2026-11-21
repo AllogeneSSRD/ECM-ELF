@@ -80,7 +80,8 @@ struct MersenneConstruction {
 };
 
 inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uint64_t sigma,
-                       const mpz_t n, MersenneConstruction* mersenne = nullptr) {
+                       const mpz_t n, MersenneConstruction* mersenne = nullptr,
+                       const MersenneConstruction::Jacobian* auxiliary = nullptr) {
     if (mersenne && mersenne->n != n)
         throw std::invalid_argument("Edwards Mersenne construction modulus differs from its scratch state");
     mpz_set_ui(factor, 0);
@@ -147,7 +148,12 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uin
     };
 
     int bit = 63;
-    if (mersenne && mersenne->previous_sigma) {
+    if (auxiliary) {
+        mpz_set(X.v,auxiliary->x.v);
+        mpz_set(Y.v,auxiliary->y.v);
+        mpz_set(Z.v,auxiliary->z.v);
+        bit = -1;
+    } else if (mersenne && mersenne->previous_sigma) {
         const uint64_t diff = sigma ^ mersenne->previous_sigma;
         while (bit && !(diff >> bit)) --bit;
         const auto& shared = mersenne->before_bit[bit];
@@ -229,7 +235,7 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uin
         mpz_set(X.v, U.v);
         mpz_set(Y.v, V.v);
     }
-    if (mersenne) mersenne->previous_sigma = sigma;
+    if (mersenne && !auxiliary) mersenne->previous_sigma = sigma;
 
     Setup rc;
     bool normalized = false;

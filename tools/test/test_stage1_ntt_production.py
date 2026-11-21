@@ -126,6 +126,12 @@ def main():
                       "-gpucurves", str(curves), *flags, str(b1), str(b1)], f"2^{p}-1\n"
 
     if args.edwards_naf_only:
+        work, cmd = fixture("auxiliary_nonunit_z", model="ed",
+                            extra='edwards_naf_window_bits = 10\nntt_convolution = "weighted"\nntt_length = 65536\n')
+        call, data = direct(work, cmd, 1048576, 8, 1048576, 1)
+        log = run(work, call, text=data)
+        assert "nonunit_z=1 replay=cpu" in log
+        assert saved_points(work / "out.save", 1048576, 8, True) == {1048576: 9615}
         for p, b1, sigma, curves, mode, length, window, naf in (
             (127, 20, 26, 2, "linear", 0, 0, 2),
             (127, 128, 26, 3, "linear", 0, 0, 6),

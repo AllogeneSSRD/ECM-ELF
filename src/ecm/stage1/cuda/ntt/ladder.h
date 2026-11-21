@@ -46,7 +46,21 @@ struct TuneBlock {
     std::vector<int16_t> digits;
 };
 
+// Batch-scoped forward and inverse spectra shared by setup and scalar replay.
+struct TransformWorkspace {
+    TransformWorkspace() = default;
+    TransformWorkspace(const TransformWorkspace&) = delete;
+    TransformWorkspace& operator=(const TransformWorkspace&) = delete;
+    ~TransformWorkspace();
+    void reset();
+    unsigned long long* acquire(size_t words);
+    size_t size = 0;
+private:
+    unsigned long long* data = nullptr;
+};
+
 struct Control {
+    TransformWorkspace* workspace = nullptr;
     unsigned resume = 0;
     unsigned warmup_iterations = 0;
     std::function<void(const Plan&)> describe;
@@ -108,6 +122,8 @@ struct EdwardsNaf {
     // Calibration can request canonical affine entries without a scalar replay.
     std::vector<uint32_t>* affine_output = nullptr;
 };
+std::vector<uint32_t> auxiliary_points(int device, unsigned p, const std::vector<uint64_t>& sigmas,
+                                       const ecm_stage1::Stage1NttOptions& options, TransformWorkspace* workspace = nullptr);
 Run edwards_naf(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
                 const EdwardsNaf&, const ecm_stage1::Stage1NttOptions&, const Control&, unsigned samples = 1);
 

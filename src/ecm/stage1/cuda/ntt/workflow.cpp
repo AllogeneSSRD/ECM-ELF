@@ -143,11 +143,17 @@ std::string encode_snapshot(unsigned count, unsigned cursor, unsigned curves, co
 // Construct the Edwards curve and point before mapping into the shared ladder.
 CurveKind prepare_edwards_lane(mpz_srcptr n, uint64_t sigma, mpz_ptr factor, uint32_t* initial,
                                unsigned words, mpz_ptr d, mpz_ptr px, mpz_ptr py,
-                               ecm_edwards::MersenneConstruction* construction) {
+                               ecm_edwards::MersenneConstruction* construction,
+                               const ecm_edwards::MersenneConstruction::Jacobian* auxiliary) {
     using ecm_edwards::Integer;
     using ecm_edwards::Setup;
     Integer a24, x, inv, den;
-    const auto setup = ecm_edwards::construct(d, px, py, a24.v, factor, sigma, n, construction);
+    auto setup = ecm_edwards::construct(d, px, py, a24.v, factor, sigma, n, construction, auxiliary);
+    if (auxiliary && setup != Setup::Ready) {
+        ecm_ts_fprintf(stdout,"stage1_ntt_auxiliary: sigma=%llu exceptional_map=1 replay=cpu\n",
+                       static_cast<unsigned long long>(sigma));
+        setup = ecm_edwards::construct(d, px, py, a24.v, factor, sigma, n, construction);
+    }
     if (setup == Setup::Factor) return CurveKind::Factor;
     if (setup != Setup::Ready)
         return ecm_edwards::construction_is_degenerate(setup, factor, n)
@@ -185,7 +191,7 @@ CurveKind prepare_edwards_lane(mpz_srcptr n, uint64_t sigma, mpz_ptr factor, uin
 }
 
 void prepare_edwards_batch(mpz_srcptr n, const std::vector<uint64_t>& sigmas, unsigned words,
-        unsigned threads, bool use_prefix, unsigned carrier_bits, std::vector<CurveKind>& kinds, ecm_edwards::Array& factors,
+        const std::vector<uint32_t>& auxiliary, unsigned threads, bool use_prefix, unsigned carrier_bits, std::vector<CurveKind>& kinds, ecm_edwards::Array& factors,
         std::vector<uint32_t>& initial, uint32_t* seeds) {
     const unsigned curves = unsigned(sigmas.size());
     std::vector<unsigned> order(curves);
@@ -200,13 +206,30 @@ void prepare_edwards_batch(mpz_srcptr n, const std::vector<uint64_t>& sigmas, un
         ecm_edwards::Integer d, px, py;
         for (unsigned j = curves * worker / threads; j < curves * (worker + 1) / threads; ++j) {
             const unsigned i = order[j];
+            ecm_edwards::MersenneConstruction::Jacobian point;
+            bool use_device_point = !auxiliary.empty();
+            if (use_device_point) {
+                mpz_ptr coords[] = {point.x.v,point.y.v,point.z.v};
+                for (size_t slot=0; slot<3; ++slot) {
+                    const auto* src = auxiliary.data()+(slot*curves+i)*words;
+                    mpz_import(coords[slot],words,-1,sizeof(uint32_t),0,0,src);
+                    mpz_mod(coords[slot],coords[slot],n);
+                }
+                // Every ordinary double multiplies Z by 2Y, every mixed add by H.
+                // A nonunit in any intermediate step persists in the final Z.
+                mpz_gcd(d.v,point.z.v,n);
+                use_device_point = mpz_cmp_ui(d.v,1)==0;
+                if (!use_device_point)
+                    ecm_ts_fprintf(stdout,"stage1_ntt_auxiliary: lane=%u nonunit_z=1 replay=cpu\n",i);
+            }
             kinds[i] = prepare_edwards_lane(n, sigmas[i], factors[i],
-                initial.data() + size_t(i) * 6 * words, words, d.v, px.v, py.v, scratch ? &*scratch : nullptr);
+                initial.data() + size_t(i) * 6 * words, words, d.v, px.v, py.v, scratch ? &*scratch : nullptr,
+                use_device_point ? &point : nullptr);
             if (!seeds || kinds[i] != CurveKind::Stage2Point) continue;
-            const mpz_srcptr point[] = {px.v, py.v, d.v};
+            const mpz_srcptr seed_coords[] = {px.v, py.v, d.v};
             for (unsigned slot = 0; slot < 3; ++slot)
                 mpz_export(seeds + (size_t(slot) * curves + i) * words,
-                           nullptr, -1, sizeof(uint32_t), 0, 0, point[slot]);
+                           nullptr, -1, sizeof(uint32_t), 0, 0, seed_coords[slot]);
         }
     };
     std::vector<std::future<void>> jobs;
@@ -393,6 +416,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         std::vector<CurveKind> kinds(curves, CurveKind::Stage2Point);
         std::vector<uint32_t> dictionary(host_dictionary_words);
         std::vector<unsigned> fallback;
+        ecm_mersenne_ntt::TransformWorkspace workspace;
         const auto dict_started = Clock::now();
         if (edwards) {
             const unsigned available = opt.execution.worker_cpu_count ? opt.execution.worker_cpu_count :
@@ -408,7 +432,27 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             auto* seeds = !naf_window ? nullptr : gpu_dictionary ? dictionary.data() : host_seeds.data();
             const auto curve_started = Clock::now();
             const bool prefix = affordable != 0 && (!carrier || (p >= 8192 && p - target_bits <= 256));
-            prepare_edwards_batch(N, sigmas, words, workers, prefix, carrier ? unsigned(p) : 0,
+            std::vector<uint32_t> auxiliary;
+            const size_t aux_bytes = 9ull*curves*words*sizeof(uint32_t);
+            if (affordable && aux_bytes <= (host_limit-host_required) - workers*scratch_bytes &&
+                p >= (1u << 20) && std::any_of(sigmas.begin(),sigmas.end(),
+                    [](uint64_t sigma){return sigma >= (1ull << 20);})) {
+                auto options = opt.execution.ntt;
+                if (options.automatic) {
+                    // The scalar-loop plan may not have been selected yet.
+                    options.weighted = true;
+                    options.length = options.tile = options.bpw = 0;
+                }
+                try {
+                    auxiliary = ecm_mersenne_ntt::auxiliary_points(opt.execution.device_index,unsigned(p),sigmas,options,&workspace);
+                    ecm_ts_fprintf(stdout,"stage1_ntt_auxiliary: backend=gpu curves=%u ms=%.3f\n",
+                                   curves,milliseconds_since(curve_started));
+                } catch (const ecm_mersenne_ntt::BudgetError&) {
+                    workspace.reset();
+                    ecm_ts_fprintf(stdout,"stage1_ntt_auxiliary: workspace exceeds budget, replay=cpu\n");
+                }
+            }
+            prepare_edwards_batch(N, sigmas, words, auxiliary, workers, prefix, carrier ? unsigned(p) : 0,
                                   kinds, factors, lanes_initial, seeds);
             curve_setup_ms = milliseconds_since(curve_started);
             ecm_ts_fprintf(stdout, "stage1_ntt_edwards_setup: threads=%u ms=%.3f prefix=%u fold=%u\n",
@@ -574,6 +618,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             auto last_save = Clock::now(), last_progress = last_save;
             auto progress_started = last_save;
             bool first_poll = true;
+            if (workspace.size) control.workspace = &workspace;
             control.poll = [&](unsigned cursor) {
                 const auto now = Clock::now();
                 if (first_poll)progress_started=now;
@@ -620,6 +665,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                  batch, initial, naf, selected, control)
                 : ecm_mersenne_ntt::ladder(opt.execution.device_index, unsigned(p),
                     batch, initial, packed, count, selected, control);
+            workspace.reset();
             ecm_ts_fprintf(stdout, "stage1_ntt_memory: owned_bytes=%zu observed_bytes=%zu budget_bytes=%zu\n",
                 run.owned_bytes, run.observed_bytes, run.budget_bytes);
             if (naf_window) {

@@ -180,6 +180,55 @@ int check_carries(int device, unsigned p, bool weighted, unsigned length, unsign
 } // namespace
 
 int main(int argc,char** argv) {
+    if (argc == 2 && !std::strcmp(argv[1], "--check-auxiliary")) {
+        using namespace ecm_edwards;
+        constexpr unsigned p = 8192, words = p/32;
+        Z n, gcd, cofactor, d, x, y, a24, factor, rd, rx, ry, ra24, rf;
+        mpz_setbit(n.v,p);
+        mpz_sub_ui(n.v,n.v,1);
+        mpz_divexact_ui(cofactor.v,n.v,3);
+        const std::vector<uint64_t> sigmas{1,2,3,4,26,27,UINT64_MAX};
+        for (bool weighted : {false,true}) {
+            ecm_stage1::Stage1NttOptions options;
+            options.weighted = weighted;
+            const auto points = ecm_mersenne_ntt::auxiliary_points(0,p,sigmas,options);
+            unsigned accepted=0, replayed=0;
+            for (mpz_srcptr target : {n.v,cofactor.v}) {
+                MersenneConstruction scratch(target,p);
+                for (size_t lane=0; lane<sigmas.size(); ++lane) {
+                    MersenneConstruction::Jacobian point;
+                    mpz_ptr coords[] = {point.x.v,point.y.v,point.z.v};
+                    for (size_t slot=0; slot<3; ++slot) {
+                        const auto* src = points.data()+(slot*sigmas.size()+lane)*words;
+                        mpz_import(coords[slot],words,-1,sizeof(uint32_t),0,0,src);
+                        mpz_mod(coords[slot],coords[slot],target);
+                    }
+                    mpz_gcd(gcd.v,point.z.v,target);
+                    const bool use = mpz_cmp_ui(gcd.v,1)==0;
+                    if (use) {
+                        ++accepted;
+                        if (sigmas[lane] <= UINT64_MAX/2) {
+                            // In [2k]Q, the point just before processing the final zero is [k]Q.
+                            MersenneConstruction oracle(target,p);
+                            construct(rd.v,rx.v,ry.v,ra24.v,rf.v,2*sigmas[lane],target,&oracle);
+                            const auto& at = oracle.before_bit[0];
+                            if (mpz_cmp(point.x.v,at.x.v) || mpz_cmp(point.y.v,at.y.v) ||
+                                mpz_cmp(point.z.v,at.z.v)) return 1;
+                        }
+                    } else ++replayed;
+                    const auto expected = construct(rd.v,rx.v,ry.v,ra24.v,rf.v,sigmas[lane],target);
+                    const auto actual = construct(d.v,x.v,y.v,a24.v,factor.v,sigmas[lane],target,
+                                                  &scratch,use ? &point : nullptr);
+                    if (actual!=expected || mpz_cmp(factor.v,rf.v) ||
+                        (actual==Setup::Ready && (mpz_cmp(x.v,rx.v) || mpz_cmp(y.v,ry.v) ||
+                                                 mpz_cmp(d.v,rd.v) || mpz_cmp(a24.v,ra24.v)))) return 1;
+                }
+            }
+            if (!accepted || !replayed) return 1;
+        }
+        std::puts("PASS GPU auxiliary scalar multiplication and CPU replay");
+        return 0;
+    }
     if (argc == 2 && !std::strcmp(argv[1], "--check-affine-dictionary")) {
         using namespace ecm_mersenne_ntt;
         constexpr unsigned p = 8191, words = (p + 31) / 32;

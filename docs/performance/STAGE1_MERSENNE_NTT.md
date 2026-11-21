@@ -20,6 +20,8 @@ RTX 4070 Ti，功率上限 285 W，未单独采集本轮功耗。生产队列取
 
 PrMers 在同机、同指数、同已知因子和 B1 上使用 Marin、torsion=none、sigma 参数化。独立目录中单曲线启动一次，按输出到达时的墙钟计时：进程启动至基点寄存器就绪 4.082 秒，从打印曲线种子算起 0.998 秒，从打印 Stage1 开始算起 0.129 秒。该次只测启动到就绪。PrMers 可执行文件 SHA-256 前缀为 `72d8eb96771b694e`。该模式用 sigma 的有理式直接构造曲线，ECM-ELF 的 Atkin–Morain 曲线还要求辅助点乘。同名 seed 或相同指数不足以配对两者的保存点。[PrMers 计时](../../data/experiments/prmers_init/prmers/timed.log) · [PrMers 构造](../../.refactor/PrMers/src/modes/RunEcmTwistedEdwards.cpp#L2602)
 
+0.72.5（SHA-256 前缀 `81e61165573bc6e8`）在上述 M3024653 生产队列上将 `[sigma]Q` 移至 GPU。RTX 4070 Ti 功率上限 285 W，本轮未采集板功耗。单曲线和双曲线各测一批，日志中 GPU 辅助点乘的墙钟分别为 151 和 143 毫秒，完整 NAF 初始化分别为 3.078 和 3.363 秒。与上文 0.72.4 单曲线两次均值 5.329 秒、双曲线一次 5.724 秒相比，初始化耗时均减少约 42%。点乘已计入初始化。两批均完成 72,121 列，保存文件与上版逐字节一致。[单曲线日志](../../data/experiments/gpu_sigma_q/new1/run.log) · [双曲线日志](../../data/experiments/gpu_sigma_q/newpair/run.log)
+
 ## 500 万位的生产吞吐与独立模平方
 
 在 RTX 4070 Ti（GPU 0，sm89，功率上限 285 W）上串行运行单个进程。对照构建已具备 5242880 位选长和 640 段进位，两侧采用相同的 Goldilocks 系数界。下表比较相同输入、批量和 Graph 的设备时间。Edwards 的一列按一条曲线计数。SHA-256 前缀分别为扩容基线 `4c7c499768ac94e4`、批量加权融合 `3a9673ed4b790636`、线性直接折回 `87dff3e2b5ca09e1` 和最终 0.72.0 `889dcf6113de799a`。[实验目录](../../data/experiments/stage1_ntt_5m/)
