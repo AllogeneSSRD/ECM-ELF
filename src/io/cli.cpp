@@ -24,9 +24,9 @@ void parse_tune(std::string spec, ecm_stage1::NttTuneGrid& grid) {
         const auto field = spec.substr(pos, end - pos);
         const auto eq = field.find('=');
         const auto key = field.substr(0, eq);
-        if (eq == field.npos || !keys.insert(key).second)
+        if ((eq == field.npos && key != "find95") || !keys.insert(key).second)
             throw std::invalid_argument("expected unique key=value in tune");
-        const auto value = field.substr(eq + 1);
+        const auto value = eq == field.npos ? "1" : field.substr(eq + 1);
         const auto number = [&](const std::string& s, unsigned lo, unsigned hi) {
             if (s.empty() || s.find_first_not_of("0123456789") != s.npos)
                 throw std::invalid_argument("invalid tune " + key);
@@ -41,7 +41,8 @@ void parse_tune(std::string spec, ecm_stage1::NttTuneGrid& grid) {
             if (first > last) throw std::invalid_argument("reversed tune range: " + key);
             return TuneRange{first, last};
         };
-        if (value.empty()) {
+        if (key == "find95") grid.find95 = !value.empty() && number(value, 0, 1);
+        else if (value.empty()) {
             if (key != "exp" && key != "length" && key != "naf" && key != "batch" && key != "time" && key != "repeat")
                 throw std::invalid_argument("unknown tune field: " + key);
         } else if (key == "exp") grid.exp = range(stage1_ntt_min_exponent, stage1_ntt_max_exponent);
@@ -91,7 +92,7 @@ void print_usage(const char* prog) {
               << "Usage:\n"
               << "  " << name << " [--config FILE] [--worker N]          Run the Stage1 queue\n"
               << "  echo '<N>' | " << name << " [options] B1 [B2]    Run Stage1 on stdin\n"
-              << "  " << name << " -tune [ntt][,exp=P|,length=L][,naf=W][,batch=B][,time=N][,repeat=A:B]\n"
+              << "  " << name << " -tune [ntt][,exp=P|,length=L][,naf=W][,batch=B][,time=N][,repeat=A:B][,find95]\n"
               << R"(
 Curve and task:
   --param <e|m0|m2|m3>  Curve construction: Edwards or Montgomery PARAM0/2/3.
@@ -151,7 +152,7 @@ GPU execution:
                        Honors -d, --param and --curve.
   --bits <P>          With --gpu-info, select one operand width (0 = all tiers).
                        With --tune ntt, select one exponent width (0 = full grid).
-  -tune, --tune       Optional ntt,exp=P or length=L,naf=W,batch=B,time=N,repeat=A:B.
+  -tune, --tune       Optional ntt,exp=P or length=L,naf=W,batch=B,time=N,repeat=A:B,find95.
                        P,L,W,B accept inclusive min-max. Groups target 100*N ms. A:B sets coarse:fine groups (default 2:2; each 1..20).
                        Optional positional B1 defaults to 128. Use --param e --naf-w W for Edwards NAF.
                        Store and reuse measured configurations in the shared TOML tune_file.
@@ -344,7 +345,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
         try {
             const auto reject = [] { throw std::runtime_error("invalid value"); };
             if (key == "-tune" || key == "--tune") {
-                expected = "[ntt][,exp=P|,length=L][,naf=W][,batch=B][,time=N][,repeat=A:B]";
+                expected = "[ntt][,exp=P|,length=L][,naf=W][,batch=B][,time=N][,repeat=A:B][,find95]";
                 if (input.tune_ntt) throw std::invalid_argument("duplicate tune option");
                 if (i + 1 < argc) {
                     const std::string next = argv[i + 1];

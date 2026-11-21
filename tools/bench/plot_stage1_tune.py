@@ -79,7 +79,7 @@ def main():
     ap.add_argument("--gpu", choices=("4070ti", "4060lp"),
                     help="Historical GPU series (inferred for the two reference devices)")
     ap.add_argument("--uuid", help="Select one GPU if the file contains multiple devices")
-    ap.add_argument("--version", help="Select one program version if the file contains multiple builds")
+    ap.add_argument("--version", help="Restrict samples to one build (default: all builds in the snapshot)")
     ap.add_argument("--baseline", type=Path, help="Main figure comparison.csv for the selected curve")
     ap.add_argument("--output", type=Path, default=ROOT / "data/figures/stage1_tune_preview")
     args = ap.parse_args()
@@ -106,7 +106,8 @@ def main():
                 not args.version or r["program_version"] == args.version):
             rows.append(r)
     uuid = one_value((r["uuid"] for r in rows), "--uuid")
-    version = one_value((r["program_version"] for r in rows), "--version")
+    versions = {r["program_version"] for r in rows}
+    version = next(iter(versions)) if len(versions) == 1 else "mixed builds"
     gpu = args.gpu or MATRIX_GPUS.get(uuid)
     if not gpu:
         ap.error(f"Unknown GPU {uuid}; select the comparison device with --gpu")
@@ -120,14 +121,14 @@ def main():
         matching = [r for r in rows if (r["ntt_type"], r["length"]) in candidates[bool(r["naf_window"])]]
         result = dict(p=p, bits=bits, baseline_s_per_curve=old_cost, baseline_version=old_version,
                       sampled_transforms=" ".join(f"{kind}:{n}" for kind,n in sorted({(r["ntt_type"],r["length"]) for r in matching})),
-                      candidates=len(matching), uuid=uuid, program_version=version, tune_sha256=digest)
+                      candidates=len(matching), uuid=uuid, program_version="", tune_sha256=digest)
         cost = math.nan  # Break the new line across missing matrix positions.
         if matching:
             best = max(matching, key=lambda r: r["iter_per_s"])
             cost = best["reference_steps"] / best["iter_per_s"]
             result.update(s_per_curve_at_1e6=cost, old_over_projected=old_cost/cost,
                           **{k: best.get(k, "") for k in ("iter_per_s", "reference_steps", "reference_bits", "ntt_type",
-                             "length", "bpw", "naf_window", "batch", "graph_bits", "tile", "max_radix_bits", "dataflow",
+                             "length", "bpw", "naf_window", "batch", "graph_bits", "tile", "max_radix_bits", "dataflow", "program_version",
                              "b1", "repeats", "sample_phase", "sample_target_ms", "updated_at")})
         audit.append(result)
         projected.append((p, bits, cost, None, None))

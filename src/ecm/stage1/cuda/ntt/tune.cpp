@@ -668,7 +668,25 @@ void round_header(unsigned p, unsigned window, const char* phase) {
     ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_round: p=%u naf=%u phase=%s\n",p,window,phase);
 }
 
-void report_batches(const std::map<BatchRole,Score>& scores) {
+std::string throughput_change(double current, double previous) {
+    if (current <= 0 || previous <= 0) return "n/a";
+    const double percent = 100 * ((current - previous) / previous);
+    char change[64];
+    std::snprintf(change,sizeof(change),percent == 0 ? "%.2f%%" : "%+.2f%%",percent);
+    return change;
+}
+
+void report_batches(const std::map<BatchRole,Score>& scores, const Score& old95, const Score& measured95, unsigned p, unsigned w) {
+    if (old95.rate > 0 && measured95.rate > 0) {
+        const auto& published = scores.at(Economical);
+        const bool changed = published.batch != old95.batch || published.rate != old95.rate;
+        const auto accent = changed ? EcmLogAccent::Improved : EcmLogAccent::Retained;
+        ecm_log_accent(accent,"stage1_ntt_95_compare: p=%u naf=%u length=%u batch=%u graph=%u\n",
+                       p,w,measured95.plan.length,measured95.batch,measured95.plan.window);
+        ecm_log_accent(accent,"%uc, %.9g vs %uc, %.9g (old)  %s, status=%s\n",
+                       measured95.batch,measured95.rate,old95.batch,old95.rate,
+                       throughput_change(measured95.rate,old95.rate).c_str(),changed ? "updated" : "kept");
+    }
     std::vector<std::array<std::string,7>> rows;
     std::array<int,6> widths{};
     for (const auto& [role,label] : {std::pair{Single,"Single"}, {Capacity,"Max"},
@@ -733,6 +751,8 @@ std::vector<Fields> compact_batch_rows(std::vector<Fields> rows, const std::stri
     return retained;
 }
 
+enum class FineHistory { All, Hits, Snapshot };
+
 class TuneMatrix {
     const Device& device_;
     const ecm_stage1::Stage1Request& request_;
@@ -743,6 +763,7 @@ class TuneMatrix {
     std::optional<Calibration> calibration_;
     std::vector<Fields> history_, legacy_, pending_;
     std::set<size_t> hits_;
+    std::map<unsigned,Score> measured_fine_;
     std::string checkpoint_;
     std::map<unsigned,std::pair<SamplePhase,Score>> length_bests_;
 
@@ -755,6 +776,15 @@ class TuneMatrix {
 public:
     bool header_pending = true;
     unsigned measured = 0;
+    Score measured95() const {
+        const auto peak = std::max_element(measured_fine_.begin(),measured_fine_.end(),[](const auto& a,const auto& b){
+            return a.second.rate < b.second.rate;
+        });
+        if (peak == measured_fine_.end()) return {};
+        return std::find_if(measured_fine_.begin(),measured_fine_.end(),[&](const auto& item){
+            return item.second.rate >= near_peak*peak->second.rate;
+        })->second;
+    }
     TuneMatrix(const Device& device, const ecm_stage1::Stage1Request& request, unsigned p,
                unsigned window, const pt::Profile& db, TuneNafSamples& naf_samples, const ecm_stage1::NttTuneGrid& grid = {}, double deadline = 0)
         : device_(device), request_(request), p_(p), window_(window), grid_(grid), deadline_(deadline),
@@ -863,14 +893,9 @@ public:
                 accent = EcmLogAccent::Improved;
             }
         }
-        char change[64] = "n/a";
-        if (test.rate > 0) {
-            const double percent = 100 * ((test.rate - previous) / previous);
-            std::snprintf(change,sizeof(change),percent == 0 ? "%.2f%%" : "%+.2f%%",percent);
-        }
         ecm_log_accent(accent,"stage1_ntt_recheck: p=%u naf=%u length=%u batch=%u graph=%u\n",
             p_,window_,best.plan.length,best.batch,best.plan.window);
-        ecm_log_accent(accent,"%.9g vs %.9g (old)  %s, status=%s\n",test.rate,previous,change,status);
+        ecm_log_accent(accent,"%.9g vs %.9g (old)  %s, status=%s\n",test.rate,previous,throughput_change(test.rate,previous).c_str(),status);
     }
     std::optional<Stage1NttOptions> previous_plan(const Stage1NttOptions& options, unsigned batch,
                                                   const Plan& plan) const {
@@ -898,6 +923,32 @@ public:
         }
         const unsigned previous = recommended_batch(prior);
         return previous ? previous : fallback;
+    }
+    // Explicit batch ranges have no compact role rows. Recover their finer
+    // measurements, including midpoints absent from the initial shortlist.
+    void restore_finals(const Stage1NttOptions& base, unsigned cap, std::map<unsigned,Score>& finals, FineHistory mode) {
+        using ecm_stage2::tune::uint;
+        const auto shape = candidate(p_,base,ecm_stage1::stage1_ntt_radix5(base.length),
+            window_ ? WeightedBound::UnsignedProducts : WeightedBound::Conservative);
+        if (!shape) return;
+        for (size_t i=0; i<history_.size(); ++i) {
+            if (mode == FineHistory::Hits && !hits_.count(i)) continue;
+            const auto& row = history_[i];
+            const unsigned batch = unsigned(uint(row,"batch"));
+            if (batch < grid_.batch.first || batch > cap || uint(row,"length") != base.length ||
+                (pt::text(row,"ntt_type")==pt::weighted_ntt_type) != base.weighted ||
+                pt::tested_ms(row,2,grid_.fine_repeats) < grid_.group_ms) continue;
+            auto hit = decode(row,shape->shape,device_,batch,base);
+            if (!hit || hit->options.mixed_layout != base.mixed_layout) continue;
+            try {
+                auto plan = describe(device_,p_,batch,hit->options,window_);
+                if (!same_dispatch(row,p_,plan)) continue;
+                const Score score{batch,plan,hit->rate};
+                if (mode != FineHistory::Snapshot) hits_.insert(i);
+                if (score.rate > finals[batch].rate)
+                    finals[batch] = mode == FineHistory::Snapshot ? score : observe(SamplePhase::Fine,score);
+            } catch (const BudgetError&) {}
+        }
     }
     void flush(bool explicit_batch = false) {
         if (explicit_batch) {
@@ -1046,7 +1097,10 @@ public:
                 header_pending = false;
             }
             print_measurement(m, target);
-            return observe(phase,{batch,m.plan,m.throughput()*m.steps,pt::deviation(m.ms)/m.group_ms()});
+            Score score{batch,m.plan,m.throughput()*m.steps,pt::deviation(m.ms)/m.group_ms()};
+            if (phase == SamplePhase::Fine && score.rate > measured_fine_[batch].rate)
+                measured_fine_[batch] = score;
+            return observe(phase,score);
         } catch (const BudgetError& e) {
             ecm_ts_fprintf(stdout, "stage1_ntt_skip: length=%u batch=%u reason=%s\n", options.length,batch,e.what());
             return {};
@@ -1107,7 +1161,7 @@ struct WindowSearch {
     TuneMatrix matrix;
     std::vector<Family> families;
     std::ostringstream scope, search;
-    Score capacity;
+    Score capacity, old95;
     const bool scan_graph;
     double single = 0, peak = 0;
     bool reached_caps = true, cached_fine = false, persisted = false;
@@ -1141,7 +1195,20 @@ struct WindowSearch {
         // Hold Graph size constant while comparing windows, layouts and batches.
         if (scan_graph)
             for (auto& family : families) family.options.window = 16;
-        if (families.empty() || grid.batch_explicit) return;
+        if (families.empty()) return;
+        if (grid.batch_explicit) {
+            std::map<unsigned,Score> historical;
+            restore_fine_scores(historical,FineHistory::Snapshot);
+            if (!historical.empty()) {
+                const auto best = std::max_element(historical.begin(),historical.end(),[](const auto& a,const auto& b){
+                    return a.second.rate < b.second.rate;
+                });
+                old95 = std::find_if(historical.begin(),historical.end(),[&](const auto& item){
+                    return item.second.rate >= near_peak*best->second.rate;
+                })->second;
+            }
+            return;
+        }
         scope << curve_name(request) << '/' << w << '/' << (p-1)/4096
               << '/' << options.profile << '/' << options.tile << '/' << options.outer_max
               << '/' << options.window << '/' << options.warp_tail
@@ -1162,7 +1229,8 @@ struct WindowSearch {
             search << ':' << f.options.weighted << '/' << f.options.length << '/' << int(f.options.mixed_layout) << '/' << f.cap;
         matrix.open_checkpoint(scope.str(),search.str());
         cached_fine = matrix.restore_batches(scope.str(),search.str(),cached,capacity);
-        if (!cached_fine)
+        if (cached_fine) old95 = cached.at(Economical);
+        else
             matrix.restore_batches(scope.str(),search.str()+"/screen",cached,capacity);
     }
 
@@ -1234,19 +1302,9 @@ struct WindowSearch {
                 const unsigned center=f.peak.batch;
                 for (unsigned b : {center-1,center+1})
                     if (b>=grid.batch.first && b<=f.cap) refine_batch(matrix,f,b,finals);
-                unsigned low=grid.batch.first-1, high=f.peak.batch;
-                for (const auto& item : f.best) {
-                    if (item.second.rate >= near_peak*f.peak.rate) { high=item.first; break; }
-                    low=item.first;
-                }
-                while (high>low+1) {
-                    const unsigned mid=low+(high-low)/2;
-                    refine_batch(matrix,f,mid,finals);
-                    if (f.best.count(mid) && f.best.at(mid).rate>=near_peak*f.peak.rate) high=mid;
-                    else low=mid;
-                }
             }
         }
+        if (grid.find95 && grid.batch_explicit) restore_fine_scores(finals,FineHistory::All);
         if (finals.empty()) return false;
         const auto best = std::max_element(finals.begin(),finals.end(),[](const auto& a,const auto& b){
             return a.second.rate<b.second.rate;
@@ -1257,13 +1315,75 @@ struct WindowSearch {
             ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_graph_scan: p=%u naf=%u batch=%u length=%u\n",
                            p,w,winner.batch,winner.plan.length);
             matrix.header_pending = true;
-            for (int steps : {4, 8, 32, 64}) {
+            const int measured_window = int(winner.plan.window);
+            for (int steps : {4, 8, 16, 32, 64}) {
+                if (steps == measured_window) continue;
                 options.window = steps;
                 const auto score = matrix.sample(options,winner.batch,SamplePhase::Fine);
                 if (score.rate > winner.rate) winner = score;
             }
         }
         return true;
+    }
+
+    void restore_fine_scores(std::map<unsigned,Score>& scores, FineHistory mode) {
+        for (const auto& f : families) {
+            auto base = f.options;
+            if (scan_graph) base.window = -1;
+            matrix.restore_finals(base,f.cap,scores,mode);
+        }
+    }
+
+    void find95() {
+        if (cached_fine) {
+            auto& best = cached.at(Fastest);
+            const double previous = best.rate;
+            matrix.recheck(best,scope.str(),search.str());
+            if (best.rate > previous)
+                matrix.restore_batches(scope.str(),search.str(),cached,capacity);
+            for (auto role : {Economical, Fastest}) {
+                const auto& score = cached.at(role);
+                finals[score.batch] = score;
+            }
+            restore_fine_scores(finals,FineHistory::Hits);
+        }
+        auto best = std::max_element(finals.begin(),finals.end(),[](const auto& a,const auto& b){
+            return a.second.rate < b.second.rate;
+        })->second;
+        if (grid.batch_explicit && !matrix.measured) {
+            matrix.recheck(best,{},{});
+            finals[best.batch] = best;
+        }
+        ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_find95: p=%u naf=%u best_batch=%u graph=%u\n",
+                       p,w,best.batch,best.plan.window);
+        matrix.header_pending = true;
+        auto options = fixed_plan(families.front().options,best.plan);
+        unsigned low = grid.batch.first-1, high = best.batch;
+        while (high > low+1) {
+            const unsigned mid = low+(high-low)/2;
+            const auto score = matrix.sample(options,mid,SamplePhase::Fine);
+            if (score.rate && score.rate > finals[mid].rate) finals[mid] = score;
+            const auto at = finals.find(mid);
+            if (at != finals.end() && at->second.rate > best.rate) {
+                best = at->second;
+                options = fixed_plan(options,best.plan);
+            }
+            if (at != finals.end() && at->second.rate >= near_peak*best.rate) high = mid;
+            else low = mid;
+        }
+        if (cached_fine) {
+            cached[Fastest] = best;
+            cached[Economical] = std::find_if(finals.begin(),finals.end(),[&](const auto& item){
+                return item.second.rate >= near_peak*best.rate;
+            })->second;
+            for (auto role : {Single,Capacity}) {
+                auto it = cached.find(role);
+                if (it == cached.end()) continue;
+                auto improved = finals.find(it->second.batch);
+                if (improved != finals.end() && improved->second.rate > it->second.rate)
+                    it->second = improved->second;
+            }
+        }
     }
 
     void report(bool repeat) {
@@ -1275,7 +1395,7 @@ struct WindowSearch {
                 if (best.rate > previous)
                     matrix.restore_batches(scope.str(),search.str(),cached,capacity);
             }
-            report_batches(cached);
+            report_batches(cached,old95,matrix.measured95(),p,w);
             return;
         }
         const auto best = std::max_element(finals.begin(),finals.end(),[](const auto& a,const auto& b){
@@ -1288,7 +1408,7 @@ struct WindowSearch {
         std::map<BatchRole,Score> scores{{Capacity,finals.count(capacity.batch) ? finals.at(capacity.batch) : capacity},
                                         {Fastest,best->second},{Economical,economical->second}};
         if (finals.count(1)) scores[Single] = finals.at(1);
-        report_batches(scores);
+        report_batches(scores,old95,matrix.measured95(),p,w);
     }
 
     void save(bool complete, bool refined) {
@@ -1336,11 +1456,12 @@ bool tune_windows(const Device& device, const ecm_stage1::Stage1Request& request
                                p,trial.w,trial.capacity.batch,trial.capacity.rate,unsigned(advance));
             const bool refined = advance && trial.refine(exhaustive);
             finished |= refined;
-            if (trial.cached.empty() || (refined && !trial.cached_fine))
+            if (refined && grid.find95) trial.find95();
+            if (trial.cached.empty() || (refined && (!trial.cached_fine || grid.find95)))
                 trial.save(!advance || refined,refined);
             else trial.matrix.finish_checkpoint();
             trial.persisted = true;
-            if (refined) trial.report(recheck_cached && !trial.matrix.measured);
+            if (refined) trial.report(recheck_cached && !grid.find95 && !trial.matrix.measured);
             trial.matrix.release_calibration();
             trial.matrix.report_lengths();
             ecm_log_accent(EcmLogAccent::Report,"stage1_ntt_tune: p=%u measured=%u reused=%zu seconds=%.3f naf=%u\n",

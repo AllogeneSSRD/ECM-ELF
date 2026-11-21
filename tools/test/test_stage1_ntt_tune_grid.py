@@ -41,7 +41,7 @@ def main():
         for i, line in enumerate(lines):
             if "stage1_ntt_tune:" in line:
                 assert re.fullmatch(prefix + r"=+", lines[i+1]), name
-            if "stage1_ntt_round:" in line or "stage1_ntt_graph_scan:" in line:
+            if "stage1_ntt_round:" in line or "stage1_ntt_graph_scan:" in line or "stage1_ntt_find95:" in line:
                 first_measurement = True
             header = prefix + "length max_exp ntt_type batch iter/s dataflow actual/target steps/group steps/block"
             if re.fullmatch(header, line):
@@ -69,7 +69,7 @@ def main():
     for index, spec in enumerate(("exp=61,length=8", "naf=12-6", "batch=0", "batch=513",
                                   "exp=31", "time=0", "ntt,naf=6,naf=7", "typo=1",
                                   "repeat=2", "repeat=1:0", "repeat=:2", "repeat=21:1",
-                                  "repeat=1:2:3", "repeat=2:2,repeat=1:1")):
+                                  "find95=2", "find95,find95=1", "repeat=1:2:3", "repeat=2:2,repeat=1:1")):
         log = run(f"bad{index}", ["-tune", spec], success=False)
         assert "INPUT[cli]" in log
         if index == 0:
@@ -107,6 +107,14 @@ def main():
             assert abs(historical / fine[fields.index("iter_per_s")] - 1) < 1e-8
             assert abs(percent - 100 * (measured / historical - 1)) <= 0.0051 + abs(percent) * 1e-8
             assert (comparison[3][0] == "+") == (status == "updated")
+            comparison95 = re.search(
+                r"stage1_ntt_95_compare: p=\d+ naf=6 length=\d+ batch=1 graph=\d+\n"
+                r"(?:\[[^\n]+?\] )?1c, (\S+) vs 1c, (\S+) \(old\)  ([+-]?[\d.]+)%, status=" + status +
+                r"\n(?:\[[^\n]+?\] )?Single ", log)
+            assert comparison95, log
+            published, old95, delta95 = map(float, comparison95.groups())
+            assert old95 == historical and published == measured
+            assert abs(delta95 - 100 * (published/old95-1)) <= 0.0051 + abs(delta95)*1e-8
             updated = rows()
             assert len(updated) == 1
             if status == "updated":
@@ -161,7 +169,19 @@ def main():
     log = run("roles_raised", flags, settings=limits)
     assert log.count("stage1_ntt_recheck:") == 1 and "status=updated" in log
     assert re.search(r"95% +\d+ +\d+ +\S+ +2c ", log)
+    assert re.search(r"2c, [\d.e+]+ vs 1c, 99 \(old\)  \+[\d.]+%, status=updated", log)
     assert {r["batch"]: r["batch_roles"] for r in rows() if (2, 2) in coverage(r)} == {1: 1, 2: 14}
+
+    # The old 95% batch is a cache hit. Only Best gets a fresh timing.
+    for row in values:
+        row[fields.index("iter_per_s")] *= 10000
+        for key in ("total_device_ms", "median_ms", "stddev_seconds"):
+            row[fields.index(key)] /= 10000
+    write_matrix(text, fields, values)
+    log = run("roles_kept_cached95", [flags[0], flags[1] + ",find95", flags[2]], settings=limits)
+    fresh = re.search(r"([\d.e+]+) vs 1000000 \(old\)  -[\d.]+%, status=kept", log)[1]
+    assert f"2c, {fresh} vs 1c, 990000 (old)" in log
+    assert re.search(r"95% +\d+ +\d+ +\S+ +1c +990000 iter/s", log)
 
     for cap in (0, 513):
         log = run(f"invalid_cap_{cap}", ["-tune", "exp=127,batch=1"], settings=f"ntt_max_batch = {cap}", success=False)
@@ -251,6 +271,40 @@ def main():
     counts = re.search(r"measured=(\d+) reused=(\d+)", resumed)
     assert counts and all(int(n) > 0 for n in counts.groups())
     assert len({r["batch"] for r in rows()}) <= 4 and not checkpoints[0].exists()
+
+    database = out / "find95_first_run.toml"
+    log = run("find95_first_run", ["-tune", "length=16,naf=6,time=0.01,find95", "16"],
+              settings="ntt_max_batch = 8")
+    assert log.index("stage1_ntt_graph_scan:") < log.index("stage1_ntt_find95:") < log.index("Single ")
+    best, = (r for r in rows() if r["batch_roles"] & 4)
+    economical, = (r for r in rows() if r["batch_roles"] & 8)
+    assert economical["iter_per_s"] >= 0.95 * best["iter_per_s"]
+
+    # A complete default search can seed the optional post-Graph search.
+    for label, batch_arg in (("compact", ""), ("explicit", ",batch=2-8")):
+        database = out / f"find95_{label}.toml"
+        settings = "ntt_max_batch = 8"
+        spec = "ntt,length=16,naf=6,time=0.01" + batch_arg
+        def search(tag, extra):
+            return run(f"find95_{label}_{tag}", ["-tune", spec + extra, "16"], settings=settings)
+        def best_batch(log):
+            return int(re.search(r"Best +\d+ +\d+ +\S+ +(\d+)c ", log)[1])
+        cold = search("cold", ",find95=0")
+        assert "stage1_ntt_find95:" not in cold
+        for tag, extra in (("enabled", ",find95"), ("repeat", ",find95=1")):
+            log = search(tag, extra)
+            start = re.search(r"stage1_ntt_find95: .*best_batch=(\d+) graph=(\d+)", log)
+            assert start and int(start[1]) == best_batch(cold)
+            assert log.find("stage1_ntt_graph_scan:") < start.start()
+            b = best_batch(log)
+            report = re.search(r"95% +\d+ +\d+ +\S+ +(\d+)c ", log)
+            assert (2 if batch_arg else 1) <= int(report[1]) <= b <= 8
+            saved = rows()
+            if not batch_arg:
+                assert {r["batch"] for r in saved if r["batch_roles"] & 4} == {b}
+                assert {r["batch"] for r in saved if r["batch_roles"] & 8} == {int(report[1])}
+                assert len({r["batch"] for r in saved}) <= 4
+            cold = log
 
     database = out / "range.toml"
     crossing = ["-tune", "ntt,exp=3554-3560,naf=6,batch=1,time=0.01", "16"]
