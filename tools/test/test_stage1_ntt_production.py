@@ -30,6 +30,7 @@ CACHED_FUSED_WEIGHTED_CARRY = 1 << 14
 WARP_WEIGHTED_CARRY = 1 << 20
 PACKED_WEIGHTED_OUTER = 1 << 21
 FIXED_CARRY_OFFSETS = 1 << 22
+DICTIONARY_PRODUCT_TILE = 1 << 23
 
 
 def ntt_executions(log):
@@ -294,25 +295,26 @@ def main():
         p = 65521
         n = (1 << p) - 1
         reference = None
-        for length, tile, outer, graph, fused in (
-            (4096, 12, 4, 16, False), (4096, 11, 4, 16, True),
-            (8192, 11, 4, 0, True), (8192, 10, 4, 16, True),
-            (8192, 10, 1, 16, False),
-            (32768, 12, 4, 16, True), (32768, 12, 1, 16, False),
+        for length, tile, outer, graph, batch, fused in (
+            (4096, 12, 4, 16, 8, False), (4096, 11, 4, 16, 8, True),
+            (8192, 11, 4, 0, 8, True), (8192, 10, 4, 16, 8, True),
+            (8192, 10, 1, 16, 8, False),
+            (32768, 12, 4, 16, 8, True), (32768, 12, 4, 16, 7, True), (32768, 12, 1, 16, 8, False),
         ):
-            work, cmd = fixture(f"packed_outer_{length}_{tile}_{outer}", model="ed",
+            work, cmd = fixture(f"packed_outer_{length}_{tile}_{outer}_{batch}", model="ed",
                                 extra=f'edwards_naf_window_bits = 6\nntt_convolution = "weighted"\n'
                                       f'ntt_length = {length}\nntt_tile = {tile}\n'
                                       f'ntt_outer_radix_limit = {outer}\nntt_window_bits = {graph}\n')
-            call, data = direct(work, cmd, p, b1, sigma, 5)
+            call, data = direct(work, cmd, p, b1, sigma, batch)
             log = run(work, call, text=data)
             [flow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
             assert bool(int(flow) & PACKED_WEIGHTED_OUTER) == fused, log
+            assert bool(int(flow) & DICTIONARY_PRODUCT_TILE) == (fused and length == 32768 and batch >= 8), log
             points = saved_points(work / "out.save", p, b1, True)
-            assert set(points) == set(range(sigma, sigma + 5))
+            assert set(points) == set(range(sigma, sigma + batch))
             if reference is None:
                 reference = points
-            assert points == reference
+            assert points == {seed: reference[seed] for seed in points}
         _, x, z = edwards_stage1(n, sigma, b1)
         assert reference[sigma] == x * pow(z, -1, n) % n
         print("PASS weighted pack with one, two and three outer layers", flush=True)

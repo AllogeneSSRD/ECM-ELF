@@ -139,6 +139,36 @@ __global__ void pack_weighted_outer(const uint32_t* state, U* dest, Shape s, Ind
     for (unsigned i = 0; i < count; ++i) out[i * width] = x[i];
 }
 
+// A variable spectrum and its prepared dictionary operand have matching
+// tile layouts. Each warp owns both sides of the DIF/product/DIT boundary.
+__global__ __launch_bounds__(FUSE_TILE_THREADS, 2)
+void dictionary_product_tile(const U* input, const U* dictionary, U* output,
+                             unsigned length, const U* forward, const U* inverse) {
+    constexpr unsigned width = 4096;
+    const size_t start = size_t(blockIdx.y) * length + blockIdx.x * width;
+    extern __shared__ U sm[];
+    for (unsigned i = threadIdx.x; i < width; i += blockDim.x)
+        sm[i] = input[start + i];
+    __syncthreads();
+    for (int stage = 11; stage > 6; stage -= 2) {
+        tile_radix4_block(sm, width, stage, forward);
+        __syncthreads();
+    }
+    const unsigned lane = threadIdx.x & 31;
+    for (unsigned i = (threadIdx.x >> 5) * 64 + lane; i < width; i += 2 * blockDim.x) {
+        U lo = sm[i], hi = sm[i + 32];
+        tile_warp6_pair<false>(lo, hi, forward);
+        const auto rhs = *reinterpret_cast<const ulonglong2*>(dictionary + start + i + lane);
+        lo = gl_mul(lo, rhs.x);
+        hi = gl_mul(hi, rhs.y);
+        tile_warp6_pair<true>(lo, hi, inverse);
+        sm[i] = lo;
+        sm[i + 32] = hi;
+    }
+    __syncthreads();
+    ntt_tile_finish_inverse(output + start, sm, width, 6, 12, inverse, true);
+}
+
 struct ProductInputs {
     const U* left[4];
     const U* right[4];
@@ -437,6 +467,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     unsigned defaults = FusedMultiplyAdd | LooseDifference | DirectRoute | PackedForward |
                         PfaRadix5 | CoalescedRadix5 | InverseWarpInput | ShortInverseTile | WarpWeightedCarry |
                         PackedWeightedOuter | FixedCarryOffsets;
+    if (curves >= 8) defaults |= DictionaryProductTile;
     // Wider weighted reductions showed a batch-dependent cache tradeoff.
     if (p <= 65536) defaults |= CachedCarry;
     // The mixed pack can consume the segment carries directly. The 5120
@@ -614,6 +645,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool packed_outer = (requested & PackedWeightedOuter) && options.weighted && !mixed && !deferred &&
         forward_input && (s.length == 4096 || s.length == 8192 || s.length == 32768) &&
         ctx.nms == 1 && ctx.ms[0] >= 1 && ctx.ms[0] <= 3;
+    const bool dictionary_tile = naf && packed_outer && inverse_warp_input && s.length == 32768 &&
+                                 ctx.t == 12 && (requested & DictionaryProductTile);
+    if (dictionary_tile) result.dataflow |= DictionaryProductTile;
     if (packed_outer) result.dataflow |= PackedWeightedOuter;
     if (routed) result.dataflow |= DirectRoute;
     if (packed) result.dataflow |= PackedForward;
@@ -782,6 +816,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         ntt_forward_outer_fused(dest,ctx,omega2,batch,q);
         forward_tiles(dest,batch);
     };
+    const auto pack_outer_inputs = [&](U* dest, unsigned count, Indices in) {
+        const std::array kernels{pack_weighted_outer<1>, pack_weighted_outer<2>, pack_weighted_outer<3>};
+        const unsigned columns = 1u << ctx.t;
+        const dim3 blocks((columns + threads - 1) / threads, count * curves);
+        const auto kernel = kernels[ctx.ms[0] - 1];
+        kernel<<<blocks,threads,0,q>>>(state.data,dest,s,in,digit_table.data,ctx.passF[0],ctx.radF[0]);
+        CK(cudaGetLastError());
+    };
     const auto forward_inputs = [&](U* dest, unsigned count, Indices in, unsigned pending = 0) {
         if (packed) {
             packed_kernel<<<dim3(1,count*curves),forward_threads,forward_smem,q>>>(
@@ -790,12 +832,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             return;
         }
         if (packed_outer) {
-            const std::array kernels{pack_weighted_outer<1>, pack_weighted_outer<2>, pack_weighted_outer<3>};
-            const unsigned columns = 1u << ctx.t;
-            const dim3 blocks((columns + threads - 1) / threads, count * curves);
-            const auto kernel = kernels[ctx.ms[0] - 1];
-            kernel<<<blocks,threads,0,q>>>(state.data,dest,s,in,digit_table.data,ctx.passF[0],ctx.radF[0]);
-            CK(cudaGetLastError());
+            pack_outer_inputs(dest,count,in);
             forward_tiles(dest,count*curves);
             return;
         }
@@ -871,11 +908,15 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             state.data,nullptr,carry_headers.data,s,ops,cursor);
         finish_carries(count,ops.out,{},false,pending);
     };
+    enum class ProductKind { Ordinary, EdwardsDouble, Dictionary };
     auto mul=[&](unsigned inputs, unsigned outputs, Indices in, Indices a, Indices b, Indices out,
                  bool build_e = false, bool add_bb = false, Cursor cursor = {},
                  unsigned pending_inputs = 0, unsigned pending_outputs = 0, unsigned fixed_offset = 0,
-                 bool combine_double = false) {
-        forward_inputs(freq.data, inputs, in, pending_inputs);
+                 ProductKind kind = ProductKind::Ordinary) {
+        const bool combine_double = kind == ProductKind::EdwardsDouble;
+        const bool fuse_dictionary = dictionary_tile && kind == ProductKind::Dictionary;
+        if (fuse_dictionary) pack_outer_inputs(freq.data, inputs, in);
+        else forward_inputs(freq.data, inputs, in, pending_inputs);
         if (combine_double && !direct_frequency)
             stage1_ntt_edwards_double_spectra<<<grid(1),threads,0,q>>>(freq.data,modulus.data,s.length);
         const size_t plane = size_t(curves) * s.length;
@@ -921,7 +962,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 inverse_product_tile<false,add_bb,loose_e><<<tiles,FUSE_TILE_THREADS,tile_smem,q>>>(
                     inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);
         };
-        if (combine_double)
+        if (fuse_dictionary) {
+            dictionary_product_tile<<<dim3(width >> ctx.t, inputs * curves),forward_threads,tile_smem,q>>>(
+                freq.data, fixed.data + size_t(fixed_offset) * plane, inverse.data, s.length, ctx.tblF, ctx.tblI);
+        } else if (combine_double)
             frequency_inverse<<<tiles,inverse_threads,inverse_smem,q>>>(
                 inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);
         else if (add_bb && build_e) invert(std::true_type{},std::true_type{});
@@ -1024,10 +1068,16 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         CK(cudaGetLastError());
     };
     constexpr auto x = X0, y = Z0, z = X1, t = Z1;
+    // Both the 2P setup entry and the NAF dictionary use X, Y, dT, X+Y
+    // spectra in consecutive planes, one fixed operand per variable input.
+    const auto multiply_dictionary = [&](unsigned first_plane, unsigned pending) {
+        mul(4,4,{x,y,t,Sum},{0,1,2,3},{5,6,7,8},{AA,BB,C,D},
+            false,false,{},pending,0,first_plane,ProductKind::Dictionary);
+    };
     const auto edwards_double = [&](bool extended) {
         if (frequency_double) {
             mul(3,4,{x,y,z},{0,1,2,3},{0,1,2,3},{Sum,Diff,A,B},false,false,{},0,
-                deferred ? 0b1111 : 0,0,true);
+                deferred ? 0b1111 : 0,0,ProductKind::EdwardsDouble);
         } else {
             // Reduce each product before forming the sums and differences.
             mul(3,4,{x,y,z},{0,1,2,0},{0,1,2,1},{AA,BB,C,E});
@@ -1045,8 +1095,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
 
         const bool negative = digit < 0;
         add_inputs(std::false_type{},1,{{y},{x},{Sum},unsigned(negative)},{},deferred ? 1 : 0);
-        mul(4,4,{x,y,t,Sum},{0,1,2,3},{5,6,7,8},{AA,BB,C,D},
-            false,false,{},deferred ? 0b1000 : 0,0,4 * (unsigned(std::abs(digit)) / 2));
+        multiply_dictionary(4 * (unsigned(std::abs(digit)) / 2), deferred ? 0b1000 : 0);
         // Sum is consumed by the next subtraction. All other coordinates
         // are consumed directly by the second multiply's pack.
         if (negative) {
@@ -1109,7 +1158,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 mul(2,1,{x,y},{0},{1},{t});
                 for (unsigned entry=1; entry<entries; ++entry) {
                     add_inputs(std::false_type{},1,{{x},{y},{Sum},0},{});
-                    mul(4,4,{x,y,t,Sum},{0,1,2,3},{5,6,7,8},{AA,BB,C,D});
+                    multiply_dictionary(0, 0);
                     mul(1,1,{z},{0},{9},{DA});
                     add_inputs(std::false_type{},4,{{D,DA,DA,BB},{AA,C,C,AA},{Sum,Diff,A,B},0b1011},{});
                     add_inputs(std::false_type{},1,{{Sum},{BB},{E},1},{});

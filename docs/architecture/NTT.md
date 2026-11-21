@@ -120,6 +120,8 @@ $E$、$G$、$H$ 的去权系数至多为 $2U$，$F$ 至多为 $4U$，且所有�
 
 ## Stage1 逐点乘加与逆变换 tile
 
+32768 点原生 Edwards 的加权 `3+12` 计划在支持打包融合、warp 逆向输入且批量至少为 8 时，默认合并字典乘法的正逆 tile。每个线程块处理一个坐标、一条曲线的 4096 点子变换。前向 radix-4 阶段在共享内存内完成，末六层 DIF 将两个频率分量留在寄存器中。线程读取字典中同位置的两个分量，逐点相乘后就地执行逆向首六层 DIT，最后写出剩余逆向层结果。字典频谱可以跨列复用，变量坐标的完整频谱省去一次写出和读回。该路径用于非零 NAF 列和 GPU 构造字典中的对应四路乘法；倍点中的共享频谱沿用原有调度。
+
 逐点乘加与首段逆变换融合在 `inverse_product_tile`。同一个 grid 的不同块按输出编号选择输入指针。CUDA 计算能力 7.0 起，`__grid_constant__` 允许动态索引直接读取只读 grid 参数，省去每线程的输入指针表副本。较早的 CUDA 目标使用按值传参。[CUDA 参数说明](https://docs.nvidia.com/cuda/archive/13.2.2/cuda-programming-guide/05-appendices/cpp-language-extensions.html)
 
 加权路径把长度归一化 \(L^{-1}\) 乘入逆权重表。逆变换对统一缩放是线性的，因而可以先做未缩放的逆变换，再由 `weighted_limb_sums` 对每个系数一次性应用 \(L^{-1}\) 和逆权重。PFA 与二次幂形状均使用完整卷积长度 \(L\)。线性卷积继续在逆变换 tile 入口缩放。见 [权重表与 limb 汇集](../../src/ecm/stage1/cuda/ntt/weighted.cuh) 和 [批次调度](../../src/ecm/stage1/cuda/ntt/ladder.cu)。
