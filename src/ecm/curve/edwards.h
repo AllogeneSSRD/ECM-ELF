@@ -81,7 +81,9 @@ struct MersenneConstruction {
 
 inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uint64_t sigma,
                        const mpz_t n, MersenneConstruction* mersenne = nullptr,
-                       const MersenneConstruction::Jacobian* auxiliary = nullptr) {
+                       const MersenneConstruction::Jacobian* auxiliary = nullptr, mpz_ptr montgomery_x = nullptr) {
+    // A negative result asks the caller to classify the affine chart separately.
+    if (montgomery_x) mpz_set_si(montgomery_x, -1);
     if (mersenne && mersenne->n != n)
         throw std::invalid_argument("Edwards Mersenne construction modulus differs from its scratch state");
     mpz_set_ui(factor, 0);
@@ -333,18 +335,18 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uin
 
     // Edwards starting y = h*(t^2 + 50*t - 2*s^3 + 27*s^2 - 104)
     //                      / ((t + 3*s - 2)*(t + s + 16)).
-    const auto y_numerator = [&] {
-        sqr(num.v, t.v);
+    const auto y_numerator = [&](mpz_ptr out) {
+        sqr(out, t.v);
         mpz_mul_ui(T.v, t.v, 50);
-        mpz_add(num.v, num.v, T.v);
+        mpz_add(out, out, T.v);
         sqr(T.v, s.v);
         mul(U.v, T.v, s.v);
         mpz_mul_ui(U.v, U.v, 2);
-        mpz_sub(num.v, num.v, U.v);
+        mpz_sub(out, out, U.v);
         mpz_mul_ui(T.v, T.v, 27);
-        mpz_add(num.v, num.v, T.v);
-        mpz_sub_ui(num.v, num.v, 104);
-        mul(num.v, num.v, h.v);
+        mpz_add(out, out, T.v);
+        mpz_sub_ui(out, out, 104);
+        mul(out, out, h.v);
     };
     const auto y_denominator = [&](mpz_ptr r) {
         mpz_mul_ui(r, s.v, 3);
@@ -359,20 +361,26 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uin
     if (mersenne) {
         // With d = num/den, a24 = den/(den-num). The product also includes num
         // to check that d is a unit; den-num checks that 1-d is a unit.
-        Integer a24_den, x_den, y_den;
+        Integer a24_den, x_den, y_den, y_num, chart_den;
         mpz_sub(a24_den.v, den.v, num.v);
         x_denominator(x_den.v);
         y_denominator(y_den.v);
-        const std::array<mpz_srcptr, 4> divisors{den.v, a24_den.v, x_den.v, y_den.v};
+        // For y = Ynum/Yden the Montgomery chart is (Yden+Ynum)/(Yden-Ynum).
+        if (montgomery_x) {
+            y_numerator(y_num.v);
+            mpz_sub(chart_den.v, y_den.v, y_num.v);
+        }
+        const std::array<mpz_srcptr, 5> divisors{den.v, a24_den.v, x_den.v, y_den.v, chart_den.v};
+        const size_t count = montgomery_x ? 5 : 4;
         std::array<Integer, divisors.size()> products;
         mpz_set(products.front().v, divisors.front());
-        for (size_t i = 1; i < divisors.size(); ++i)
+        for (size_t i = 1; i < count; ++i)
             mul(products[i].v, products[i - 1].v, divisors[i]);
-        mul(T.v, products.back().v, num.v);
+        mul(T.v, products[count-1].v, num.v);
         if (mpz_invert(inv.v, T.v, n)) {
             // Cancel num, then recover each reciprocal using the prefix products.
             mul(inv.v, inv.v, num.v);
-            for (size_t i = divisors.size() - 1; i != 0; --i) {
+            for (size_t i = count - 1; i != 0; --i) {
                 mul(products[i].v, inv.v, products[i - 1].v);
                 mul(inv.v, inv.v, divisors[i]);
             }
@@ -380,8 +388,14 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uin
             mul(a24, den.v, products[1].v);
             x_numerator();
             mul(px, num.v, products[2].v);
-            y_numerator();
-            mul(py, num.v, products[3].v);
+            if (montgomery_x) {
+                mpz_add(T.v, y_den.v, y_num.v);
+                mul(montgomery_x, T.v, products[4].v);
+                mul(py, y_num.v, products[3].v);
+            } else {
+                y_numerator(num.v);
+                mul(py, num.v, products[3].v);
+            }
             mapped = true;
         }
     }
@@ -413,7 +427,7 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uin
             return rc;
         mul(px, num.v, inv.v);
 
-        y_numerator();
+        y_numerator(num.v);
         y_denominator(den.v);
         rc = inverse(inv.v, den.v, n, factor);
         if (rc != Setup::Ready)

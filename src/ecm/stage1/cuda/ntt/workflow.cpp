@@ -148,10 +148,15 @@ CurveKind prepare_edwards_lane(mpz_srcptr n, uint64_t sigma, mpz_ptr factor, uin
     using ecm_edwards::Integer;
     using ecm_edwards::Setup;
     Integer a24, x, inv, den;
-    auto setup = ecm_edwards::construct(d, px, py, a24.v, factor, sigma, n, construction, auxiliary);
+    mpz_set_si(x.v, -1);
+    auto setup = ecm_edwards::construct(d, px, py, a24.v, factor, sigma, n, construction, auxiliary,
+                                        auxiliary && construction ? x.v : nullptr);
     if (auxiliary && setup != Setup::Ready) {
-        ecm_ts_fprintf(stdout,"stage1_ntt_auxiliary: sigma=%llu exceptional_map=1 replay=cpu\n",
-                       static_cast<unsigned long long>(sigma));
+        mpz_gcd(den.v, auxiliary->z.v, n);
+        ecm_ts_fprintf(stdout,"stage1_ntt_auxiliary: sigma=%llu %s replay=cpu\n",
+                       static_cast<unsigned long long>(sigma),
+                       mpz_cmp_ui(den.v, 1) ? "nonunit_z=1" : "exceptional_map=1");
+        mpz_set_si(x.v, -1);
         setup = ecm_edwards::construct(d, px, py, a24.v, factor, sigma, n, construction);
     }
     if (setup == Setup::Factor) return CurveKind::Factor;
@@ -159,31 +164,37 @@ CurveKind prepare_edwards_lane(mpz_srcptr n, uint64_t sigma, mpz_ptr factor, uin
         return ecm_edwards::construction_is_degenerate(setup, factor, n)
             ? CurveKind::Degenerate : CurveKind::Failed;
 
-    mpz_ui_sub(den.v, 1, py);
-    const auto chart = ecm_edwards::inverse(inv.v, den.v, n, factor);
-    if (chart == Setup::Factor) return CurveKind::Factor;
-    if (chart == Setup::Degenerate) return CurveKind::CompletedWithoutPoint;
-    mpz_add_ui(x.v, py, 1);
-    mpz_mul(x.v, x.v, inv.v);
-    mpz_mod(x.v, x.v, n);
+    if (mpz_sgn(x.v) < 0) {
+        mpz_ui_sub(den.v, 1, py);
+        const auto chart = ecm_edwards::inverse(inv.v, den.v, n, factor);
+        if (chart == Setup::Factor) return CurveKind::Factor;
+        if (chart == Setup::Degenerate) return CurveKind::CompletedWithoutPoint;
+        mpz_add_ui(x.v, py, 1);
+        mpz_mul(x.v, x.v, inv.v);
+        mpz_mod(x.v, x.v, n);
+    }
     // The point with x=0 has order two and the Edwards scalar is even.
     if (mpz_sgn(x.v) == 0) return CurveKind::CompletedWithoutPoint;
 
     Integer one, aa, bb, e, x2, z2;
+    const auto reduce = [&](mpz_ptr value) {
+        if (construction) construction->reduce(value);
+        else mpz_mod(value, value, n);
+    };
     mpz_set_ui(one.v, 1);
     mpz_add_ui(aa.v, x.v, 1);
     mpz_mul(aa.v, aa.v, aa.v);
-    mpz_mod(aa.v, aa.v, n);
+    reduce(aa.v);
     mpz_sub_ui(bb.v, x.v, 1);
     mpz_mul(bb.v, bb.v, bb.v);
-    mpz_mod(bb.v, bb.v, n);
+    reduce(bb.v);
     mpz_sub(e.v, aa.v, bb.v);
     mpz_mul(x2.v, aa.v, bb.v);
-    mpz_mod(x2.v, x2.v, n);
+    reduce(x2.v);
     mpz_mul(z2.v, a24.v, e.v);
     mpz_add(z2.v, z2.v, bb.v);
     mpz_mul(z2.v, z2.v, e.v);
-    mpz_mod(z2.v, z2.v, n);
+    reduce(z2.v);
     const mpz_srcptr slots[] = {x.v, one.v, x2.v, z2.v, a24.v, x.v};
     for (unsigned slot = 0; slot < 6; ++slot)
         mpz_export(initial + slot * words, nullptr, -1, sizeof(uint32_t), 0, 0, slots[slot]);
@@ -207,7 +218,7 @@ void prepare_edwards_batch(mpz_srcptr n, const std::vector<uint64_t>& sigmas, un
         for (unsigned j = curves * worker / threads; j < curves * (worker + 1) / threads; ++j) {
             const unsigned i = order[j];
             ecm_edwards::MersenneConstruction::Jacobian point;
-            bool use_device_point = !auxiliary.empty();
+            const bool use_device_point = !auxiliary.empty();
             if (use_device_point) {
                 mpz_ptr coords[] = {point.x.v,point.y.v,point.z.v};
                 for (size_t slot=0; slot<3; ++slot) {
@@ -215,12 +226,7 @@ void prepare_edwards_batch(mpz_srcptr n, const std::vector<uint64_t>& sigmas, un
                     mpz_import(coords[slot],words,-1,sizeof(uint32_t),0,0,src);
                     mpz_mod(coords[slot],coords[slot],n);
                 }
-                // Every ordinary double multiplies Z by 2Y, every mixed add by H.
-                // A nonunit in any intermediate step persists in the final Z.
-                mpz_gcd(d.v,point.z.v,n);
-                use_device_point = mpz_cmp_ui(d.v,1)==0;
-                if (!use_device_point)
-                    ecm_ts_fprintf(stdout,"stage1_ntt_auxiliary: lane=%u nonunit_z=1 replay=cpu\n",i);
+
             }
             kinds[i] = prepare_edwards_lane(n, sigmas[i], factors[i],
                 initial.data() + size_t(i) * 6 * words, words, d.v, px.v, py.v, scratch ? &*scratch : nullptr,

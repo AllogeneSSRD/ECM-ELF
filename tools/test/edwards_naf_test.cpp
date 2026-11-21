@@ -151,12 +151,24 @@ static std::array<unsigned, 3> compare_construction(mpz_srcptr n, const std::vec
     using ecm_edwards::Setup;
     ecm_edwards::MersenneConstruction worker(n,carrier);
     ConstructionOutput generic, optimized;
+    ecm_edwards::Integer chart, denominator, reciprocal, expected_chart;
     std::array<unsigned, 3> counts{};
     for (const uint64_t sigma : sigmas) {
         const auto expected = ecm_edwards::construct(generic.d.v, generic.x.v, generic.y.v, generic.a24.v,
                                                      generic.factor.v, sigma, n);
         const auto actual = ecm_edwards::construct(optimized.d.v, optimized.x.v, optimized.y.v,
-                                                   optimized.a24.v, optimized.factor.v, sigma, n, &worker);
+                                                   optimized.a24.v, optimized.factor.v, sigma, n, &worker, nullptr, chart.v);
+        if (expected == Setup::Ready) {
+            mpz_ui_sub(denominator.v, 1, generic.y.v);
+            mpz_set_si(expected_chart.v, -1);
+            if (mpz_invert(reciprocal.v, denominator.v, n)) {
+                mpz_add_ui(expected_chart.v, generic.y.v, 1);
+                mpz_mul(expected_chart.v, expected_chart.v, reciprocal.v);
+                mpz_mod(expected_chart.v, expected_chart.v, n);
+            }
+            if (mpz_cmp(chart.v, expected_chart.v))
+                throw std::runtime_error("Batched Montgomery chart differs at sigma " + std::to_string(sigma));
+        }
         if (actual != expected || mpz_cmp(optimized.factor.v, generic.factor.v) ||
             (actual == Setup::Ready &&
              (mpz_cmp(optimized.d.v, generic.d.v) || mpz_cmp(optimized.x.v, generic.x.v) ||
