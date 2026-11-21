@@ -1,5 +1,11 @@
 # GPU NTT Stage1 Edwards1：扩宽与批量调优规划
 
+## 0.72.0 扩展至 5242880 位
+
+连续系数界、调优矩阵和生产入口已扩展到加权 262144 点、线性 524288 点。新增 81920 和 163840 点混合长度。超过 128 段的余数按输出槽就地解析进位，加权宽档可融合首趟 outer 与字典正逆 tile，线性宽档直接按 limb 汇集逆变换的系数。RTX 4070 Ti 的单进程生产、调优和 PRPLL 模平方对照见[宽位实测](../performance/STAGE1_MERSENNE_NTT.md#500-万位的生产吞吐与独立模平方)。5M 生产端点、两种 outer 分解、GMP 极值和越界拒绝的原始记录在[实验目录](../../data/experiments/stage1_ntt_5m/)。
+
+RTX 4070 Ti 的 GMP 探针覆盖新增混合档、原上限加一、部分顶 limb 及 640 段上限，包括直接提交、Graph、跨数据流恢复。生产测得的 M5000011 线性、加权和两种 outer 分解保存点一致。Compute Sanitizer 分别针对线性折回的内存访问和宽位进位的同步各检查六次内核启动，均为 0 errors。[内存检查](../../data/experiments/stage1_ntt_5m/memcheck_verified.log) · [同步检查](../../data/experiments/stage1_ntt_5m/synccheck_verified.log)
+
 ## 0.71.4 扩展至 512 曲线
 
 固定 Edwards、p=2000、线性 NTT 长度 256、B1=16、w=6、profile=1，比较 128、256、512 曲线。三轮独立冷表轮换三档顺序。每轮取精测的 5 组，每组目标设备时间 100 ms；每组回放同一条 27 列 NAF（4 个非零列），以总曲线列数除以 CUDA event 总时间计算吞吐。下列数值取三轮精测的中位数。

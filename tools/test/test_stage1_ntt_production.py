@@ -584,10 +584,15 @@ def main():
         assert saved_points(work / "out.save", p, b1, edwards=model == "ed") == wide_expected
     print("PASS wide segmented carry and deferred pack against independent Python", flush=True)
 
-    for extended_p, lengths in ((900001, (131072, 40960, 65536)), (1048573, (131072, 65536))):
+    for extended_p, linear_length, weighted_lengths in (
+        (900001, 131072, (40960, 65536)),
+        (1048573, 131072, (65536,)),
+        (5000011, 524288, (262144,)),
+    ):
+        lengths = (linear_length, *weighted_lengths)
         extended_points = None
         for length in lengths:
-            mode, naf = ("linear", 0) if length == 131072 else ("weighted", 6)
+            mode, naf = ("linear", 0) if length == linear_length else ("weighted", 6)
             extra = (f'ntt_convolution = "{mode}"\nntt_length = {length}\n'
                      f'edwards_naf_window_bits = {naf}\n')
             work, cmd = fixture(f"edwards_wide_{extended_p}_{length}", extra=extra, model="ed")
@@ -623,9 +628,9 @@ def main():
          "2^4003-1\n", 1, "unsafe weighted NTT length"),
         ("unsafe_radix5", 'ntt_convolution = "weighted"\nntt_length = 2560\n',
          "2^64001-1\n", 1, "unsafe weighted NTT length"),
-        ("radix5_over_limit", 'ntt_convolution = "weighted"\nntt_length = 81920\n',
+        ("radix5_over_limit", 'ntt_convolution = "weighted"\nntt_length = 327680\n',
          "2^4003-1\n", 1, "outside the supported domain"),
-        ("exponent_over_limit", "", "2^1048577-1\n", 1, "1048576"),
+        ("exponent_over_limit", "", "2^5242881-1\n", 1, "5242880"),
         ("linear_radix5", 'ntt_length = 2560\n', "2^4003-1\n", 1, "power of two"),
         ("too_many_passes", "ntt_length = 65536\nntt_tile = 1\nntt_outer_radix_limit = 1\n",
          "2^4003-1\n", 1, "more than eight outer passes"),

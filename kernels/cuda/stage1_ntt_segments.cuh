@@ -7,8 +7,7 @@
 namespace ecm_mersenne_ntt::stage1_layout {
 
 constexpr unsigned stage1_carry_segment = 256;
-constexpr unsigned stage1_max_segments = 128;
-static_assert(stage1_max_segments * stage1_carry_segment * 32 == ecm_stage1::stage1_ntt_max_exponent);
+constexpr unsigned inline_carry_segments = 128;
 
 __host__ __device__ constexpr unsigned stage1_segment_count(unsigned words)
 {
@@ -60,7 +59,8 @@ __device__ __forceinline__ void stage1_segment_corrections(
     unsigned* limits, const unsigned* headers, unsigned segments)
 {
     if (segments > 64) {
-        constexpr unsigned max_groups = stage1_max_segments / 32;
+        constexpr unsigned max_groups = (stage1_segment_count(ecm_stage1::stage1_ntt_max_exponent / 32) + 31) / 32;
+        static_assert(max_groups <= 32, "one thread per segment must fit in one block");
         __shared__ unsigned transfers[max_groups];
         const unsigned group = threadIdx.x / 32, lane = threadIdx.x % 32;
         const unsigned groups = (segments + 31) / 32;
@@ -115,7 +115,30 @@ __device__ __forceinline__ uint32_t stage1_segment_word(
     return (row[word] + unsigned(word % stage1_carry_segment < limit)) & mask;
 }
 
-enum class SegmentInput { Add, Linear, Weighted };
+enum class SegmentInput { Add, Linear, LimbSums };
+
+// Linear coefficients start at j*bpw and occupy at most 64 bits. Split each
+// coefficient at limb boundaries before adding, folding the upper p bits
+// into the lower p. This avoids normalizing long strings of base-2^bpw digits
+// just to immediately unpack them into limbs. Each limb gathers at most
+// 2*ceil(95/bpw) masked fragments; its sum fits comfortably in 64 bits.
+__global__ void linear_limb_sums(WeightedWord* sums, const WeightedWord* coefficients, Shape s) {
+    const unsigned word = blockIdx.x * blockDim.x + threadIdx.x;
+    if (word >= s.words) return;
+    coefficients += size_t(blockIdx.y) * s.length;
+    const unsigned bit = 32 * word;
+    const unsigned width = min(32u, s.p - bit);
+    const WeightedWord mask = limb_mask(s,word);
+    WeightedWord sum = 0;
+    for (unsigned wrap = 0; wrap < 2; ++wrap) {
+        const unsigned lo = bit + wrap * s.p;
+        const unsigned first = lo < 64 ? 0 : (lo - 64) / s.bpw + 1;
+        const unsigned end = min(2 * s.digits - 1, (lo + width + s.bpw - 1) / s.bpw);
+        for (unsigned j = first; j < end; ++j)
+            sum += weighted_limb_fragment(coefficients[j], j * s.bpw, lo, mask);
+    }
+    sums[size_t(blockIdx.y) * s.words + word] = sum;
+}
 
 template<SegmentInput Input, bool Select, bool Routed>
 __global__ void segment_limb_sums(uint32_t* state, const unsigned long long* products, unsigned* headers,
@@ -127,7 +150,7 @@ __global__ void segment_limb_sums(uint32_t* state, const unsigned long long* pro
     const uint32_t mask = i < s.words ? limb_mask(s,i) : 0;
     unsigned long long value = 0; // Inactive lanes propagate.
     if (i < s.words) {
-        if constexpr (Input == SegmentInput::Weighted) {
+        if constexpr (Input == SegmentInput::LimbSums) {
             const auto* sums = products + size_t(blockIdx.y) * s.words;
             value = weighted_limb(sums,s.words,s.p - 32 * (s.words - 1),i,mask);
         } else if constexpr (Input == SegmentInput::Linear) {
@@ -142,6 +165,18 @@ __global__ void segment_limb_sums(uint32_t* state, const unsigned long long* pro
     if (i < s.words) state[row * s.words + i] = result;
 }
 
+// Wide residues reuse the same correction in many packing and finish blocks.
+// Resolve the ring once per output row. The scan reads every header before
+// its first block barrier, so it can replace the headers in place.
+template<bool Routed>
+__global__ void resolve_segment_headers(unsigned* headers, Shape s, Indices out, Cursor cursor) {
+    const unsigned slot = output_slot<Routed>(out.x[blockIdx.x / s.curves], cursor);
+    const size_t row = size_t(slot) * s.curves + blockIdx.x % s.curves;
+    const unsigned segments = stage1_segment_count(s.words);
+    auto* limits = headers + row * segments;
+    stage1_segment_corrections(limits, limits, segments);
+}
+
 template<bool Routed>
 __global__ void finish_segment_carries(uint32_t* state, const unsigned* headers, Shape s,
                                       Indices out, Cursor cursor, unsigned deferred_mask) {
@@ -149,8 +184,12 @@ __global__ void finish_segment_carries(uint32_t* state, const unsigned* headers,
     if ((deferred_mask >> op) & 1) return;
     const unsigned slot = output_slot<Routed>(out.x[op],cursor);
     const size_t row = size_t(slot) * s.curves + blockIdx.y % s.curves;
-    __shared__ unsigned limits[stage1_max_segments];
-    stage1_segment_corrections(limits,headers + row * gridDim.x,gridDim.x);
+    __shared__ unsigned local[inline_carry_segments];
+    const unsigned* limits = headers + row * gridDim.x;
+    if (gridDim.x <= inline_carry_segments) {
+        stage1_segment_corrections(local,limits,gridDim.x);
+        limits = local;
+    }
     const unsigned i = blockIdx.x * stage1_carry_segment + threadIdx.x;
     if (i < s.words) {
         auto* limbs = state + row * s.words;

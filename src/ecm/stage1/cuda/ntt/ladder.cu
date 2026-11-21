@@ -57,11 +57,16 @@ __global__ void pack(const uint32_t* state, U* out, Shape s, Indices in,
     const unsigned op = blockIdx.y / s.curves;
     const size_t residue = size_t(in.x[op]) * s.curves + blockIdx.y % s.curves;
     const uint32_t* source = Modulus ? nullptr : state + residue * s.words;
-    __shared__ unsigned limits[Deferred ? stage1_max_segments : 1];
+    __shared__ unsigned local[Deferred ? inline_carry_segments : 1];
+    const unsigned* limits = local;
     const bool pending = Deferred && ((deferred_mask >> op) & 1);
     if (pending) {
         const unsigned segments = stage1_segment_count(s.words);
-        stage1_segment_corrections(limits, headers + residue * segments, segments);
+        limits = headers + residue * segments;
+        if (segments <= inline_carry_segments) {
+            stage1_segment_corrections(local, limits, segments);
+            limits = local;
+        }
     }
     if (i >= width) return;
     const auto read_word = [&](unsigned word) {
@@ -96,8 +101,8 @@ __global__ void pack(const uint32_t* state, U* out, Shape s, Indices in,
     }
 }
 
-// With a single outer pass, column j contains one digit from each tile.
-// Pack the column straight into its DIF butterflies before writing the tiles.
+// Column j contains one digit from each arm of the first DIF pass.
+// Later outer passes consume the usual in-place spectrum layout.
 template<int Layers>
 __global__ void pack_weighted_outer(const uint32_t* state, U* dest, Shape s, Indices in,
                                     const WeightedDigit* digits, const U* roots, const U* radix) {
@@ -642,10 +647,13 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (warp_reduce) result.dataflow |= WarpWeightedCarry;
     const bool cached = (requested & CachedCarry) && options.weighted && !segmented && !warp_reduce && s.words <= 32 * threads;
     const bool deferred = segmented && !packed && (requested & DeferredPack);
-    const bool packed_outer = (requested & PackedWeightedOuter) && options.weighted && !mixed && !deferred &&
-        forward_input && (s.length == 4096 || s.length == 8192 || s.length == 32768) &&
-        ctx.nms == 1 && ctx.ms[0] >= 1 && ctx.ms[0] <= 3;
-    const bool dictionary_tile = naf && packed_outer && inverse_warp_input && s.length == 32768 &&
+    const bool wide_outer = s.length == 262144 && segment_count > inline_carry_segments && ctx.nms > 0;
+    const bool single_outer = ctx.nms == 1 && !deferred &&
+        (s.length == 4096 || s.length == 8192 || s.length == 32768);
+    const bool packed_outer = (requested & PackedWeightedOuter) && options.weighted && !mixed &&
+        forward_input && (single_outer || wide_outer) && ctx.ms[0] >= 1 && ctx.ms[0] <= 3;
+    const bool dictionary_tile = naf && packed_outer && inverse_warp_input &&
+                                 (s.length == 32768 || s.length == 262144) &&
                                  ctx.t == 12 && (requested & DictionaryProductTile);
     if (dictionary_tile) result.dataflow |= DictionaryProductTile;
     if (packed_outer) result.dataflow |= PackedWeightedOuter;
@@ -818,11 +826,13 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     };
     const auto pack_outer_inputs = [&](U* dest, unsigned count, Indices in) {
         const std::array kernels{pack_weighted_outer<1>, pack_weighted_outer<2>, pack_weighted_outer<3>};
-        const unsigned columns = 1u << ctx.t;
+        const unsigned columns = s.length >> ctx.ms[0];
         const dim3 blocks((columns + threads - 1) / threads, count * curves);
         const auto kernel = kernels[ctx.ms[0] - 1];
         kernel<<<blocks,threads,0,q>>>(state.data,dest,s,in,digit_table.data,ctx.passF[0],ctx.radF[0]);
         CK(cudaGetLastError());
+        if (ctx.nms > 1)
+            ntt_forward_outer_fused(dest,ctx,omega2,count*curves,q,ForwardOuterInput::FirstPassComplete);
     };
     const auto forward_inputs = [&](U* dest, unsigned count, Indices in, unsigned pending = 0) {
         if (packed) {
@@ -831,7 +841,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             CK(cudaGetLastError());
             return;
         }
-        if (packed_outer) {
+        if (packed_outer && !pending) {
             pack_outer_inputs(dest,count,in);
             forward_tiles(dest,count*curves);
             return;
@@ -890,6 +900,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     CK(cudaStreamSynchronize(q));
     const auto finish_carries = [&](unsigned count, Indices out, Cursor cursor,
                                     bool route, unsigned pending) {
+        if (segment_count > inline_carry_segments) {
+            const unsigned scan_threads = ((segment_count + 31) / 32) * 32;
+            if (route)
+                resolve_segment_headers<true><<<count*curves,scan_threads,0,q>>>(carry_headers.data,s,out,cursor);
+            else
+                resolve_segment_headers<false><<<count*curves,scan_threads,0,q>>>(carry_headers.data,s,out,cursor);
+            CK(cudaGetLastError());
+        }
         if (pending == (1u << count) - 1) return;
         if (route)
             finish_segment_carries<true><<<segment_grid(count),stage1_carry_segment,0,q>>>(
@@ -914,7 +932,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                  unsigned pending_inputs = 0, unsigned pending_outputs = 0, unsigned fixed_offset = 0,
                  ProductKind kind = ProductKind::Ordinary) {
         const bool combine_double = kind == ProductKind::EdwardsDouble;
-        const bool fuse_dictionary = dictionary_tile && kind == ProductKind::Dictionary;
+        const bool fuse_dictionary = dictionary_tile && !pending_inputs && kind == ProductKind::Dictionary;
         if (fuse_dictionary) pack_outer_inputs(freq.data, inputs, in);
         else forward_inputs(freq.data, inputs, in, pending_inputs);
         if (combine_double && !direct_frequency)
@@ -1023,12 +1041,17 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 const dim3 limb_grid((s.words + weighted_limb_threads - 1) / weighted_limb_threads, batch);
                 weighted_limb_sums<<<limb_grid,weighted_limb_threads,limb_smem,q>>>(
                     freq.data,inverse.data,inverse_weights.data,digit_table.data,limb_table.data,p,s.words,s.length);
-                if (segmented) summarize(std::integral_constant<SegmentInput,SegmentInput::Weighted>{});
+                if (segmented) summarize(std::integral_constant<SegmentInput,SegmentInput::LimbSums>{});
                 else if (route_output && cached) reduce(yes,yes,yes);
                 else if (route_output) reduce(yes,yes,no);
                 else if (cached) reduce(yes,no,yes);
                 else reduce(yes,no,no);
             }
+        } else if (segment_count > inline_carry_segments) {
+            linear_limb_sums<<<segment_grid(outputs),stage1_carry_segment,0,q>>>(freq.data,inverse.data,s);
+            if (segmented) summarize(std::integral_constant<SegmentInput,SegmentInput::LimbSums>{});
+            else if (route_output) reduce(yes,yes,no);
+            else reduce(yes,no,no);
         } else {
             ecm_launch_carry_cone_kernel<6>(EcmCudaLaunch(grid(outputs),threads,0,q),inverse.data,freq.data,s.length,s.bpw,s.length);
             if (segmented) summarize(std::integral_constant<SegmentInput,SegmentInput::Linear>{});

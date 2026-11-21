@@ -132,7 +132,7 @@ GPU Edwards 用 `--param e` 和不带参数化前缀的 sigma。已知素因子�
 
 ## CUDA 全宽 NTT
 
-在 `[stage1]` 设置 `gpu_algorithm = "ntt"` 或 `2` 可以显式启用 NTT。线性和加权卷积均支持梅森承载指数 `32 ≤ p ≤ 1048576`，包括完整 `2^p−1` 和保留原指数及已知因子元数据的合格余因子。在 1048576 位上，保守选长使用 65536 点加权 NTT 或 131072 点线性 NTT。Edwards 使用 `param = "e"` 和固定的 `48·lcm(1…B1)`。Montgomery PARAM0 的 `montgomery_lcm_multiplier` 可设为 `"1"` 或 `"12"`。队列任务通过 `e_` 或 `m0_` save 前缀选择曲线构造。[已知因子与分段进位](../architecture/NTT.md#stage1-已知因子与梅森承载)
+在 `[stage1]` 设置 `gpu_algorithm = "ntt"` 或 `2` 可以显式启用 NTT。线性和加权卷积均支持梅森承载指数 `32 ≤ p ≤ 5242880`，包括完整 `2^p−1` 和保留原指数及已知因子元数据的合格余因子。在 5242880 位上，保守选长使用 262144 点加权 NTT 或 524288 点线性 NTT。Edwards 使用 `param = "e"` 和固定的 `48·lcm(1…B1)`。Montgomery PARAM0 的 `montgomery_lcm_multiplier` 可设为 `"1"` 或 `"12"`。队列任务通过 `e_` 或 `m0_` save 前缀选择曲线构造。[已知因子与分段进位](../architecture/NTT.md#stage1-已知因子与梅森承载)
 
 Edwards NTT 的 `edwards_naf_window_bits = 0` 按调优表选择吞吐最高的可用 NAF 窗口，2～12 选择原生 2XY NAF 窗口。原生路径根据模数位宽、窗口和批量选择主机或 GPU 建表。若仅 GPU 建表的临时缓冲超出显存预算，可自动改用主机。若驻留频谱也放不下，可为新批次减小窗口或批量。两条路径生成同格式的 Edwards save。见 [字典计算和显存口径](../performance/STAGE1_MERSENNE_NTT.md#奇数倍点字典与显存)。
 
@@ -173,7 +173,7 @@ linear 和 weighted 按各自 NTT 长度估算每条曲线的工作区和 NAF �
 
 `ntt_convolution` 默认为 `"auto"`。程序按当前曲线、预算、实际算术分派和显式参数查共享表。可选形状包括线性、加权二次幂，以及能够缩短变换的加权 radix-5。开启运行时调优后可补测缺档。不同指数的兼容 NTT 形状可以共用记录。`"linear"` 固定使用定宽线性卷积，`"weighted"` 固定使用精确 IBDWT 加权循环卷积，并在 `ntt_length=0` 时使用满足约束的较短长度。`ntt_bits_per_word` 可限定最大 digit 位宽。
 
-加权卷积支持的混合长度为 2560、5120、10240、20480 和 40960。五档均可自动选长或显式指定。固定加权、采用保守界和自动 tile 时，393217–491520 位选 20480 点，786433–942080 位选 40960 点；原生 Edwards NAF 开启收紧界时按单独的边界选长。显式 `ntt_tile` 以二次幂子变换的层数为上限。日志以 `r5` 表示 radix-5 pass。[完整尺寸表](../usage/TUNE.md#ntt-and-transform-sizes)
+加权卷积支持的混合长度为 2560、5120、10240、20480、40960、81920 和 163840。七档均可自动选长或显式指定。固定加权、采用保守界和自动 tile 时，393217–491520 位选 20480 点，786433–942080 位选 40960 点；原生 Edwards NAF 开启收紧界时按单独的边界选长。显式 `ntt_tile` 以二次幂子变换的层数为上限。日志以 `r5` 表示 radix-5 pass。[完整尺寸表](../usage/TUNE.md#ntt-and-transform-sizes)
 
 `[stage1]` 下的 `ntt_tight_weighted_bound` 默认为 `true`。启用原生 Edwards 2XY NAF 后，自动选型将通过收紧界的短加权计划和其他合法计划一同按 NAF 列吞吐比较。固定 `"weighted"` 且长度为 0 时，程序选择通过检查的最短长度。M65521 可用 2560 点，把 `ntt_bits_per_word` 限为 25 或把 `ntt_tight_weighted_bound` 设为 `false`，加权计划改用 4096 点。强制指定不合格长度时报错。x-only 和异常曲线的 x-only 重放按保守界准入。 [配置参考](../ECM_TOML_REFERENCE.zh-CN.md#ntt_tight_weighted_bound) · [系数界](../architecture/NTT.md#stage1-加权卷积的无符号系数界) · [实测](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵)
 

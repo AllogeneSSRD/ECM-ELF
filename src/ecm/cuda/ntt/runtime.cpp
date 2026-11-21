@@ -662,13 +662,14 @@ static void launch_forward_outer(bool coop, int M, unsigned long long *d,
 }
 
 void ntt_forward_outer_fused(unsigned long long* d, const FuseCtx& c, unsigned long long omega,
-    unsigned long long nbatch, cudaStream_t stream, bool packed_first_stage)
+    unsigned long long nbatch, cudaStream_t stream, ForwardOuterInput input)
 {
     unsigned long long n = c.n;
     const unsigned long long stride = n;
     double ft0 = now_s();
-    int L = 0;
-    for (int p = 0; p < c.nms; ++p) {
+    const bool packed_first_pass = input == ForwardOuterInput::FirstPassComplete && c.nms > 0;
+    int L = packed_first_pass ? c.ms[0] : 0;
+    for (int p = packed_first_pass ? 1 : 0; p < c.nms; ++p) {
         const int M = c.ms[p];
         const unsigned long long S = n >> (L + M);
         /* cached tables (S3): the same kernel wrote them once per SHAPE instead of once per
@@ -682,7 +683,7 @@ void ntt_forward_outer_fused(unsigned long long* d, const FuseCtx& c, unsigned l
             ecm_launch_build_radix_table_kernel(EcmCudaLaunch(1, (1 << M), 0, stream), scr2, M, baseW, 0);
             CK(cudaGetLastError());
         }
-        if (packed_first_stage && p==0) {
+        if (input == ForwardOuterInput::FirstStageComplete && p==0) {
             // The packer emitted [a[j], a[j]*omega^j]. The remaining
             // radix uses the next radix-table row and squares the coarse root.
             if (M>1) launch_forward_outer<true>(c.coop_outer,M-1,d,n,1,scr,scr2+(1ull<<(M-1)),nbatch,stride,stream);
@@ -698,7 +699,8 @@ void ntt_forward_outer_fused(unsigned long long* d, const FuseCtx& c, unsigned l
 void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
                               unsigned long long omega, unsigned long long nbatch, cudaStream_t stream, bool packed_first_stage)
 {
-    ntt_forward_outer_fused(d, c, omega, nbatch, stream, packed_first_stage);
+    ntt_forward_outer_fused(d, c, omega, nbatch, stream, packed_first_stage ?
+        ForwardOuterInput::FirstStageComplete : ForwardOuterInput::Untransformed);
     const auto n = c.n, stride = n;
     double ft0 = now_s();
     const int tile = c.t - (packed_first_stage && c.nms==0 ? 1 : 0);
