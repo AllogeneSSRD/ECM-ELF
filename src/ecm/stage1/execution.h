@@ -7,11 +7,14 @@
 // Host computation interface and private compatibility storage for old kernels.
 namespace ecm_stage1_checkpoint { class Context; }
 
+namespace ecm_cuda_stage1 { struct CurvePrefetch; }
+
 namespace ecm_stage1 {
 
 // Private mutable execution state. The caller's resolved options remain immutable.
 struct ExecutionOptions : Stage1Options {
     explicit ExecutionOptions(const Stage1Options& options);
+    ecm_cuda_stage1::CurvePrefetch* curve_prefetch = nullptr;
     long long stage1_t0_ms = 0;
     uint32_t stage1_curves = 0;
     // CGBN ladder/resident/PRAC request used by the task identity and CGBN workflow.

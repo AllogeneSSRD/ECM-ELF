@@ -1,4 +1,5 @@
 #include "batches.h"
+#include "prefetch.h"
 #include "tune.h"
 #include "ecm/curve/edwards.h"
 #include "ecm/stage1/ntt_target.h"
@@ -217,6 +218,7 @@ ecm_stage1::ComputationResult run_ntt_batches(
     }
     state.completed.curves.reserve(request.curves);
     std::string scratch((mpz_sizeinbase(request.modulus, 2) + 7) / 8, '\0');
+    CurvePrefetch prefetch;
     while (offset < request.curves || state.curves) {
         if (ecm_stage1_stop_requested()) {
             failure.stop();
@@ -247,6 +249,16 @@ ecm_stage1::ComputationResult run_ntt_batches(
         const Stage1Request batch{request.modulus, request.b1, request.b2, state.curves, request.save_file,
                                   request.append_save, request.expression, options};
         ExecutionOptions execution(options);
+        if (options.execution.selection.curve == CurveModel::Edwards) {
+            execution.curve_prefetch = &prefetch;
+            prefetch.next.clear();
+            const uint64_t next = uint64_t(offset) + state.curves;
+            if (next < request.curves) {
+                const unsigned count = std::min(state.curves, unsigned(request.curves - next));
+                for (unsigned i = 0; i < count; ++i)
+                    prefetch.next.push_back(state.sigma(uint32_t(next) + i));
+            }
+        }
         Context child;
         std::vector<uint64_t> sigmas(state.curves);
         for (uint32_t i = 0; i < state.curves; ++i) sigmas[i] = state.sigma(offset + i);

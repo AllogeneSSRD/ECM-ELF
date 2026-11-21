@@ -1439,6 +1439,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         } else for (unsigned i=0;i<warmup;++i) step(i);
         CK(cudaStreamSynchronize(q));
     }
+    if (control && control->iterations_started) {
+        const auto used = std::max(result.owned_bytes, result.observed_bytes);
+        control->iterations_started(result.budget_bytes > used ? result.budget_bytes - used : 0);
+    }
     const int groups = int(samples);
     std::vector<uint32_t> pilot, group_endpoint;
     std::map<std::pair<unsigned,unsigned>, Graph> binary_graphs;
@@ -1557,7 +1561,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     return result;
 }
 std::vector<uint32_t> auxiliary_points(int device, unsigned p, const std::vector<uint64_t>& sigmas,
-                                       const ecm_stage1::Stage1NttOptions& options, TransformWorkspace* workspace) {
+                                       const ecm_stage1::Stage1NttOptions& options, TransformWorkspace* workspace, size_t* owned_bytes) {
     if (p < ecm_stage1::stage1_ntt_min_exponent || p > ecm_stage1::stage1_ntt_max_exponent)
         throw std::invalid_argument("invalid auxiliary modulus width");
     if (sigmas.empty() || sigmas.size() > ecm_stage1::stage1_ntt_max_curves || std::find(sigmas.begin(),sigmas.end(),0) != sigmas.end())
@@ -1573,7 +1577,9 @@ std::vector<uint32_t> auxiliary_points(int device, unsigned p, const std::vector
     }
     Control control;
     control.workspace = workspace;
-    return run_ladder(device,p,curves,initial,{0},1,options,&control,1,nullptr,&sigmas).points;
+    auto run = run_ladder(device,p,curves,initial,{0},1,options,&control,1,nullptr,&sigmas);
+    if (owned_bytes) *owned_bytes = run.owned_bytes;
+    return std::move(run.points);
 }
 Run edwards_naf(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
                 const EdwardsNaf& naf, const ecm_stage1::Stage1NttOptions& options,

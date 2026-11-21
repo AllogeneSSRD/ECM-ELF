@@ -1,4 +1,5 @@
 #include "workflow.h"
+#include "prefetch.h"
 #include "ladder.h"
 #include "tune.h"
 #include "../../montgomery/cuda/host_math.h"
@@ -203,7 +204,7 @@ CurveKind prepare_edwards_lane(mpz_srcptr n, uint64_t sigma, mpz_ptr factor, uin
 
 void prepare_edwards_batch(mpz_srcptr n, const std::vector<uint64_t>& sigmas, unsigned words,
         const std::vector<uint32_t>& auxiliary, unsigned threads, bool use_prefix, unsigned carrier_bits, std::vector<CurveKind>& kinds, ecm_edwards::Array& factors,
-        std::vector<uint32_t>& initial, uint32_t* seeds) {
+        std::vector<uint32_t>& initial, uint32_t* seeds, bool speculative = false) {
     const unsigned curves = unsigned(sigmas.size());
     std::vector<unsigned> order(curves);
     std::iota(order.begin(), order.end(), 0u);
@@ -216,6 +217,7 @@ void prepare_edwards_batch(mpz_srcptr n, const std::vector<uint64_t>& sigmas, un
         if (use_prefix) scratch.emplace(n,carrier_bits);
         ecm_edwards::Integer d, px, py;
         for (unsigned j = curves * worker / threads; j < curves * (worker + 1) / threads; ++j) {
+            if (speculative && ecm_stage1_stop_requested()) return;
             const unsigned i = order[j];
             ecm_edwards::MersenneConstruction::Jacobian point;
             const bool use_device_point = !auxiliary.empty();
@@ -244,6 +246,51 @@ void prepare_edwards_batch(mpz_srcptr n, const std::vector<uint64_t>& sigmas, un
         jobs.emplace_back(std::async(std::launch::async, prepare, i));
     prepare(0);
     for (auto& job : jobs) job.get();
+}
+
+// Run at most one host worker beside the active scalar loop. Only compact
+// curve outputs survive this job; NAF encoding and table construction stay
+// on the foreground path after the scheduler commits its next batch.
+void start_curve_prefetch(CurvePrefetch& buffer, mpz_srcptr modulus, unsigned p, bool carrier,
+                         unsigned words, Stage1NttOptions options, int device, size_t device_headroom) {
+    const auto next = buffer.next;
+    const size_t host_bytes = (240 + 18 * next.size()) * words * sizeof(uint32_t);
+    if (ecm_stage1_stop_requested() || host_bytes > ecm_edwards_memory::ntt_host_budget()) return;
+    buffer.predicted = next;
+    try {
+        buffer.pending = std::async(std::launch::async, [=]() mutable -> std::unique_ptr<PreparedCurves> {
+            try {
+                const unsigned count = unsigned(next.size());
+                size_t device_bytes = 0;
+                std::vector<uint32_t> auxiliary;
+                if (p >= (1u << 20) && *std::max_element(next.begin(), next.end()) >= (1ull << 20)) {
+                    const auto mib = device_headroom / ecm_edwards_memory::mib;
+                    if (!mib) return {};
+                    options.memory_mib = unsigned(mib);
+                    if (options.automatic) {
+                        options.weighted = true;
+                        options.length = options.tile = options.bpw = 0;
+                    }
+                    auxiliary = ecm_mersenne_ntt::auxiliary_points(device, p, next, options, nullptr, &device_bytes);
+                }
+                if (ecm_stage1_stop_requested()) return {};
+                auto out = std::make_unique<PreparedCurves>(count, words);
+                const bool fold = !carrier || (p >= 8192 && p - mpz_sizeinbase(modulus, 2) <= 256);
+                prepare_edwards_batch(modulus, next, words, auxiliary, 1, fold, carrier ? p : 0,
+                                      out->kinds, out->factors, out->initial, out->seeds.data(), true);
+                if (ecm_stage1_stop_requested()) return {};
+                ecm_ts_fprintf(stdout, "stage1_ntt_prefetch: ready curves=%u seed_and_ladder_bytes=%zu "
+                               "host_estimate_bytes=%zu auxiliary_device_bytes=%zu\n", count,
+                               (out->initial.size() + out->seeds.size()) * sizeof(uint32_t), host_bytes, device_bytes);
+                return out;
+            } catch (const std::exception& e) {
+                ecm_ts_fprintf(stdout, "stage1_ntt_prefetch: skipped: %s\n", e.what());
+                return {};
+            }
+        });
+    } catch (const std::system_error& e) {
+        ecm_ts_fprintf(stdout, "stage1_ntt_prefetch: skipped: %s\n", e.what());
+    }
 }
 
 std::vector<uint32_t> build_host_naf_fallback(ecm_mersenne_ntt::Run& run, mpz_srcptr modulus,
@@ -428,28 +475,42 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             auto* seeds = !naf_window ? nullptr : gpu_dictionary ? dictionary.data() : host_seeds.data();
             const auto curve_started = Clock::now();
             const bool prefix = affordable != 0 && (!carrier || (p >= 8192 && p - target_bits <= 256));
-            std::vector<uint32_t> auxiliary;
-            const size_t aux_bytes = 9ull*curves*words*sizeof(uint32_t);
-            if (affordable && aux_bytes <= (host_limit-host_required) - workers*scratch_bytes &&
-                p >= (1u << 20) && std::any_of(sigmas.begin(),sigmas.end(),
-                    [](uint64_t sigma){return sigma >= (1ull << 20);})) {
-                auto options = opt.execution.ntt;
-                if (options.automatic) {
-                    // The scalar-loop plan may not have been selected yet.
-                    options.weighted = true;
-                    options.length = options.tile = options.bpw = 0;
-                }
-                try {
-                    auxiliary = ecm_mersenne_ntt::auxiliary_points(opt.execution.device_index,unsigned(p),sigmas,options,&workspace);
-                    ecm_ts_fprintf(stdout,"stage1_ntt_auxiliary: backend=gpu curves=%u ms=%.3f\n",
-                                   curves,milliseconds_since(curve_started));
-                } catch (const ecm_mersenne_ntt::BudgetError&) {
-                    workspace.reset();
-                    ecm_ts_fprintf(stdout,"stage1_ntt_auxiliary: workspace exceeds budget, replay=cpu\n");
-                }
+            std::unique_ptr<PreparedCurves> ready;
+            auto* prefetch = opt.curve_prefetch;
+            if (prefetch && prefetch->pending.valid()) {
+                auto prepared = prefetch->pending.get();
+                if (prefetch->predicted == sigmas) ready = std::move(prepared);
             }
-            prepare_edwards_batch(N, sigmas, words, auxiliary, workers, prefix, carrier ? unsigned(p) : 0,
-                                  kinds, factors, lanes_initial, seeds);
+            if (ready) {
+                lanes_initial.swap(ready->initial);
+                kinds.swap(ready->kinds);
+                for (unsigned i = 0; i < curves; ++i) mpz_swap(factors[i], ready->factors[i]);
+                if (seeds) std::copy(ready->seeds.begin(), ready->seeds.end(), seeds);
+                ecm_ts_fprintf(stdout, "stage1_ntt_prefetch: reused curves=%u\n", curves);
+            } else {
+                std::vector<uint32_t> auxiliary;
+                const size_t aux_bytes = 9ull*curves*words*sizeof(uint32_t);
+                if (affordable && aux_bytes <= (host_limit-host_required) - workers*scratch_bytes &&
+                    p >= (1u << 20) && std::any_of(sigmas.begin(),sigmas.end(),
+                        [](uint64_t sigma){return sigma >= (1ull << 20);})) {
+                    auto options = opt.execution.ntt;
+                    if (options.automatic) {
+                        // The scalar-loop plan may not have been selected yet.
+                        options.weighted = true;
+                        options.length = options.tile = options.bpw = 0;
+                    }
+                    try {
+                        auxiliary = ecm_mersenne_ntt::auxiliary_points(opt.execution.device_index,unsigned(p),sigmas,options,&workspace);
+                        ecm_ts_fprintf(stdout,"stage1_ntt_auxiliary: backend=gpu curves=%u ms=%.3f\n",
+                                       curves,milliseconds_since(curve_started));
+                    } catch (const ecm_mersenne_ntt::BudgetError&) {
+                        workspace.reset();
+                        ecm_ts_fprintf(stdout,"stage1_ntt_auxiliary: workspace exceeds budget, replay=cpu\n");
+                    }
+                }
+                prepare_edwards_batch(N, sigmas, words, auxiliary, workers, prefix, carrier ? unsigned(p) : 0,
+                                      kinds, factors, lanes_initial, seeds);
+            }
             curve_setup_ms = milliseconds_since(curve_started);
             ecm_ts_fprintf(stdout, "stage1_ntt_edwards_setup: threads=%u ms=%.3f prefix=%u fold=%u\n",
                 workers, curve_setup_ms, unsigned(prefix), unsigned(prefix && p >= 8192));
@@ -621,6 +682,12 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             auto progress_started = last_save;
             bool first_poll = true;
             if (workspace.size) control.workspace = &workspace;
+            if (opt.curve_prefetch && !opt.curve_prefetch->next.empty()) {
+                control.iterations_started = [&](size_t headroom) {
+                    start_curve_prefetch(*opt.curve_prefetch, N, unsigned(p), carrier, words,
+                                         opt.execution.ntt, opt.execution.device_index, headroom);
+                };
+            }
             control.poll = [&](unsigned cursor) {
                 const auto now = Clock::now();
                 if (first_poll)progress_started=now;

@@ -80,8 +80,8 @@ def assert_finished(work, requested):
     return save, handoff
 
 
-def assert_schedule(launches, requested, expect_pad):
-    assert len(launches) > 1, launches
+def assert_schedule(launches, requested, expect_pad, require_split=True):
+    assert launches and (not require_split or len(launches) > 1), launches
     offset = 0
     for row in launches:
         assert row["offset"] == offset and row["total"] == requested, launches
@@ -287,6 +287,7 @@ def main():
     schedule = batch_launches(log)
     assert_schedule(schedule, 129, expect_pad=False)
     assert [row["curves"] for row in schedule] == [128, 1], schedule
+    assert "stage1_ntt_prefetch: reused curves=1" in log
     assert list(saved_points(save, 127, 64, edwards=True)) == list(range(SIGMA, SIGMA + 129))
     passed("direct_splits_129", p=127, launches=schedule, seconds=wall)
 
@@ -309,7 +310,7 @@ def main():
         assert int(launch["ntt_memory_config_mib"]) == memory and int(launch["ntt_naf_memory_mb"]) == 4096, launch
         assert int(launch["ntt_memory_device_bytes"]) >= int(launch["ntt_batch"]) * 41867520, launch
         assert int(launch["max_curves_in_memory"]) == expected[1], launch
-        assert_schedule(batch_launches(log), 95, expect_pad=False)
+        assert_schedule(batch_launches(log), 95, expect_pad=False, require_split=expected[1] < 95)
         passed(f"per_plan_capacity_{memory}", selection=selection, execution=launch, seconds=wall)
 
     work, command, tune = fixture("uninterrupted", CURVES, pad=0)

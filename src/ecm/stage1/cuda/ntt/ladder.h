@@ -64,6 +64,7 @@ struct Control {
     unsigned resume = 0;
     unsigned warmup_iterations = 0;
     std::function<void(const Plan&)> describe;
+    std::function<void(size_t)> iterations_started;
     // Poll only when the stream is idle. Read back only when requested.
     struct Action { bool save = false, stop = false; };
     std::function<Action(unsigned)> poll;
@@ -123,7 +124,8 @@ struct EdwardsNaf {
     std::vector<uint32_t>* affine_output = nullptr;
 };
 std::vector<uint32_t> auxiliary_points(int device, unsigned p, const std::vector<uint64_t>& sigmas,
-                                       const ecm_stage1::Stage1NttOptions& options, TransformWorkspace* workspace = nullptr);
+                                       const ecm_stage1::Stage1NttOptions& options, TransformWorkspace* workspace = nullptr,
+                                       size_t* owned_bytes = nullptr);
 Run edwards_naf(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
                 const EdwardsNaf&, const ecm_stage1::Stage1NttOptions&, const Control&, unsigned samples = 1);
 
