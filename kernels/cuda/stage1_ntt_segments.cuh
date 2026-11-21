@@ -183,6 +183,39 @@ __device__ __forceinline__ WeightedWord gather_carry_limb(const WeightedLimbSour
     return sum;
 }
 
+// One warp owns a complete short residue, including the carry back from bit p.
+constexpr unsigned weighted_carry_warps = 4;
+template<bool Routed>
+__global__ void weighted_warp_reduce(uint32_t* state, WeightedLimbSource source,
+                                     Shape s, Indices out, Cursor cursor) {
+    const unsigned warp = threadIdx.x / 32, lane = threadIdx.x % 32;
+    const unsigned curve = blockIdx.x * weighted_carry_warps + warp;
+    if (curve >= s.curves) return;
+    const size_t product = size_t(blockIdx.y) * s.curves + curve;
+    extern __shared__ WeightedWord storage[];
+    auto* coefficients = storage + warp * s.length;
+    for (unsigned j = lane; j < s.length; j += 32)
+        coefficients[j] = gl_mul(source.coefficients[product * s.length + j], source.inverse_weights[j]);
+    __syncwarp();
+
+    __shared__ WeightedWord sums[weighted_carry_warps][32];
+    if (lane < s.words)
+        sums[warp][lane] = gather_carry_limb(source, s.p, lane, [&](unsigned j) { return coefficients[j]; });
+    __syncwarp();
+    const auto mask = lane < s.words ? limb_mask(s, lane) : 0u;
+    const auto raw = lane < s.words
+        ? weighted_limb(sums[warp], s.words, s.p - 32 * (s.words - 1), lane, mask) : 0ull;
+    // Padding lanes propagate. A ring made entirely of propagates represents M.
+    const unsigned stops = __ballot_sync(0xffffffffu, raw != mask);
+    const unsigned generates = __ballot_sync(0xffffffffu, raw > mask);
+    const unsigned lower = stops & ((1u << lane) - 1);
+    const unsigned incoming = stage1_last_carry(lower ? lower : stops, generates);
+    if (lane < s.words) {
+        const unsigned slot = output_slot<Routed>(out.x[blockIdx.y], cursor);
+        state[limb(s, slot, curve, lane)] = (uint32_t(raw) + unsigned(incoming != 0)) & mask;
+    }
+}
+
 inline unsigned weighted_segment_cache_bytes(const std::vector<WeightedLimb>& spans) {
     unsigned capacity = 0;
     for (size_t start = 0; start < spans.size(); start += stage1_carry_segment) {

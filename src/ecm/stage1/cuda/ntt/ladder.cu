@@ -391,7 +391,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     CK(cudaMemGetInfo(&free_before, &total));
     Run result;
     unsigned defaults = FusedMultiplyAdd | LooseDifference | DirectRoute | PackedForward |
-                        PfaRadix5 | CoalescedRadix5 | InverseWarpInput | ShortInverseTile;
+                        PfaRadix5 | CoalescedRadix5 | InverseWarpInput | ShortInverseTile | WarpWeightedCarry;
     // Wider weighted reductions showed a batch-dependent cache tradeoff.
     if (p <= 65536) defaults |= CachedCarry;
     // The mixed pack can consume the segment carries directly. The 5120
@@ -560,7 +560,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (compact_forward && (!forward_input || ctx.t >= 10))
         result.dataflow |= ForwardTileCompact;
     const bool routed = requested & DirectRoute;
-    const bool cached = (requested & CachedCarry) && options.weighted && !segmented && s.words <= 32 * threads;
+    const bool warp_reduce = (requested & WarpWeightedCarry) && options.weighted && !segmented &&
+                             s.words <= 32 && s.length <= 64;
+    if (warp_reduce) result.dataflow |= WarpWeightedCarry;
+    const bool cached = (requested & CachedCarry) && options.weighted && !segmented && !warp_reduce && s.words <= 32 * threads;
     const bool deferred = segmented && !packed && (requested & DeferredPack);
     if (routed) result.dataflow |= DirectRoute;
     if (packed) result.dataflow |= PackedForward;
@@ -695,7 +698,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         radix5_fwd = radix5_constants(gl_pow_host(omega, width));
         radix5_inv = radix5_constants(gl_pow_host(inv, width));
     }
-    const unsigned limb_smem = fused_weighted ? 0 : weighted_limb_smem(weights.limbs);
+    const unsigned limb_smem = fused_weighted || warp_reduce ? 0 : weighted_limb_smem(weights.limbs);
     Buffer<WeightedDigit> digit_table(weights.digits.size());
     Buffer<U> inverse_weights(weights.inverse.size());
     Buffer<WeightedLimb> limb_table(weights.limbs.size());
@@ -889,8 +892,13 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         constexpr std::true_type yes{};
         constexpr std::false_type no{};
         if (options.weighted) {
-            if (fused_weighted) {
-                const WeightedLimbSource source{inverse.data,inverse_weights.data,digit_table.data,limb_table.data};
+            const WeightedLimbSource source{inverse.data,inverse_weights.data,digit_table.data,limb_table.data};
+            if (warp_reduce) {
+                const dim3 groups((curves + weighted_carry_warps - 1) / weighted_carry_warps, outputs);
+                const auto kernel = route_output ? weighted_warp_reduce<true> : weighted_warp_reduce<false>;
+                kernel<<<groups,32 * weighted_carry_warps,weighted_carry_warps * s.length * sizeof(U),q>>>(
+                    state.data,source,s,out,cursor);
+            } else if (fused_weighted) {
                 const auto launch = [&](auto route) {
                     constexpr bool routed = decltype(route)::value;
                     auto kernel = cached_fused ? weighted_segment_limb_sums<routed,true>

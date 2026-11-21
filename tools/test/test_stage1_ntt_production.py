@@ -27,6 +27,7 @@ FIXED_WIDE_INVERSE = 1 << 18
 FIXED_WIDE_FORWARD = 1 << 19
 SEGMENTED_CARRY = 1 << 5
 CACHED_FUSED_WEIGHTED_CARRY = 1 << 14
+WARP_WEIGHTED_CARRY = 1 << 20
 
 
 def ntt_executions(log):
@@ -87,7 +88,7 @@ def main():
     if args.edwards_dictionary:
         env["ECM_EDWARDS_NTT_DICTIONARY"] = args.edwards_dictionary
 
-    def fixture(name, algorithm="2", extra="", model="mont"):
+    def fixture(name, algorithm="2", extra="", model="mont", runtime_tune=False):
         work = out / name
         work.mkdir()
         config = work / "ecm.toml"
@@ -95,9 +96,9 @@ def main():
             extra += 'ntt_convolution = "linear"\n'
         handoff = '' if 'handoff_mode' in extra else 'handoff_mode = "off"\n'
         param = 'e' if model == 'ed' else 'm0'
-        # These fixtures compare prescribed NAF and x-only endpoints. With an
-        # empty read-only tune file, window zero selects the x-only reference.
-        tuning = '[stage2]\ntune_runtime_enabled = false\n' if args.edwards_naf_only else ''
+        # Fixed-shape tests compare a prescribed Graph and chain. A cold
+        # runtime tune can select a different Graph or Edwards NAF window.
+        tuning = f'[stage2]\ntune_runtime_enabled = {str(runtime_tune).lower()}\n'
         config.write_text(f'config_version = 4\n[shared]\nworktodo_file = "{(work / "worktodo.txt").as_posix()}"\n'
                           f'log_file = "{(work / "screen.log").as_posix()}"\n'
                           f'finished_file = "{(work / "finished.txt").as_posix()}"\n'
@@ -125,6 +126,9 @@ def main():
         for p, b1, sigma, curves, mode, length, window, naf in (
             (127, 20, 26, 2, "linear", 0, 0, 2),
             (127, 128, 26, 3, "linear", 0, 0, 6),
+            (521, 128, 26, 5, "weighted", 32, 16, 6),
+            (607, 20, 26, 2, "weighted", 128, 4, 6),
+            (1279, 20, 26, 2, "weighted", 64, 4, 6),
             (4253, 64, 4294967311, 4, "weighted", 0, 4, 6),
             (53281, 32, 26, 2, "weighted", 2560, 8, 8),
             (65521, 20, 26, 2, "weighted", 2560, 8, 6),
@@ -139,6 +143,9 @@ def main():
                 work, cmd = fixture(f"ed_{p}_{b1}_{kind}", extra=extra, model="ed")
                 call, data = direct(work, cmd, p, b1, sigma, curves)
                 log = run(work, call, text=data)
+                if p in (521, 607, 1279):
+                    flow = int(re.search(r"\bdataflow=(\d+)", log)[1])
+                    assert bool(flow & WARP_WEIGHTED_CARRY) == (p == 521), log
                 if kind and p > 65:
                     assert "stage1_ntt_edwards_naf: window=" in log
                     assert any(record["ntt_bits"] == str(p) and record["ntt_type"] == mode
@@ -635,7 +642,7 @@ def main():
         else:
             extra = f'ntt_convolution = "{mode}"\n' if mode != "cgbn" else ""
         work, cmd = fixture(f"edwards_{mode}", "1" if mode == "cgbn" else "2",
-                            extra=extra, model="ed")
+                            extra=extra, model="ed", runtime_tune=(mode == "auto"))
         call, data = direct(work, cmd, p, b1, sigma, curves)
         log = run(work, call, text=data)
         if mode == "auto":

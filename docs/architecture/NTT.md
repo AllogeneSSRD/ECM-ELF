@@ -48,6 +48,12 @@ flowchart LR
 
 加权变换在 \(p>114688\) 时启用分段进位。原生 Edwards 的 8192 点加权路径在 98,305–114,688 位、每批至少 32 条曲线时也启用分段进位，并在共享内存预算内将去权、limb 汇集和段内进位合并到同一内核。5120 点在 \(p\ge106497\) 时各批量均可提前启用，2560／5120 点单曲线从 \(p=53249\) 起可提前启用。线性变换在 \(p>262144\) 时启用同一分段进位。它先对逆变换的系数做 digit 进位，再按 \(2^p\equiv1\bmod M\) 合并乘积的高低两半。预算容不下摘要时使用单块归约。混合 radix-5 或单曲线可在 pack 中解析进位，二次幂多曲线独立写回。见 [宽位宽归约剖析](../performance/STAGE1_MERSENNE_NTT.md#gpu1-宽位宽归约热点) 和 [归约对照](../performance/STAGE1_MERSENNE_NTT.md#加权归约与-16384-点单曲线调优)，以及 [双卡实测](../performance/STAGE1_MERSENNE_NTT.md#8192-点-edwards-批量归约)。
 
+### 短加权乘积的 warp 归约
+
+加权 NTT 长度最多 64 点、承载指数最多 1024 位且未启用分段进位时，一个 warp 完成一个乘积的梅森归约。每个 lane 将去权系数写入本 warp 的共享内存，再按位区间汇集一个 32 位 limb。低位 limb 同时汇集越过第 $p$ 位的系数片段，最高 limb 的进位回到最低 limb。相邻 limb 的多位进位转移后，warp 投票标出终止或产生进位的 limb，每个 lane 据此求出自己的输入进位。所有 limb 都传递进位时，输出规范零。
+
+每个块处理同一输出坐标的至多四条曲线。归约直接写入点坐标槽，省去一组全局 limb 和的写入、读回以及一次 kernel 启动。Montgomery PARAM0 的末批乘积沿用原有标量位决定的坐标槽。见 [warp 归约](../../kernels/cuda/stage1_ntt_segments.cuh)、[乘积调度](../../src/ecm/stage1/cuda/ntt/ladder.cu) 和 [吞吐实测](../performance/STAGE1_MERSENNE_NTT.md#短加权乘积归约)。
+
 ### 单曲线融合归约
 
 2560 点单曲线在 \(p\ge53249\)、5120 点单曲线在 \(p\ge106497\) 时，去权、limb 汇集和段内扫描共用一个 CTA。每个 lane 从逆变换系数求本 limb 的和，warp 内用 shuffle 取得前一 limb 的高部。warp 首 lane 直接从输入系数重算前一 limb，包含段之间的邻接值。最低 limb 单独读取最高两 limb，计算模 \(2^p-1\) 的回卷。普通 limb 只扫描本区间，低两 limb 还检查回卷区间，短模数另处理第二次回卷。
