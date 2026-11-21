@@ -12,7 +12,7 @@
 
 namespace ecm_stage1_gpu_progress {
 std::string line(double pct,uint64_t done,uint64_t delta,const char *unit,
-                        double per_curve_s,double elapsed_s,double remaining_s) {
+                        double per_curve_s,double elapsed_s,double remaining_s,double iter_per_s) {
     pct=(std::max)(0.0,(std::min)(100.0,pct));
     const int filled=int(40*pct/100);
     char bar[41];
@@ -24,7 +24,9 @@ std::string line(double pct,uint64_t done,uint64_t delta,const char *unit,
         "GPU: [%s] %.1f%%  %llu, +%llu %s (~%.2f s/curve)  elapsed %.1fs  remaining %.1fs",
         bar,pct,static_cast<unsigned long long>(done),static_cast<unsigned long long>(delta),
         unit,per_curve_s,elapsed_s,remaining_s);
-    return text;
+    std::string result=text;
+    if(std::isfinite(iter_per_s)&&iter_per_s>0){char rate[80];std::snprintf(rate,sizeof(rate)," iter_per_s=%.3f",iter_per_s);result+=rate;}
+    return result;
 }
 
 namespace {

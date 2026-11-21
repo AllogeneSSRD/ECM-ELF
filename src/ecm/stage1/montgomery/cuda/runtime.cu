@@ -707,13 +707,13 @@ static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *f
         if (show_progress) {
             // Interactive terminal: live in-place update every batch.
             print_progress(pct, s_partial, this_batch, per_curve_s,
-                           (double)*gputime, remaining_s, false);
+                           (double)*gputime, remaining_s, false, "bits", speed.speed()*1000);
         } else if (should_emit_progress_line(batches_complete, (double)*gputime, last_progress_line_ms) || final_batch) {
             // Redirected (pipe/file, e.g. under ecm_gui): complete lines, emitted at the
             // ~200 ms batch cadence (or on the legacy batch milestones), plus always the
             // final batch so the log shows 100%.
             print_progress(pct, s_partial, this_batch, per_curve_s,
-                           (double)*gputime, remaining_s, true);
+                           (double)*gputime, remaining_s, true, "bits", speed.speed()*1000);
             last_progress_line_ms = (double)*gputime;
         }
     }

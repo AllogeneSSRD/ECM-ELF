@@ -1,4 +1,5 @@
 #include "workflow.h"
+#include "ecm/stage1/progress.h"
 #include "prefetch.h"
 #include "ladder.h"
 #include "tune.h"
@@ -37,11 +38,11 @@ double milliseconds_since(Clock::time_point start) {
 void log_ntt_execution(const ExecutionOptions& opt, size_t modulus_bits, size_t batch,
                        unsigned naf_window, unsigned resume, const ecm_mersenne_ntt::Plan& plan,
                        const ecm_mersenne_ntt::BatchMemory& memory,
-                       size_t valid = 0, size_t target_bits = 0) {
+                       size_t valid = 0, size_t target_bits = 0, uint64_t b1 = 0, unsigned iterations = 0) {
     const bool edwards = opt.execution.selection.curve == CurveModel::Edwards;
     const char* chain = !edwards ? "ladder" : naf_window ? "naf" : "x-only";
     std::ostringstream details;
-    details << "device=" << opt.execution.device_index << " chain=" << chain
+    details << "B1=" << b1 << " iter_total=" << iterations << " device=" << opt.execution.device_index << " chain=" << chain
             << " ntt_bits=" << modulus_bits << " ntt_type=" << (plan.weighted ? "weighted" : "linear")
             << " ntt_length=" << plan.length << " ntt_bpw=" << plan.bpw
             << " naf=" << naf_window << " ntt_batch=" << batch << " ntt_digits=" << plan.digits
@@ -661,7 +662,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             control.resume = snapshot.cursor;
             control.describe = [&](const ecm_mersenne_ntt::Plan& plan) {
                 executed_plan = plan;
-                log_ntt_execution(opt, p, batch, naf_window, control.resume, plan, memory, valid, target_bits);
+                log_ntt_execution(opt, p, batch, naf_window, control.resume, plan, memory, valid, target_bits, uint64_t(request.b1), count);
                 ecm_ts_fprintf(stdout, "stage1_ntt_plan: device=%d p=%zu curves=%zu length=%u bpw=%u digits=%u "
                     "forward_passes=%u inverse_passes=%u forward_layers=%s inverse_layers=%s "
                     "tile_layers=%u tile_elements=%u tile_threads=%u tile_smem_bytes=%u "
@@ -681,6 +682,8 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             auto last_save = Clock::now(), last_progress = last_save;
             auto progress_started = last_save;
             bool first_poll = true;
+            auto rate_clock=last_save;unsigned rate_cursor=control.resume;
+            ecm_stage1_gpu_progress::SpeedWindow iter_speed;
             if (workspace.size) control.workspace = &workspace;
             if (opt.curve_prefetch && !opt.curve_prefetch->next.empty()) {
                 control.iterations_started = [&](size_t headroom) {
@@ -691,10 +694,12 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             control.poll = [&](unsigned cursor) {
                 const auto now = Clock::now();
                 if (first_poll)progress_started=now;
-                if (first_poll || now - last_progress >= std::chrono::seconds(2)) {
-                    ecm_ts_fprintf(stdout, "stage1_ntt_progress: %s=%u/%u (%.1f%%) elapsed=%.3f\n",
+                else if(cursor>=rate_cursor)iter_speed.add(cursor-rate_cursor, std::chrono::duration<double,std::milli>(now-rate_clock).count());
+                rate_clock=now;rate_cursor=cursor;
+                if (first_poll || cursor==count || ecm_stage1_stop_requested() || now - last_progress >= std::chrono::seconds(2)) {
+                    ecm_ts_fprintf(stdout, "stage1_ntt_progress: %s=%u/%u (%.1f%%) elapsed=%.3f iter_per_s=%.3f\n",
                                    naf_window ? "columns" : "bits", cursor, count, 100.0 * cursor / count,
-                                   std::chrono::duration<double>(now-progress_started).count());
+                                   std::chrono::duration<double>(now-progress_started).count(), iter_speed.speed()*1000);
                     last_progress = now;
                 }
                 first_poll=false;
@@ -711,7 +716,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                     throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::IoFailure,
                                                        "cannot persist NTT Stage1 checkpoint");
                 has_checkpoint = true;
-                last_save = Clock::now();
+                last_save = Clock::now();rate_clock=last_save;
             };
 
             phase = FailureSource::Device;
@@ -832,7 +837,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             ecm_mersenne_ntt::Control control;
             ecm_mersenne_ntt::BatchMemory memory;
             control.describe = [&](const ecm_mersenne_ntt::Plan& plan) {
-                log_ntt_execution(opt, p, 1, 0, control.resume, plan, memory, 0, target_bits);
+                log_ntt_execution(opt, p, 1, 0, control.resume, plan, memory, 0, target_bits, uint64_t(request.b1), binary_count);
             };
             control.poll = [](unsigned) {
                 return ecm_mersenne_ntt::Control::Action{false, ecm_stage1_stop_requested()};

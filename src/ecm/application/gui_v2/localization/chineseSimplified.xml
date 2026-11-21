@@ -30,8 +30,10 @@
       <Item id="worker.task_label" name="任务：" />
       <Item id="worker.action" name="操作" />
       <Item id="worker.state" name="状态" />
+      <Item id="worker.device" name="设备" />
       <Item id="worker.device_engine" name="设备/引擎" />
       <Item id="worker.progress" name="任务进度" />
+      <Item id="metrics.iterations_per_second" name="iter/s/c" />
       <Item id="metrics.seconds_per_curve" name="秒/曲线" />
       <Item id="worker.completed_hits" name="完成/命中" />
       <Item id="worker.completed_hits_hint" name="当前 GUI 管理记录中的已完成任务行数 / 因子数。同一任务的相同因子只计一次。重新载入工作流后归零；历史结果见结果页。旧 Stage1 在队列结束时更新完成数。" />

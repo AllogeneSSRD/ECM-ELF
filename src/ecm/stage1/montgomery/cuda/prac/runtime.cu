@@ -261,7 +261,7 @@ int ecm_cuda_stage1::run_mont_resident(ecm_stage1_checkpoint::Context& checkpoin
             if (elapsed - last_print >= 0.2 || h.next == total || sampled) {
                 // Weighted work, not prime count: prime sizes/chains vary over the run.
                 print_progress(100.0 * completed_work / total_work, completed_work, work, per_curve, elapsed * 1000, remaining, true,
-                               prac ? "M-equiv" : "bits");
+                               prac ? "M-equiv" : "bits", prac ? 0 : speed.speed()*1000);
                 outputf(OUTPUT_NORMAL, "GPU: %s slice next=%llu/%llu, kernel=%.6f s, projected=%.6f s/curve, length=%llu, slice-ms=%.3f\n",
                         prac ? "PRAC" : "resident", (unsigned long long)h.next, (unsigned long long)total, kernel_seconds, per_curve,
                         (unsigned long long)length, double(ms));

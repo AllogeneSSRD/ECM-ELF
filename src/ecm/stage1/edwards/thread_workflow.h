@@ -398,7 +398,7 @@ ComputationResult run_stage1(const Stage1Request& request, ExecutionOptions& opt
                 if (now - last_progress >= std::chrono::seconds(1)) {
                     const auto elapsed = std::chrono::duration<double>(now - loop).count();
                     const auto line = ecm_stage1_gpu_progress::line(100.0 * stop / naf.bits, stop, delta,
-                        "cols", speed.per_curve(naf.bits, count), elapsed, speed.remaining(naf.bits, stop));
+                        "cols", speed.per_curve(naf.bits, count), elapsed, speed.remaining(naf.bits, stop), speed.speed()*1000);
                     ecm_ts_fprintf(stdout, "%s\n", line.c_str());
                     last_progress = now;
                 }

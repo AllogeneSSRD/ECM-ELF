@@ -94,6 +94,10 @@ NTT 的 s/curve 为主循环秒数除以本次执行的等效曲线数，ETA 按
 
 ## 队列、页面与宠物
 
+Worker 表格将名称和设备/引擎合并为可点击的“设备”列，显示 `GPU 0: Alpha` 或 `CPU: Alpha`，点击后选中对应 worker 的日志。Stage1 按自己的 target 和设备设置显示；Stage2 优先采用 worker 的 device 覆盖项，未指定时沿用 `[stage2]` 配置。显式 `device="cpu"` 不显示 GPU 编号，运行时报告的实际设备可更新显示；Stage1、Stage2 分别沿用主题中的对应阶段色。
+
+Worker 表格在 `s/curve` 前显示 `iter/s/c`，读取计算程序输出的标量推进速度，不乘以并行曲线数。CUDA CGBN ladder 为 bit/s，NAF 为列/s；NTT 使用当前标量的 bits 或 NAF columns。没有有效数据时显示 `--`，Stage2 不使用该列。NTT 的 worker 摘要显示 `Stage1 Edwards | CUDA/NTT … bits | B1=… | iter=… | NTT: 长度 形状 NAF=窗口`；`iter` 是当前曲线标量所需的总推进次数。worker 摘要不显示 NTT 内存预估，日志仍保留原有内存、bpw 和完整执行详情。
+
 左侧导航顶部的线条符号 `‹` 和 `›` 分别用于折叠和展开侧边栏。折叠后只保留居中的图标，悬停可查看名称。页面切换、拖动排序、移至右侧和打开设置仍可用。展开恢复折叠前的宽度，折叠状态和展开宽度随布局保存在 `[gui]`。
 
 GUI默认所选Stage1/Stage2为当前计算程序，手动开始、自动开始、重启和阶段切换直接创建进程，不调用`--gui-queue-protocol`进行能力探测。文件缺失、无效EXE等实际启动失败仍由Controller报告。GUI持有`.gui-control.lock`，开始前检查计算端`.owner.lock`；计算程序在整个worker生命周期持有进程级文件区间锁，防止重复计算同一分区和并发争用检查点/完成记录。同一队列的相同分区拒绝重复运行，不同分区可并行；全队列与各分区互斥。崩溃由系统释放锁，持久锁文件不能手工删除绕过占用。计算程序保留协议查询接口供诊断工具使用；GUI依赖计算程序实际执行队列锁。算法、曲线、param、sigma及工作流格式不变。

@@ -404,6 +404,26 @@ static void stage1_ntt_progress(const fs::path& root,const fs::path& fixture) {
 }
 static void stage1_details(const fs::path& root) {
     {
+        const auto dir=root/"worker-device-labels";fs::create_directories(dir);
+        const auto cfg=dir/"ecm.toml";
+        write(dir/"worktodo.txt","[Worker #1]\nECMSTAGE2=1,2,127,-1,\"e_m127_100.save\",0,0,1\n"
+            "[Worker #2]\nECMSTAGE2=1,2,127,-1,\"e_m127_100.save\",0,0,1\n"
+            "[Worker #3]\nECMSTAGE2=1,2,127,-1,\"e_m127_100.save\",0,0,1\n"
+            "[Worker #4]\nECMSTAGE1=1,2,127,-1,100,1\n");
+        const std::string content="config_version=4\n[shared]\nworker_count=4\nworktodo_file=\"worktodo.txt\"\n"
+            "[stage1]\ntarget=\"cpu\"\nstage1_gpu_device=7\n[stage2]\ndevice=\"cpu\"\nstage2_gpu_device=2\n"
+            "[worker.1]\nname=\"Alpha\"\nautostart=false\n[worker.2]\nname=\"Beta\"\ndevice=\"gpu\"\nautostart=false\n"
+            "[worker.3]\nname=\"Gamma\"\ndevice=\"cpu\"\nautostart=false\n[worker.4]\nname=\"Delta\"\nautostart=false\n";
+        write(cfg,content);ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);
+        assert(app.load_config(cfg.u8string()));
+        const auto label=[&](size_t i){return ecmgui_v2::ui::worker_device_name(app.controller.workers()[i]);};
+        assert(label(0)=="CPU: Alpha"&&label(1)=="GPU 2: Beta"&&label(2)=="CPU: Gamma"&&label(3)=="CPU: Delta");
+        auto changed=content;const auto at=changed.find("[stage2]\ndevice=\"cpu\"");
+        changed.replace(at,std::strlen("[stage2]\ndevice=\"cpu\""),"[stage2]\ndevice=\"gpu\"");write(cfg,changed);
+        assert(app.load_config(cfg.u8string()));
+        assert(label(0)=="GPU 2: Alpha"&&label(2)=="CPU: Gamma"&&label(3)=="CPU: Delta");
+    }
+    {
         std::string error;
         assert(ecmgui_v2::ui::load_languages(ecmgui::exe_dir()+"/localization/v2",error,"chineseSimplified.xml"));
         ecmgui::WorkerView worker;worker.task="ECM2=1,2,15919,-1,44000000,4400000000,1000,\"1782929\"";
@@ -424,11 +444,15 @@ static void stage1_details(const fs::path& root) {
         assert(ecmgui::task_display(worker.task).has_factors&&ecmgui::task_display(worker.task).curves==0);
     }
     const auto execution=ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=ntt ntt_type=weighted "
-        "ntt_bits=127 ntt_length=32 ntt_bpw=24 naf=0 ntt_shape=1:3:4:5:1:2,3:3,2 "
+        "B1=1024 iter_total=1500 ntt_bits=127 ntt_length=32 ntt_bpw=24 naf=0 ntt_shape=1:3:4:5:1:2,3:3,2 "
         "ntt_forward_pass_bits=2+3").stage1;
     const auto compact=ecmgui_v2::ui::stage1_execution(execution,false);
-    assert(compact.find("CUDA/NTT 127 bits | L=32 | bpw=24 | NTT type=1:3:4:5:1:2,3:3,2")!=compact.npos &&
-           compact.find("x-only")!=compact.npos && compact.find('\n')==compact.npos &&
+    {ecmgui::WorkerView worker;
+     worker.progress=ecmgui::parse_line("GPU: [bar] 50.0%  500, +100 bits (~1.20 s/curve) elapsed 1s remaining 1s iter_per_s=1000").progress;
+     assert(ecmgui_v2::ui::worker_progress(worker,false).iterations=="1000");
+     worker.stage2=true;assert(ecmgui_v2::ui::worker_progress(worker,false).iterations=="--");}
+    assert(compact.find("CUDA/NTT 127 bits | B1=1024 | iter=1500 | NTT: 32 1:3:4:5:1:2,3:3,2 NAF=0")!=compact.npos &&
+           compact.find("bpw=")==compact.npos && compact.find('\n')==compact.npos &&
            compact.find("ntt_forward_pass_bits")==compact.npos);
     assert(ecmgui_v2::ui::stage1_execution(execution,false,true).find("ntt_forward_pass_bits=2+3")!=compact.npos);
     const auto memory = ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=ntt ntt_type=weighted "
@@ -438,7 +462,7 @@ static void stage1_details(const fs::path& root) {
     assert(estimate.find("39.93 MiB/curve | Limit (config / device) 6144 MiB / 8000 MiB | Max 98 curves | NAF 4096 MB") != estimate.npos);
     assert(estimate.find("ntt_memory_per_curve_bytes=") == estimate.npos);
     const auto zh_estimate = ecmgui_v2::ui::stage1_execution(memory,true);
-    assert(zh_estimate.find("39.93 MiB/曲线") != zh_estimate.npos && zh_estimate.find("最多 98 条") != zh_estimate.npos);
+    assert(zh_estimate.find("MiB")==zh_estimate.npos && zh_estimate.find("最多")==zh_estimate.npos);
     const auto binary=ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=cgbn "
         "kernel_weight=1024 tpi=8 naf=0 algorithm=binary").stage1;
     const auto cgbn=ecmgui_v2::ui::stage1_execution(binary,false);

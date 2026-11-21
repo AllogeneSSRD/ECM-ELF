@@ -43,9 +43,9 @@ bool stdout_is_tty() {
 
 void print_progress(double pct, uint64_t s_partial, uint64_t this_batch,
                            double per_curve_s, double elapsed_ms, double remaining_s,
-                           bool newline, const char *unit) {
+                           bool newline, const char *unit, double iter_per_s) {
     const auto text=ecm_stage1_gpu_progress::line(pct,s_partial,this_batch,unit,
-                                                per_curve_s,elapsed_ms/1000.0,remaining_s);
+                                                per_curve_s,elapsed_ms/1000.0,remaining_s,iter_per_s);
 
     if (newline) {
         // Redirected / log mode: a full timestamped line, mirrored to screen.log

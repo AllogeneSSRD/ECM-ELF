@@ -30,8 +30,10 @@
       <Item id="worker.task_label" name="Task: " />
       <Item id="worker.action" name="Action" />
       <Item id="worker.state" name="State" />
+      <Item id="worker.device" name="Device" />
       <Item id="worker.device_engine" name="Device / engine" />
       <Item id="worker.progress" name="Task progress" />
+      <Item id="metrics.iterations_per_second" name="iter/s/c" />
       <Item id="metrics.seconds_per_curve" name="s/curve" />
       <Item id="worker.completed_hits" name="Done / hits" />
       <Item id="worker.completed_hits_hint" name="Completed queue rows / factors observed in the current GUI Worker record. Repeated factors in one task count once. Reloading the workflow resets these counts; use Results for history. Older Stage1 workers report completions when their queue ends." />

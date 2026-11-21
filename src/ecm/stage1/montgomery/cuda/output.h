@@ -5,7 +5,7 @@
 #include <vector>
 namespace ecm_cuda_mont_host {
 bool stdout_is_tty();
-void print_progress(double,uint64_t,uint64_t,double,double,double,bool,const char *unit="bits");
+void print_progress(double,uint64_t,uint64_t,double,double,double,bool,const char *unit="bits",double iter_per_s=0);
 bool should_emit_progress_line(int,double,double);
 FILE *open_dump_csv(const char *);
 void dump_curve_state_csv(FILE *,const char *,int,uint64_t,uint64_t,uint32_t,uint32_t,uint32_t,const uint32_t *,uint32_t,size_t);

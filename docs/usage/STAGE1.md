@@ -37,6 +37,8 @@ gpu_algorithm = "ntt[16384:], cgbn[]"
 
 ## 进度前的执行详情
 
+支持标量速度输出的 CUDA Stage1 进度行附带 `iter_per_s`，表示每条曲线的标量推进速度，不乘以批量。CGBN ladder 为 bit/s，NAF 为列/s；PRAC 的加权 M-equiv 不作为 bit/s。NTT 的执行详情附带 `B1` 和 `iter_total`，进度行按当前 bits/columns 输出 `iter_per_s`，暂停恢复以保存游标为起点，不把已保存进度算作新完成工作；周期检查点写入不进入速度采样间隔。
+
 Stage1 在控制台和启用的文件日志中用 `Stage1 execution:` 行记录当前计算采用的曲线、参数化和后端。后端完成选型后再输出，包含恢复检查点、资源限制和调优结果生效后的实际值。
 
 - CGBN 输出内核容器位宽 `kernel_weight`、每个大整数的线程数 `tpi` 和适用的启动形状。Edwards 输出实际 NAF 窗口，Montgomery 输出所用点乘链，PRAC 路径同时输出实际搜索宽度 `prac`。

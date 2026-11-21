@@ -76,7 +76,7 @@ struct Progress {
             total ? 100.0 * b.done / total : 100.0, b.done, delta, b.window ? "columns" : "bits",
             speed.per_curve(total, b.count),
             std::chrono::duration<double>(now - loop_start).count(),
-            speed.remaining(total, b.done));
+            speed.remaining(total, b.done), speed.speed()*1000);
         if (stdout_is_tty_local()) {
             std::fprintf(stdout, "\r%s%s%s", ecm_log_progress_color_code(), text.c_str(),
                          ecm_log_progress_color_reset());

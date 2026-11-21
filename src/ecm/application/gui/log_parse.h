@@ -37,6 +37,7 @@ struct ProgressInfo {
     bool valid = false;
     bool gpu = false;                    // "GPU:" line instead of "stage1:"
     double pct = 0.0;
+    double iter_per_s = 0.0;
     double s_per_curve = 0.0;
     double elapsed_s = 0.0;
     double eta_s = 0.0;                  // "ETA 69.0s" or "remaining 69.0s"
@@ -52,14 +53,14 @@ struct Stage1NttEvent {
     enum class Kind {None, Batch, Resume, Plan, Progress, Timing, BatchComplete};
     Kind kind = Kind::None;
     unsigned long long offset=0, total=0, curves=0, cursor=0, units=0, resume=0;
-    double seconds=-1;
+    double seconds=-1, iter_per_s=0;
     bool columns=false;
 };
 struct Stage1NttStatus {
     bool valid=false, batched=false, active=false;
     unsigned long long total=0, completed=0, first=0, curves=0, cursor=0, units=0, resume=0;
     double measured_seconds=0, measured_curves=0;
-    double elapsed=0, sample_clock=-1;
+    double elapsed=0, sample_clock=-1, iter_per_s=0;
     unsigned long long sample_cursor=0;
     void start(unsigned long long requested=0);
     void apply(const Stage1NttEvent& event, double now_seconds=-1);

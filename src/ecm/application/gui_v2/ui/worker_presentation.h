@@ -9,7 +9,7 @@
 #include <cstdio>
 #include <iterator>
 namespace ecmgui_v2::ui {
-struct WorkerProgress {float fraction=0;std::string label="--",speed="--",eta="--",eta_detail="--";};
+struct WorkerProgress {float fraction=0;std::string label="--",speed="--",iterations="--",eta="--",eta_detail="--";};
 struct Stage2Batch {bool visible=false;float fraction=0;std::string label,remaining;};
 inline Stage2Batch stage1_ntt_batch(const ecmgui::Stage1NttStatus& s) {
     Stage2Batch out;if(!s.valid||!s.curves)return out;
@@ -41,6 +41,7 @@ inline std::string eta_text(double seconds,bool detail=false) {
 inline WorkerProgress worker_progress(const ecmgui::WorkerView& worker,bool zh) {
     WorkerProgress out;const auto p=worker.stage2?worker.stage2_status.progress(false):worker.stage1_ntt.valid?worker.stage1_ntt.progress():worker.progress;
     char text[128];
+    if(!worker.stage2&&std::isfinite(p.iter_per_s)&&p.iter_per_s>0){std::snprintf(text,sizeof(text),"%.0f",p.iter_per_s);out.iterations=text;}
     if(p.valid&&std::isfinite(p.pct)) {
         const double pct=std::clamp(p.pct,0.,100.);out.fraction=static_cast<float>(pct/100.);
         if(p.curves_total&&(worker.stage2||!worker.stage1_ntt.valid))std::snprintf(text,sizeof(text),"%llu / %llu  (%.1f%%)",p.curves_done,p.curves_total,pct);
@@ -60,6 +61,12 @@ inline WorkerProgress worker_progress(const ecmgui::WorkerView& worker,bool zh) 
     return out;
 }
 
+inline std::string worker_device_name(const ecmgui::WorkerView& worker) {
+    const auto device=worker.execution_target=="cpu"?std::string("CPU"):
+        worker.execution_target=="gpu"?"GPU "+std::to_string(worker.device):std::string("Auto");
+    return device+": "+worker.name;
+}
+
 inline std::string worker_task(const ecmgui::WorkerView& worker,bool zh) {
     const auto task=ecmgui::task_display(worker.task);
     if(!task.valid)return text("worker.no_task",zh);
@@ -75,7 +82,7 @@ inline std::string worker_task(const ecmgui::WorkerView& worker,bool zh) {
 inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bool zh, bool details = false) {
     if (!execution.valid())
         return {};
-    std::string line = std::string(text("worker.stage1_execution", zh)) + "  ";
+    std::string line = std::string(!details && execution.backend=="ntt" ? "Stage1" : text("worker.stage1_execution", zh)) + " ";
     line += text(execution.curve == "ed" ? "worker.curve_edwards" : "worker.curve_montgomery", zh);
     if (execution.curve == "mont")
         line += " PARAM" + execution.param.substr(1);
@@ -93,6 +100,14 @@ inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bo
         if (const auto value = field(key); !value.empty())
             append(std::string(label) + "=" + value);
     };
+    if(!details && backend=="ntt"){
+        if(const auto bits=field("ntt_bits");!bits.empty())line+=" "+bits+" bits";
+        append_field("B1","B1");append_field("iter_total","iter");
+        if(const auto length=field("ntt_length");!length.empty())append("NTT: "+length);
+        if(const auto shape=field("ntt_shape");!shape.empty())line+=" "+shape;
+        if(const auto naf=field("naf");!naf.empty())line+=" NAF="+naf;
+        return line;
+    }
     if (backend == "cgbn" || backend == "opencl" || backend == "cuda-thread") {
         const auto weight = field("kernel_weight"), tpi = field("tpi");
         if (!weight.empty() && !tpi.empty())
@@ -139,7 +154,7 @@ inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bo
         for (const auto& [key, value] : execution.details)
             if (std::find(std::begin(shown), std::end(shown), key) == std::end(shown))
                 append(key + "=" + value);
-    if (backend == "ntt") {
+    if (details && backend == "ntt") {
         const auto number = [&](const char* key, unsigned long long& value) {
             const auto s = field(key);
             const auto parsed = std::from_chars(s.data(), s.data() + s.size(), value);

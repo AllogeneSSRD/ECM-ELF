@@ -127,6 +127,7 @@ bool parse_stage1_ntt(const std::string& line, Stage1NttEvent& out) {
     if (out.kind==Kind::Timing) {
         double ms=0;if(read_after(line," wall_ms=",ms))out.seconds=ms/1000.;
     } else read_after(line," elapsed=",out.seconds);
+    read_after(line," iter_per_s=",out.iter_per_s);
     const bool valid=out.kind==Kind::Progress?out.units&&out.cursor<=out.units:
         out.kind==Kind::Plan?out.curves&&out.units&&out.resume<=out.units:
         out.kind==Kind::Batch?out.total&&out.curves:
@@ -303,12 +304,13 @@ void Stage1NttStatus::apply(const Stage1NttEvent& e, double now_seconds) {
     if(e.kind==Kind::Batch || e.kind==Kind::Resume) {
         batched=true;completed=e.offset;first=e.offset;curves=e.curves;
         total=std::max(e.total,first+curves);active=e.kind==Kind::Batch;
-        cursor=units=resume=sample_cursor=0;elapsed=0;sample_clock=-1;
+        cursor=units=resume=sample_cursor=0;elapsed=0;sample_clock=-1;iter_per_s=0;
     } else if(e.kind==Kind::Plan) {
         if(!batched){first=completed=0;curves=total?total:e.curves;total=curves;}
         active=true;units=e.units;cursor=resume=sample_cursor=std::min(e.resume,units);
-        elapsed=0;sample_clock=-1;
+        elapsed=0;sample_clock=-1;iter_per_s=0;
     } else if(e.kind==Kind::Progress) {
+        iter_per_s=std::isfinite(e.iter_per_s)&&e.iter_per_s>0?e.iter_per_s:0;
         if(e.units)units=e.units;
         cursor=std::min(e.cursor,units);
         if(e.seconds>=0 && std::isfinite(e.seconds)) {
@@ -334,7 +336,7 @@ void Stage1NttStatus::apply(const Stage1NttEvent& e, double now_seconds) {
 }
 ProgressInfo Stage1NttStatus::progress() const {
     ProgressInfo out;if(!valid || !total)return out;
-    out.valid=out.gpu=true;out.curves_done=completed;out.curves_total=total;
+    out.iter_per_s=iter_per_s;out.valid=out.gpu=true;out.curves_done=completed;out.curves_total=total;
     const double done=std::min(double(total),double(completed)+(active?curves*batch_fraction():0.));
     out.pct=100.*done/double(total);
     const double work=measured_curves+(units&&elapsed>0&&cursor>=sample_cursor?double(curves)*double(cursor-sample_cursor)/double(units):0.);
@@ -709,6 +711,7 @@ ParsedLine parse_line(const std::string &line) {
             while(q>c && is_digit(*(q-1)))--q;
             read_u64(q,pr.columns);
         }
+        read_after(p," iter_per_s=",pr.iter_per_s);
         read_s_per_curve(p, pr.s_per_curve);
         read_after(p, "elapsed", pr.elapsed_s);
         if (!read_after(p, "ETA", pr.eta_s)) {

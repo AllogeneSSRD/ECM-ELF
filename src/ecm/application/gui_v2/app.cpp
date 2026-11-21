@@ -896,7 +896,7 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     const float control_height=std::max(24*scale,ImGui::GetTextLineHeight()+8*scale);
     // Proportional columns retain one information row at every width.
     // Text elides within its cell; the full value remains available on hover.
-    float widths[]{28,72,112,80,84,150,64,76,76};
+    float widths[]{28,72,170,80,150,72,64,76,76};
     for(const auto& worker:controller.workers()){
         const auto progress=ui::worker_progress(worker,zh);
         const auto label=ui::message(worker.stop_requested?"Stopping":ecmgui::state_name(worker.state()),zh);
@@ -929,7 +929,7 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     // vertically; the same elastic columns are used on narrow surfaces.
     const float table_height=content_height;
     // New column order gets a fresh table identity instead of reusing old widths.
-    if (ImGui::BeginTable("workers-elastic-v4",9,ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_BordersOuterH|ImGuiTableFlags_ScrollY|ImGuiTableFlags_PadOuterX|ImGuiTableFlags_SizingStretchProp|ImGuiTableFlags_NoSavedSettings,{0,table_height})) {
+    if (ImGui::BeginTable("workers-elastic-v6",9,ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_BordersOuterH|ImGuiTableFlags_ScrollY|ImGuiTableFlags_PadOuterX|ImGuiTableFlags_SizingStretchProp|ImGuiTableFlags_NoSavedSettings,{0,table_height})) {
         worker_table_scroll_max_x=ImGui::GetScrollMaxX();
         worker_table_scroll_max_y=ImGui::GetScrollMaxY();worker_table_height=ImGui::GetWindowSize().y;worker_table_content_height=ImGui::GetCurrentWindow()->ContentSize.y;
         const auto table_origin=ImGui::GetWindowPos();worker_table_data_height=ImGui::GetCurrentWindow()->InnerRect.GetHeight();
@@ -937,8 +937,8 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
         std::vector<SummaryRow> summaries;auto* table_draw=ImGui::GetWindowDrawList();
         const auto table_clip_min=ImGui::GetWindowDrawList()->GetClipRectMin(),table_clip_max=ImGui::GetWindowDrawList()->GetClipRectMax();
         float body_top=table_clip_min.y;
-        const char* labels[]{"#",ecmgui_v2::ui::text("worker.action",zh),ecmgui_v2::ui::text("worker_name",zh),ecmgui_v2::ui::text("worker.state",zh),ecmgui_v2::ui::text("worker.device_engine",zh),ecmgui_v2::ui::text("worker.progress",zh),ecmgui_v2::ui::text("metrics.seconds_per_curve",zh),"ETA",ecmgui_v2::ui::text("worker.completed_hits",zh)};
-        for(int i=0;i<9;++i){const bool stretch=i!=0&&(compress_columns||i==5);
+        const char* labels[]{"#",ecmgui_v2::ui::text("worker.action",zh),ecmgui_v2::ui::text("worker.device",zh),ecmgui_v2::ui::text("worker.state",zh),ecmgui_v2::ui::text("worker.progress",zh),ecmgui_v2::ui::text("metrics.iterations_per_second",zh),ecmgui_v2::ui::text("metrics.seconds_per_curve",zh),"ETA",ecmgui_v2::ui::text("worker.completed_hits",zh)};
+        for(int i=0;i<9;++i){const bool stretch=i!=0&&(compress_columns||i==4);
             ImGui::TableSetupColumn(labels[i],stretch?ImGuiTableColumnFlags_WidthStretch:ImGuiTableColumnFlags_WidthFixed,stretch?widths[i]:widths[i]*scale);}
         ImGui::TableHeadersRow();
         for(int i=0;i<9;++i)if(ImGui::TableGetColumnFlags(i)&ImGuiTableColumnFlags_IsVisible)++worker_table_columns;
@@ -976,7 +976,7 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)&&action_shown!=action_label)ImGui::SetTooltip("%s",action_label);
             worker_action_controls[worker.index]=center();worker_button_height=ImGui::GetItemRectSize().y;
             ImGui::TableSetColumnIndex(2);
-            value_cell(worker.name,p.fg,true);worker_select_controls[worker.index]=center();
+            value_cell(ui::worker_device_name(worker),worker.stage2?p.stage2:p.stage1,true);worker_select_controls[worker.index]=center();
             ImGui::TableSetColumnIndex(3);
             const auto state_kind=st==ecmgui::WorkerRunState::Error?ui::Status::Danger:worker.stop_requested||st==ecmgui::WorkerRunState::Restarting?ui::Status::Warning:worker.running()?ui::Status::Success:ui::Status::Info;
             const auto state_label=worker.stop_requested?std::string(ui::text("status.stopping",zh)):ui::message(ecmgui::state_name(st),zh);
@@ -988,15 +988,11 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
                 if(worker.breaker_tripped())ImGui::TextUnformatted(ui::text("worker.retry_paused",zh));
                 ImGui::EndTooltip();
             }
-            ImGui::TableSetColumnIndex(4);ImGui::AlignTextToFramePadding();
-            const auto device=worker.execution_target=="gpu"?"GPU"+std::to_string(worker.device)
-                : worker.execution_target=="cpu"?"CPU":zh?"自动":"Auto";
-            value_cell(device+" / S"+std::to_string(worker.stage2?2:1)+(worker.duplicate_device?"*":""),worker.stage2?p.stage2:p.stage1);
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s | Stage %d | %s%s",device.c_str(),worker.stage2?2:1,worker.curve_model.c_str(),worker.duplicate_device?ecmgui_v2::ui::text("worker.shared_gpu_hint",zh):"");
-            ImGui::TableSetColumnIndex(5);ImGui::PushStyleColor(ImGuiCol_PlotHistogram,worker.stage2?p.stage2:p.stage1);
+            ImGui::TableSetColumnIndex(4);ImGui::PushStyleColor(ImGuiCol_PlotHistogram,worker.stage2?p.stage2:p.stage1);
             const auto progress_shown=ui::fitted_label(progress.label.c_str(),ImGui::GetContentRegionAvail().x-8*scale);
             ImGui::ProgressBar(progress.fraction,{-1,control_height},progress_shown.c_str());ImGui::PopStyleColor();
             if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",progress.label.c_str());
+            ImGui::TableSetColumnIndex(5);value_cell(progress.iterations,p.fg);
             ImGui::TableSetColumnIndex(6);value_cell(progress.speed,p.fg);
             ImGui::TableSetColumnIndex(7);value_cell(progress.eta,p.fg);
             ImGui::TableSetColumnIndex(8);value_cell(std::to_string(worker.tasks_done)+" / "+std::to_string(worker.hits),p.fg);
