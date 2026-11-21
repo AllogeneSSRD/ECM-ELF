@@ -213,7 +213,7 @@ std::string App::generator_signature() const {
     return s.str();
 }
 bool App::preview_generator() {
-    gen_valid=false; if(!ready || controller.busy() || config.dirty()){status="Stop workers and save workflow before generating.";return false;}
+    gen_valid=false; if(!ready){status="Open a workflow TOML to manage workers.";return false;}
     const ecmgui::WorkerView* target=nullptr;for(const auto& w:controller.workers())if(w.index==gen_worker)target=&w;
     if(!target){status="Select a valid target worker.";return false;}
     if(target->stage1_target=="cpu" && (gen_options.use_recommended||gen_options.curve_type=="m2"||gen_options.curve_type=="m3")) {
@@ -234,7 +234,7 @@ bool App::preview_generator() {
     gen_signature=generator_signature();gen_valid=true;status="Preview ready: "+gen_path;trace("generator: preview ready");return true;
 }
 bool App::apply_generator() {
-    if(!gen_valid || generator_signature()!=gen_signature || controller.busy() || config.dirty()) {gen_valid=false;status="Preview expired; generate again.";return false;}
+    if(!ready || !gen_valid || generator_signature()!=gen_signature) {gen_valid=false;status="Preview expired; generate again.";return false;}
     try {
         // Block a consumer during the short append, including an unchanged old GUI's updated worker.
         ecm_queue::OwnerLease lease(gen_path,gen_worker);
@@ -274,7 +274,7 @@ void App::draw_generator(bool zh) {
     }
     if(gen_valid && generator_signature()!=gen_signature)gen_valid=false;
     if(ui::button("generate-preview",ecmgui_v2::ui::text("generate_preview",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)&&!preview_generator())toast(status,true);ImGui::SameLine();
-    ImGui::BeginDisabled(!gen_valid||controller.busy());if(ui::button("apply-preview",ecmgui_v2::ui::text("append_to_queue",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)&&!apply_generator())toast(status,true);ImGui::EndDisabled();
+    ImGui::BeginDisabled(!gen_valid);if(ui::button("apply-preview",ecmgui_v2::ui::text("append_to_queue",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)&&!apply_generator())toast(status,true);ImGui::EndDisabled();
     if(!gen_preview.text.empty()) {
         ImGui::Text(ecmgui_v2::ui::text("generator.preview_summary",zh),gen_valid?ecmgui_v2::ui::text("current_preview",zh):ecmgui_v2::ui::text("expired_preview",zh),gen_preview.read,gen_preview.duplicates);
         if(ImGui::Button(ecmgui_v2::ui::text("copy_preview",zh)))ImGui::SetClipboardText(gen_preview.text.c_str());

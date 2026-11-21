@@ -325,14 +325,23 @@ int main(int argc, char **argv) {
         GpuProfile gpu;
         std::string err;
         parse_gpu_info(kGpuInfo, gpu, err);
-        // 1019 bits -> 1280 tier (ipb 16); 1500 bits -> no tier in this trimmed report.
+        // 1019 bits -> 1280 tier; larger assignments retain their own curve count.
         GenOptions opt = base_options();
         opt.worker_devices = {{1, 0}};
         const GenResult ok = generate("ECM2=1,2,1019,-1,1e6\n", gpu, opt);
         check(ok.ok, "a 1019-bit task resolves", ok.error);
-        const GenResult too_big = generate("ECM2=1,2,5000,-1,1e6\n", gpu, opt);
-        check(!too_big.ok && too_big.error.find("no kernel tier") != std::string::npos,
-              "a task no tier covers is refused", too_big.error);
+        const GenResult too_big = generate("ECM2=1,2,5000,-1,1e6,0,37\n", gpu, opt);
+        check(too_big.ok && too_big.tasks[0].curves_out==37 && !too_big.warnings.empty(),
+              "an uncovered task retains its assigned curve count and warns", too_big.error);
+        const GenResult mixed=generate("ECM2=1,2,1019,-1,1e6\nECM2=1,2,5000,-1,1e6\n",gpu,opt);
+        check(mixed.ok && mixed.tasks.size()==2 && mixed.tasks[0].curves_out==1920 &&
+              mixed.tasks[1].curves_out==100 && mixed.warnings.size()==1,
+              "mixed covered/uncovered tasks retain recommendations and default assignment curves",mixed.error);
+        GpuProfile ed_gpu;parse_gpu_info(kEdwardsGpuInfo,ed_gpu,err);
+        auto ed_opt=opt;ed_opt.curve_type="e";
+        const auto ed_large=generate("ECM2=1,2,100003,-1,1e6,0,23\n",ed_gpu,ed_opt);
+        check(ed_large.ok && ed_large.tasks[0].curves_out==23 && !ed_large.warnings.empty(),
+              "large Edwards assignments are not limited to reported CGBN tiers",ed_large.error);
         // The OpenCL answer must not silently produce 0-curve lines.
         GpuProfile na;
         check(!generate("ECM2=1,2,521,-1,1e6\n", na, opt).ok,

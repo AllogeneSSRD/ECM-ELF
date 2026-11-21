@@ -762,13 +762,13 @@ GenResult generate(const std::string &input, const GpuProfile &gpu, const GenOpt
         } else if (opt.use_recommended) {
             const GpuTier *tier = gpu.pick(t.bits);
             if (tier == nullptr) {
-                r.error = "n=" + to_string_ll(t.n) + ": no kernel tier of this build covers " +
-                          std::to_string(t.bits) + " bits";
-                return r;
+                r.warnings.push_back("n=" + to_string_ll(t.n) + ": GPU tier recommendation unavailable for " +
+                    std::to_string(t.bits) + " bits; keeping assignment curve count " + to_string_ll(curves) + ".");
+            } else {
+                const int per_sm = (opt.blocks_per_sm > 0) ? opt.blocks_per_sm : 1;
+                curves = static_cast<long long>(per_sm) * gpu.sm_count * tier->ipb;
+                if (curves < tier->curves_min) curves = tier->curves_min;
             }
-            const int per_sm = (opt.blocks_per_sm > 0) ? opt.blocks_per_sm : 1;
-            curves = static_cast<long long>(per_sm) * gpu.sm_count * tier->ipb;
-            if (curves < tier->curves_min) curves = tier->curves_min;
         }
         t.curves_out = curves;
 

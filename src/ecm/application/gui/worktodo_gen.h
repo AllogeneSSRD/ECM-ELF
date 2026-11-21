@@ -4,7 +4,8 @@
 //
 // The operator pastes PrimeNet assignments (ECM2= lines) and gets back a worktodo queue:
 // parse -> filter -> dedup -> rewrite -> sort -> save-name check -> emit ECMSTAGE1= lines,
-// with the curves of each line taken from the GPU tier that line's N would actually run on.
+// with each line's recommended curves taken from the matching GPU tier. Without a
+// matching tier, retain the assignment's curve count and report a warning.
 //
 // The reference implementation is tools/ecm_worktodo/ecm.py, and the byte-for-byte test
 // (tools/test/test_gui_generator.ps1) compares the two on the same input, so the C++ side

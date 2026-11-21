@@ -15,6 +15,30 @@
 namespace fs=std::filesystem;
 static void write(const fs::path& p,const std::string& text){std::ofstream f(p,std::ios::binary);f<<text;assert(f.good());}
 static std::string read(const fs::path& p){std::ifstream f(p,std::ios::binary);return {std::istreambuf_iterator<char>(f),{}};}
+static void generator_while_running(const fs::path& root,const fs::path& fixture){
+    const auto dir=root/"generator-running";fs::create_directories(dir);
+    const auto cfg=dir/"ecm.toml",queue=dir/"worktodo.txt";
+    write(cfg,"config_version=4\n[shared]\nworktodo_file=\"worktodo.txt\"\nworker_count=2\n"
+              "[stage1]\ntarget=\"cpu\"\n[gui]\nstage1_exe=\""+fixture.generic_u8string()+"\"\n"
+              "[worker.1]\nautostart=false\nextra_args='--scenario v2-checkpoint-stop'\n[worker.2]\nautostart=false\n");
+    write(queue,"[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n[Worker #2]\n");
+    ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);
+    assert(app.start(1));
+    const auto wait=[&](const auto& done){const auto deadline=GetTickCount64()+15000;
+        while(!done()&&GetTickCount64()<deadline){app.tick();Sleep(10);}assert(done());};
+    wait([&]{for(const auto& line:app.controller.workers()[0].raw)
+        if(line.find("queue_owner: acquired")!=line.npos)return true;return false;});
+    std::strcpy(app.gen_input,"ECM2=1,2,137,-1,100,1,0\n");
+    app.gen_options.use_recommended=false;app.gen_options.curves_fixed=4;app.gen_worker=2;
+    assert(app.preview_generator());assert(app.apply_generator());
+    assert(app.controller.busy()&&read(queue).find("ECMSTAGE1=",read(queue).find("[Worker #2]"))!=std::string::npos);
+    // A running target can be previewed; its ownership lock still protects writes.
+    app.gen_worker=1;assert(app.preview_generator());const auto before=read(queue);
+    assert(!app.apply_generator());assert(app.status.find("already owned")!=app.status.npos&&read(queue)==before);
+    app.controller.request_stop(1);wait([&]{return !app.controller.busy();});
+    assert(app.apply_generator());
+    std::cout<<"{\"generator_while_running\":true,\"target_queue_lock_preserved\":true}\n";
+}
 // Run with a locking worker whose protocol-query API is deliberately disabled.
 static void no_protocol_probe(const fs::path& root,const fs::path& fixture){
     const auto dir=root/"no-protocol";fs::create_directories(dir);
@@ -752,7 +776,7 @@ int main(int argc,char** argv){
     assert(argc==2||argc==3);const auto root=fs::absolute(argv[1]);assert(!fs::exists(root));fs::create_directories(root);
     workflow_errors(root);
     stage1_details(root);
-    if(argc>2)stage1_ntt_progress(root,fs::absolute(fs::u8path(argv[2])));
+    if(argc>2){generator_while_running(root,fs::absolute(fs::u8path(argv[2])));stage1_ntt_progress(root,fs::absolute(fs::u8path(argv[2])));}
     {using namespace ecmgui_v2::ui;
      auto previous=no_phase_seconds(),tuned=no_phase_seconds();previous[5]=20;tuned[5]=80;tuned[2]=10;
      auto timing=stage2_timing(previous,tuned,0);assert(timing.seconds[5]==20&&timing.sources[5]==1&&timing.seconds[2]==10&&timing.sources[2]==2);
@@ -838,7 +862,9 @@ int main(int argc,char** argv){
     const auto appended=read(queue);assert(appended.find("ECMSTAGE1=")>appended.find("[Worker #2]"));
     app.gen_options.curve_type="m3";assert(!app.preview_generator());app.gen_options.curve_type="m0";
     assert(!app.edit_business("gui","font_size","20"));assert(!app.edit_business("stage1","not_known","4"));
-    assert(app.edit_business("stage2","b2_ratio","20"));assert(!app.start(1));assert(app.save_business());
+    assert(app.edit_business("stage2","b2_ratio","20"));assert(!app.start(1));
+    assert(app.preview_generator());assert(app.apply_generator());
+    assert(app.config.dirty()&&read(cfg)==original);assert(app.save_business());
     assert(read(cfg).find("# preserve comment")!=std::string::npos&&read(cfg).find("font_size=\"auto\"")!=std::string::npos);
     assert(app.edit_business("stage2","b2_ratio","30"));write(cfg,read(cfg)+"# changed externally\n");assert(!app.save_business());assert(app.load_config(cfg.u8string()));
     {
