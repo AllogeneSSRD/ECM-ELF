@@ -231,36 +231,79 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uin
     }
     if (mersenne) mersenne->previous_sigma = sigma;
 
-    // Normalize once: (s, t) = (X/Z^2, Y/Z^3).
-    Setup rc = inverse(inv.v, Z.v, n, factor);
-    if (rc != Setup::Ready)
-        return rc;
-    sqr(T.v, inv.v);
-    mul(s.v, X.v, T.v);
-    mul(T.v, T.v, inv.v);
-    mul(t.v, Y.v, T.v);
+    Setup rc;
+    bool normalized = false;
+    if (mersenne && mersenne->bits >= 8192) {
+        // s=X/Z^2, t=Y/Z^3. Keep alpha=P/Q projective until beta is ready.
+        // P=(X-9 Z^2)Z, Q=Y+XZ+16 Z^3, beta=2P(4P+Q)/(8P^2-Q^2).
+        Integer z2, z3, P, Q, beta_num, beta_den, den_product;
+        sqr(z2.v,Z.v);
+        mul(z3.v,z2.v,Z.v);
+        mul(Q.v,X.v,Z.v);
+        mpz_set(P.v,Q.v);
+        mpz_submul_ui(P.v,z3.v,9);
+        reduce(P.v);
+        mpz_add(Q.v,Q.v,Y.v);
+        mpz_addmul_ui(Q.v,z3.v,16);
+        reduce(Q.v);
+        mpz_set(T.v,Q.v);
+        mpz_addmul_ui(T.v,P.v,4);
+        mul(beta_num.v,T.v,P.v);
+        mpz_mul_2exp(beta_num.v,beta_num.v,1);
+        sqr(beta_den.v,P.v);
+        mpz_mul_2exp(beta_den.v,beta_den.v,3);
+        sqr(T.v,Q.v);
+        mpz_sub(beta_den.v,beta_den.v,T.v);
+        reduce(beta_den.v);
 
-    // alpha = ((t+25)/(s-9) + 1)^(-1) = (s-9)/(t+s+16).
-    mpz_sub_ui(num.v, s.v, 9);
-    mpz_add(den.v, t.v, s.v);
-    mpz_add_ui(den.v, den.v, 16);
-    rc = inverse(inv.v, den.v, n, factor);
-    if (rc != Setup::Ready)
-        return rc;
-    mul(alpha.v, num.v, inv.v);
+        // Check Q as well as Z and beta_den. If any is a nonunit, the
+        // affine path below reports the first factor in construction order.
+        mul(den_product.v,Q.v,beta_den.v);
+        mul(T.v,den_product.v,Z.v);
+        if (mpz_invert(inv.v,T.v,n)) {
+            mul(T.v,inv.v,Z.v);
+            mul(T.v,T.v,Q.v);
+            mul(beta.v,beta_num.v,T.v);
+            mul(inv.v,inv.v,den_product.v);
+            sqr(T.v,inv.v);
+            mul(s.v,X.v,T.v);
+            mul(T.v,T.v,inv.v);
+            mul(t.v,Y.v,T.v);
+            normalized = true;
+        }
+    }
+    if (!normalized) {
+        // Normalize once: (s, t) = (X/Z^2, Y/Z^3).
+        rc = inverse(inv.v, Z.v, n, factor);
+        if (rc != Setup::Ready)
+            return rc;
+        sqr(T.v, inv.v);
+        mul(s.v, X.v, T.v);
+        mul(T.v, T.v, inv.v);
+        mul(t.v, Y.v, T.v);
 
-    // beta = 2*alpha*(4*alpha+1)/(8*alpha^2-1).
-    mpz_mul_ui(num.v, alpha.v, 4);
-    mpz_add_ui(num.v, num.v, 1);
-    mul(num.v, num.v, alpha.v);
-    mpz_mul_ui(num.v, num.v, 2);
-    sqr(den.v, alpha.v);
-    mpz_mul_ui(den.v, den.v, 8);
-    mpz_sub_ui(den.v, den.v, 1);
-    rc = inverse(inv.v, den.v, n, factor);
-    if (rc != Setup::Ready)
-        return rc;
-    mul(beta.v, num.v, inv.v);
+        // alpha = ((t+25)/(s-9) + 1)^(-1) = (s-9)/(t+s+16).
+        mpz_sub_ui(num.v, s.v, 9);
+        mpz_add(den.v, t.v, s.v);
+        mpz_add_ui(den.v, den.v, 16);
+        rc = inverse(inv.v, den.v, n, factor);
+        if (rc != Setup::Ready)
+            return rc;
+        mul(alpha.v, num.v, inv.v);
+
+        // beta = 2*alpha*(4*alpha+1)/(8*alpha^2-1).
+        mpz_mul_ui(num.v, alpha.v, 4);
+        mpz_add_ui(num.v, num.v, 1);
+        mul(num.v, num.v, alpha.v);
+        mpz_mul_ui(num.v, num.v, 2);
+        sqr(den.v, alpha.v);
+        mpz_mul_ui(den.v, den.v, 8);
+        mpz_sub_ui(den.v, den.v, 1);
+        rc = inverse(inv.v, den.v, n, factor);
+        if (rc != Setup::Ready)
+            return rc;
+        mul(beta.v, num.v, inv.v);
+    }
 
     // h = 2*beta-1; Edwards d = (2*h^2-1)/h^4.
     mpz_mul_ui(h.v, beta.v, 2);

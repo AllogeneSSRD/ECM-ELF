@@ -201,6 +201,11 @@ static void check_mersenne_construction() {
         mpz_divexact_ui(target.v,target.v,3);
         compare_construction(target.v,{26,27,28,UINT64_MAX,UINT64_MAX-1},bits);
     }
+    // 255 divides 2^8192-1. Exercise the wide projective map cheaply,
+    // including products that hide different nonunits in their denominators.
+    ecm_edwards::Integer composite;
+    mpz_set_ui(composite.v,255);
+    compare_construction(composite.v,sigmas,8192);
     if (!counts[0] || !counts[1] || !counts[2])
         throw std::runtime_error("missing ready, factor or degenerate construction coverage");
 

@@ -16,6 +16,10 @@ RTX 4070 Ti，功率上限 285 W，未单独采集本轮功耗。生产队列取
 
 单曲线主机曲线构造由 20.277 秒降至 6.607 秒，整批 NAF 初始化由 21.254 秒降至 7.689 秒。双曲线旧版使用一个构造线程，新版自动使用两个，曲线构造由 51.118 秒降至 6.718 秒，整批初始化由 52.770 秒降至 8.416 秒。双曲线设备主循环分别用时 26.794 和 26.857 秒。两组配对的保存文件均逐字节一致。[单曲线旧版](../../data/experiments/ntt_carrier_setup/before/run.log) · [单曲线新版](../../data/experiments/ntt_carrier_setup/after/run.log) · [双曲线旧版](../../data/experiments/ntt_carrier_setup/before2/run.log) · [双曲线新版](../../data/experiments/ntt_carrier_setup/after2/run.log)
 
+同一输入、设备和执行形状下，0.72.3（SHA-256 前缀 `aed465353209767d`）与 0.72.4（`70727d35fa5b1cdc`）按旧、新、新、旧顺序各测两次单曲线。完整 NAF 初始化分别为 6.465、5.344、5.314、5.988 秒；单曲线主机构造均值由 5.202 秒降至 4.556 秒。双曲线各一次，完整初始化从 6.368 秒降至 5.724 秒。所有配对保存文件逐字节相同。[原始测量](../../data/experiments/prmers_init/)
+
+PrMers 在同机、同指数、同已知因子和 B1 上使用 Marin、torsion=none、sigma 参数化。独立目录中单曲线启动一次，按输出到达时的墙钟计时：进程启动至基点寄存器就绪 4.082 秒，从打印曲线种子算起 0.998 秒，从打印 Stage1 开始算起 0.129 秒。该次只测启动到就绪。PrMers 可执行文件 SHA-256 前缀为 `72d8eb96771b694e`。该模式用 sigma 的有理式直接构造曲线，ECM-ELF 的 Atkin–Morain 曲线还要求辅助点乘。同名 seed 或相同指数不足以配对两者的保存点。[PrMers 计时](../../data/experiments/prmers_init/prmers/timed.log) · [PrMers 构造](../../.refactor/PrMers/src/modes/RunEcmTwistedEdwards.cpp#L2602)
+
 ## 500 万位的生产吞吐与独立模平方
 
 在 RTX 4070 Ti（GPU 0，sm89，功率上限 285 W）上串行运行单个进程。对照构建已具备 5242880 位选长和 640 段进位，两侧采用相同的 Goldilocks 系数界。下表比较相同输入、批量和 Graph 的设备时间。Edwards 的一列按一条曲线计数。SHA-256 前缀分别为扩容基线 `4c7c499768ac94e4`、批量加权融合 `3a9673ed4b790636`、线性直接折回 `87dff3e2b5ca09e1` 和最终 0.72.0 `889dcf6113de799a`。[实验目录](../../data/experiments/stage1_ntt_5m/)
