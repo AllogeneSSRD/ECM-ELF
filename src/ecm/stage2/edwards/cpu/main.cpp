@@ -370,7 +370,18 @@ bool calculate(const Options &o,const SavedCurve &r,bool queued,
     int stage=0;Details details;const auto begin=std::chrono::steady_clock::now();
     if(r.factor){mpz_set(f.v,x.v);stage=1;}
     else {
-        auto setup=construct(d.v,px.v,py.v,a24.v,f.v,r.sigma,n.v);
+        const auto bits=mpz_sizeinbase(n.v,2);
+        const auto carrier=static_cast<mp_bitcnt_t>(o.exponent>bits?o.exponent:0);
+        const bool fold=std::max<uint64_t>(carrier,bits)>=8192 && (carrier || mpz_scan0(n.v,0)==bits);
+        auto setup=[&]{
+            if(!fold)return construct(d.v,px.v,py.v,a24.v,f.v,r.sigma,n.v);
+            ecm_edwards::MersenneConstruction construction(n.v,carrier,/*cache_sigma_prefix=*/false);
+            return construct(d.v,px.v,py.v,a24.v,f.v,r.sigma,n.v,&construction);
+        }();
+        if(stage2_log::enabled(stage2_log::debug))
+            log("cpu_stage2_curve_setup: seconds="+std::to_string(
+                    std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count())+
+                " mersenne_fold="+(fold?"1":"0"),false);
         if(setup==Setup::Degenerate)
             throw std::runtime_error("degenerate Edwards curve in save record "+std::to_string(r.line));
         if(queued && setup==Setup::Ready) {

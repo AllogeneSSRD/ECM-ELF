@@ -34,8 +34,10 @@ inline Setup inverse(mpz_t out, const mpz_t value, const mpz_t n, mpz_t factor) 
 
 // One worker owns this state for a single immutable Mersenne modulus.
 struct MersenneConstruction {
-    explicit MersenneConstruction(mpz_srcptr modulus, mp_bitcnt_t carrier_bits = 0)
-        : n(modulus), bits(carrier_bits ? carrier_bits : mpz_sizeinbase(n, 2)), cofactor(carrier_bits != 0) {
+    explicit MersenneConstruction(mpz_srcptr modulus, mp_bitcnt_t carrier_bits = 0,
+                                  bool cache_sigma_prefix = true)
+        : n(modulus), bits(carrier_bits ? carrier_bits : mpz_sizeinbase(n, 2)),
+          cofactor(carrier_bits != 0), cache_sigma_prefix(cache_sigma_prefix) {
         if (cofactor) {
             // Folding is valid modulo every divisor of 2^bits-1. All exceptional
             // branches and inverse checks still need canonical residues modulo n.
@@ -56,6 +58,7 @@ struct MersenneConstruction {
     const mpz_srcptr n;
     const mp_bitcnt_t bits;
     const bool cofactor;
+    const bool cache_sigma_prefix;
     Integer high;
     std::array<Jacobian, 64> before_bit;
     uint64_t previous_sigma = 0;
@@ -167,7 +170,7 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uin
     if (mersenne) mersenne->previous_sigma = 0;
     // Left-to-right binary multiplication: P <- 2*P, then P <- P+Q for bit 1.
     for (; bit >= 0; --bit) {
-        if (mersenne) {
+        if (mersenne && mersenne->cache_sigma_prefix) {
             auto& state = mersenne->before_bit[bit];
             mpz_set(state.x.v, X.v);
             mpz_set(state.y.v, Y.v);
@@ -237,7 +240,7 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uin
         mpz_set(X.v, U.v);
         mpz_set(Y.v, V.v);
     }
-    if (mersenne && !auxiliary) mersenne->previous_sigma = sigma;
+    if (mersenne && mersenne->cache_sigma_prefix && !auxiliary) mersenne->previous_sigma = sigma;
 
     Setup rc;
     bool normalized = false;

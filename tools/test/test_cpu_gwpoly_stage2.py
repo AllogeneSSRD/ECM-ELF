@@ -186,7 +186,9 @@ def main():
             row = run(f'small_q{order}_d{wheel}', path, modulus, b2=order, extra=['--d', wheel])[0]
             assert row['stage'] == 2 and str(prime) in row['factors']
     stored=save('stored_factor',1009*n)
-    assert run('cached_stage1_factor',stored,1009*n)[0]['stage']==1
+    assert 'STATUS=FACTOR' in stored.read_text()
+    assert not run('skip_stage1_factor',stored,1009*n)
+    assert not (out/'skip_stage1_factor.json.txt').exists()
     damaged=out/'damaged.save';damaged.write_text(cpu.read_text().replace('CHECKSUM=','CHECKSUM=9',1))
     run('reject_checksum',damaged,n,good=False)
     for name,args in [('metadata',['--exponent',131]),('wheel',['--d',5]),('memory',['--d',20000000,'--memory-mib',1]),('bounds',['--b2',10**15+1])]:

@@ -52,6 +52,8 @@ CPU gwpoly 默认将 B2 扩展到整块。需要精确请求边界时，在 `[st
 
 Baby 点按互素剩余类做 Montgomery 差分递推。每线程平均分到至少 512 个根时，步长取 gcd(D, 30)，只启动与该步长互素的剩余类。步长为 2 的布局和较短的切片沿用奇数链。各线程保留自己的种子并把点写到原来的根序位置，随后批量归一化。启用 `--gw-check` 会打印步长，并用独立梯形复核各切片或剩余类的首、中、末三点。
 
+CPU 续算重构大梅森数或显式梅森承载的 Edwards 曲线时，复用 Stage1 的梅森折叠归约。单条存档记录的重构跳过 σ 前缀缓存，求逆和因子判定仍在存档的实际 N 上执行。`--log-level debug` 的 `cpu_stage2_curve_setup` 记录重构用时和实际归约路径。
+
 在单线程 AVX-512 上，系数 FFT 长度达到 15360 且原生循环梅森 FFT 的舍入余量足以容纳两组系数乘积和时，通用 H 折叠只归一化 HG 的高段来求商。低段保留在频域，直接传给低项乘减。其他布局在求商前归一化整个 HG。未使用零填充 FFT 的小数组和受影响的缩放布局使用独立乘法、减法，避开 GWNUM 31.6 融合乘减对数据头的越界读取。`--gw-check` 会通过 `deferred_low` 报告实际分支。[H 折叠和 baby 点实测](../performance/CPU_GWPOLY_STAGE2.md#0699-h-折叠和-baby-点)
 
 H 缩放只计算低段乘积，将输出按下降所需的逆序直接写入系数槽。若仅有一个短 G 块，输入只取 H 的有效长度，缩放余式的其余高次系数补零。
@@ -63,6 +65,8 @@ Giant 点直接写入 P+1 槽的 G 缓冲区。每段归一化先取分母乘积
 Stage2 ABI 3 起会在曲线内输出规划、baby 点、F 树、倒数、giant 循环、下降和 GCD。设置 `log_level = "phases"` 可查看阶段，`"batches"` 另显示 giant 批次和估算剩余时间。GUI 直接消费同一进度事件，队列模式也写入共享日志。批次进度按本次执行范围计数，命中后重放原范围会重新计数。libecm 仍按曲线报告。
 
 梅森承载在 AVX-512 或 FMA3 上对 baby 和 giant 差分链使用融合乘减。开启 `--gw-check` 时，每个点生成线程用独立的标量梯形算法重算本段首、中、末三个 baby 点，以 GMP 核对射影等式。另用 GMP 直接累乘三个 baby 点对应的全部 giant 差值，与最终叶值比较；结果中的 `checked-values` 统计这一组叶投影。默认计时关闭校验。`--d` 和 `--gw-check` 要求显式 `--backend gwpoly`。`--selftest-gwpoly --threads 4` 独立验证复合环上的多项式算法，无需 save。`--dry-run` 只检查文件和目标元数据，不执行完整算术与内存规划。
+
+每段 giant 链用一次梯形同时取得相邻种子。系数 FFT 长度达到 65536 时，每段按至少 64 个点分工，较短 FFT 保持 256 个点的门槛。`--gw-check` 还用原 Stage1 终点直接重算每段 giant 链的首尾点。[宽位对照](../performance/CPU_GWPOLY_STAGE2.md#m3033533-的-3033447-位余因子)
 
 ```powershell
 ecm_stage2.exe --save ed.save --backend gwpoly --threads 4 --memory-mib 4096 --b2 2600000000000 --exponent 347

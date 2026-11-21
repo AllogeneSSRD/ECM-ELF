@@ -1,5 +1,7 @@
 # Stage2 性能
 
+300 万位宽的生产形状使用 B1=50000，对照固定 B2 和 D/P 的 ECM-ELF 单线程、四线程与 Prime95 单线程阶段计时。[M3033533 的 3033447 位余因子](CPU_GWPOLY_STAGE2.md#m3033533-的-3033447-位余因子)
+
 0.69.9 已用原 Edwards 存档重跑全位宽和宽位分区。单项改动的固定几何配对见 [H 折叠和 baby 点](CPU_GWPOLY_STAGE2.md#0699-h-折叠和-baby-点)。
 
 262139 位单线程的 F 下降、分段重建和内存实测见 [0.69.8 分段 F 树下降](CPU_GWPOLY_STAGE2.md#0698-分段-f-树下降)。16k 的 H 写回按 B2、内存和折叠子步骤分别计时，见 [H 写回与 F 下降实验](../development/CPU_STAGE2_PLAN_SELECTION.md#基于-0697-的-h-写回与-f-下降实验)。

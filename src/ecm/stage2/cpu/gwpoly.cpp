@@ -379,8 +379,12 @@ struct Points {
         gwmul3(&gw,out.z,difference.x,out.z,GWMUL_FFT_S2|GWMUL_STARTNEXTFFT);
         gwmul3(&gw,out.x,difference.z,out.x,GWMUL_FFT_S2|GWMUL_STARTNEXTFFT);
     }
-    void ladder(Point p,uint64_t k,Point out,gwnum a24){
-        if(!k){u64togw(&c.gw,1,out.x);u64togw(&c.gw,0,out.z);return;}
+    void ladder(Point p,uint64_t k,Point out,gwnum a24,Point* successor=nullptr){
+        if(!k){
+            u64togw(&c.gw,1,out.x);u64togw(&c.gw,0,out.z);
+            if(successor)copy(p,*successor);
+            return;
+        }
         Array storage(c.gw,6);Point a{storage[0],storage[1]},b{storage[2],storage[3]},t{storage[4],storage[5]};
         copy(p,a);dbl(p,b,a24);
         uint64_t bit=1;while(bit<=k/2)bit<<=1;
@@ -389,6 +393,7 @@ struct Points {
             else {add(a,b,p,t);dbl(a,a,a24);copy(t,b);}
         }
         copy(a,out);
+        if(successor)copy(b,*successor);
     }
     void normalize(gwnum *x,gwnum *z,size_t count,bool negate=false){
         auto &gw=c.gw;
@@ -423,6 +428,11 @@ template<class Function> void parallel_points(Context &parent,size_t count,Funct
         explicit Worker(Context &p):context(p,factor.v,stats){}
     };
     const size_t threads=std::min<size_t>(parent.o.threads,std::max<size_t>(1,count/min_chunk));
+    if(threads==1){
+        function(parent,0,count);
+        parent.check("point worker");
+        return;
+    }
     std::vector<std::unique_ptr<Worker>> workers;
     for(size_t i=0;i<threads;++i)workers.push_back(std::make_unique<Worker>(parent));
     auto execute=[&](size_t i){try{function(workers[i]->context,count*i/threads,count*(i+1)/threads);}
@@ -1019,6 +1029,9 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                              stats.fft_length>=15360 && c.use_deferred_h_fold(p);
         progress(ECM_GW_GIANT);
         const uint64_t batches=first<=last?1+(last-first)/p:0;
+        // With large coefficient FFTs even a short giant chain amortizes the
+        // ladder and worker startup. Keep the smaller FFTs' existing threshold.
+        const size_t giant_chunk=stats.fft_length>=65536?64:256;
         auto last_report=main_begin;
         for(uint64_t pos=first;pos<=last;){
             c.poll();const size_t count=static_cast<size_t>(std::min<uint64_t>(p,last-pos+1));
@@ -1032,8 +1045,9 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                 auto a24=work[4];
                 ops.copy(base,local_base);
                 gwcopy(&worker.gw,storage[12],a24);
-                ops.ladder(local_base,pos+lo,current,a24);
-                ops.ladder(local_base,pos+lo-1,previous,a24);
+                // A differential ladder already computes two adjacent
+                // multiples; use both as the seed for the chain.
+                ops.ladder(local_base,pos+lo-1,previous,a24,&current);
                 const bool use_fused=worker.o.exponent &&
                     (worker.gw.cpu_flags & (CPU_AVX512F|CPU_FMA3));
                 for(size_t i=lo+1;i<hi;++i){
@@ -1046,7 +1060,23 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                     if(!(i&127))worker.check();
                 }
                 ops.normalize(gx.v+lo,gz.v+lo,hi-lo,true);
-            });gz=Array();stats.point_seconds+=seconds(part_begin);
+                if(o.check){
+                    // Compare both ends of each lane with [iD]Q computed
+                    // directly, independently of the base and the paired seed.
+                    Point reference{work[0],work[1]};
+                    ops.copy(q,local_base);
+                    Integer negative,ref_x,ref_z;
+                    for(const size_t sample:{lo,hi-1}){
+                        ops.ladder(local_base,d*(pos+sample),reference,a24);
+                        worker.get(negative.v,gx[sample]);
+                        worker.get(ref_x.v,reference.x);
+                        worker.get(ref_z.v,reference.z);
+                        mpz_addmul(ref_x.v,negative.v,ref_z.v);
+                        if(!mpz_divisible_p(ref_x.v,n))
+                            throw std::runtime_error("Giant point differs from direct ladder");
+                    }
+                }
+            },giant_chunk);gz=Array();stats.point_seconds+=seconds(part_begin);
             if(o.check){
                 Integer negative_giant,difference;
                 for(size_t i=0;i<count;++i){c.get(negative_giant.v,gx[i]);for(auto &probe:probes){
