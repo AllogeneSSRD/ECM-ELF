@@ -4,6 +4,8 @@
 #include "../../curve/edwards.h"
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <string_view>
 #include <stdexcept>
 
 namespace ecm_edwards::ntt {
@@ -15,6 +17,23 @@ inline bool prefer_device_dictionary(size_t p, unsigned curves, unsigned window,
     if (p >= 2000 && curves >= 64) return true;
     if (p >= 6144) return curves >= 8;
     return p >= 3500 && curves >= (window >= 10 ? 16u : 32u);
+}
+
+inline bool production_device_dictionary(size_t p, unsigned curves, unsigned window, unsigned min_bits) {
+    if (!window) return false;
+    if (const char* override = std::getenv("ECM_EDWARDS_NTT_DICTIONARY")) {
+        const std::string_view mode(override);
+        if (mode == "gpu") return true;
+        if (mode == "host") return false;
+        throw std::invalid_argument("ECM_EDWARDS_NTT_DICTIONARY must be host or gpu");
+    }
+    return prefer_device_dictionary(p, curves, window, min_bits);
+}
+
+// Includes seeds, initial ladder coordinates and builder preparation buffers.
+inline size_t preparation_bytes(bool device, size_t entries, size_t words, size_t curves) {
+    const size_t slots = device ? entries + 11 * curves : 8 * entries + (4 * entries + 9) * curves;
+    return slots * words * sizeof(uint32_t);
 }
 
 // For the calibration point (1,0), odd multiples alternate between P and -P.

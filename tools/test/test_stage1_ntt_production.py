@@ -429,6 +429,18 @@ def main():
                 expected = points
             else:
                 assert points == expected
+        # One MiB admits the GPU seed buffers but not the fallback table and scratch.
+        limited = dict(automatic, ECM_EDWARDS_NTT_HOST_LIMIT_MIB="1")
+        for limit in (0, 3):
+            work, cmd = fixture(f"naf_host_limit_{limit}", model="ed",
+                                extra=dictionary_config + f"naf_memory_mb = {limit}\n")
+            call, data = direct(work, cmd, 65521, 20, 26, 2)
+            log = run(work, call, text=data, ok=not limit, env_override=limited)
+            if limit:
+                assert "host fallback exceeds available host memory" in log
+                assert not (work / "out.save").exists() or not (work / "out.save").stat().st_size
+            else:
+                assert saved_points(work / "out.save", 65521, 20, True) == expected
         work, cmd = fixture("edwards_forced_gpu_dictionary_3mb", model="ed",
                             extra=dictionary_config + "naf_memory_mb = 3\n")
         call, data = direct(work, cmd, 65521, 20, 26, 2)

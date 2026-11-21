@@ -247,13 +247,14 @@ void prepare_edwards_batch(mpz_srcptr n, const std::vector<uint64_t>& sigmas, un
 }
 
 std::vector<uint32_t> build_host_naf_fallback(ecm_mersenne_ntt::Run& run, mpz_srcptr modulus,
-        const std::vector<uint32_t>& seeds, unsigned curves, unsigned words, unsigned window) {
+        const std::vector<uint32_t>& seeds, unsigned curves, unsigned words, unsigned window, size_t dictionary_budget) {
     const size_t entries = size_t(1) << (window - 2);
     const size_t stride = size_t(curves) * words;
     const size_t table_words = 4 * entries * stride;
     const size_t scratch_bytes = (table_words + 8 * entries * words + stride) * sizeof(uint32_t);
-    const auto free = ecm_edwards_memory::host_free_bytes();
-    if (free && scratch_bytes > ecm_edwards_memory::usable_bytes(*free, 64 * ecm_edwards_memory::mib))
+    if (dictionary_budget && table_words * sizeof(uint32_t) > dictionary_budget)
+        throw ecm_mersenne_ntt::BudgetError("Edwards NTT host fallback exceeds naf_memory_mb");
+    if (scratch_bytes > ecm_edwards_memory::ntt_host_budget())
         throw ecm_mersenne_ntt::BudgetError("Edwards NTT host fallback exceeds available host memory");
     ecm_ts_fprintf(stdout, "Stage1 NTT: GPU dictionary workspace exceeds the VRAM budget, building on the host\n");
 
@@ -315,9 +316,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             throw std::invalid_argument("Stage1 scalar exceeds the NTT cursor range");
         const unsigned binary_count = unsigned(scalar_bits - 1);
         const unsigned words = unsigned((p + 31) / 32);
-        const auto host_free = edwards ? ecm_edwards_memory::host_free_bytes() : std::nullopt;
-        const size_t host_limit = host_free
-            ? ecm_edwards_memory::usable_bytes(*host_free, 64 * ecm_edwards_memory::mib) : SIZE_MAX;
+        const size_t host_limit = edwards ? ecm_edwards_memory::ntt_host_budget() : SIZE_MAX;
         const size_t encoding_bytes = (scalar_bits + 1) * sizeof(int16_t) + edwards_naf_bytes(scalar_bits, true);
         const auto prepare_naf = [&](unsigned window) {
             if (encoding_bytes > host_limit)
@@ -358,25 +357,16 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         phase = FailureSource::Preparation;
 
         const size_t entries = naf_window ? size_t(1) << (naf_window - 2) : 0;
-        bool gpu_dictionary = naf_window && ecm_edwards::ntt::prefer_device_dictionary(
-            p,curves,naf_window,opt.execution.ntt.naf_gpu_min_bits);
-        bool automatic_dictionary = true;
-        if (naf_window) {
-            if (const char* override = std::getenv("ECM_EDWARDS_NTT_DICTIONARY")) {
-                automatic_dictionary = false;
-                const std::string_view mode(override);
-                if (mode == "gpu") gpu_dictionary = true;
-                else if (mode == "host") gpu_dictionary = false;
-                else throw std::invalid_argument("ECM_EDWARDS_NTT_DICTIONARY must be host or gpu");
-            }
-        }
+        const bool gpu_dictionary = ecm_edwards::ntt::production_device_dictionary(
+            p, curves, naf_window, opt.execution.ntt.naf_gpu_min_bits);
+        const bool automatic_dictionary = !std::getenv("ECM_EDWARDS_NTT_DICTIONARY");
         const size_t budget = size_t(opt.execution.naf_memory_mb) * ecm_edwards_memory::mb;
         const size_t dictionary_slots = !naf_window ? 0 : gpu_dictionary ? 3 : 4 * entries;
         const size_t host_dictionary_words = dictionary_slots * curves * words;
         const size_t host_seed_words = naf_window && !gpu_dictionary ? 3ull * curves * words : 0;
-        const size_t prep_words = naf_window ? (gpu_dictionary ? entries + 2 * curves : 8 * entries) * words : 0;
-        const size_t host_required = (host_dictionary_words + host_seed_words + 6ull * curves * words + prep_words)
-            * sizeof(uint32_t) + (naf_window ? encoding_bytes : 0);
+        const size_t host_required = naf_window ? encoding_bytes +
+            ecm_edwards::ntt::preparation_bytes(gpu_dictionary, entries, words, curves) :
+            6ull * curves * words * sizeof(uint32_t);
         std::vector<int16_t> digits;
         double encoding_ms = restore_encoding_ms, curve_setup_ms = 0, host_points_ms = 0;
         unsigned host_dictionary_curves = 0;
@@ -480,7 +470,13 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                 mpz_import(py.v, words, -1, sizeof(uint32_t), 0, 0, seed + stride);
                 mpz_import(d.v, words, -1, sizeof(uint32_t), 0, 0, seed + 2 * stride);
                 std::vector<uint32_t> legacy_table;
-                if (gpu_dictionary) legacy_table.resize(4 * entries * words);
+                if (gpu_dictionary) {
+                    const size_t table_words = 4 * entries * words;
+                    if ((budget && table_words * sizeof(uint32_t) > budget) ||
+                        3 * table_words * sizeof(uint32_t) > ecm_edwards_memory::ntt_host_budget())
+                        throw ecm_mersenne_ntt::BudgetError("Edwards checkpoint dictionary exceeds host budget");
+                    legacy_table.resize(table_words);
+                }
                 auto& table = gpu_dictionary ? legacy_table : dictionary;
                 const auto status = ecm_edwards::ntt::affine_dictionary(table, gpu_dictionary ? 1 : curves,
                     gpu_dictionary ? 0 : i, words,
@@ -664,7 +660,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             if (carrier) naf.check_modulus = N;
             if (gpu_dictionary && automatic_dictionary)
                 naf.host_fallback = [&](ecm_mersenne_ntt::Run& run) {
-                    return build_host_naf_fallback(run, N, dictionary, batch, words, naf_window);
+                    return build_host_naf_fallback(run, N, dictionary, batch, words, naf_window, budget);
                 };
             const double host_init_ms = milliseconds_since(naf_started) + restore_encoding_ms;
             auto run = naf_window ? ecm_mersenne_ntt::edwards_naf(opt.execution.device_index, unsigned(p),

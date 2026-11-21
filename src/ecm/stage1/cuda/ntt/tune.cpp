@@ -579,16 +579,8 @@ std::array<BatchMemory, CandidateCount> production_capacity(const ecm_stage1::St
     const size_t words = (p + 31) / 32, entries = window ? 1u << (window - 2) : 0;
     const auto dictionary_mb = request.options.execution.naf_memory_mb;
     const auto dictionary_budget = size_t(dictionary_mb) * ecm_edwards_memory::mb;
-    size_t host_cap = request.options.execution.ntt.max_batch;
-    if (entries)
-        if (const auto free = ecm_edwards_memory::host_free_bytes()) {
-            const auto limit = ecm_edwards_memory::usable_bytes(*free, 64 * ecm_edwards_memory::mib);
-            // A padded host table temporarily has both its old and expanded
-            // lane layouts. Leave room for scalar and dictionary preparation.
-            const size_t fixed = (size_t(request.b1) * 5 + 128 * entries * words);
-            const auto per_curve = (32 * entries + 64) * words;
-            host_cap = std::min(host_cap, limit > fixed ? (limit - fixed) / per_curve : 0);
-        }
+    const unsigned batch_limit = request.options.execution.ntt.max_batch;
+    const size_t host_budget = entries ? ecm_edwards_memory::ntt_host_budget() : SIZE_MAX;
     std::array<BatchMemory, CandidateCount> capacities{};
     for (unsigned mode = 0; mode < CandidateCount; ++mode) {
         if (!shapes[mode]) continue;
@@ -599,9 +591,16 @@ std::array<BatchMemory, CandidateCount> production_capacity(const ecm_stage1::St
         const auto dictionary = entries * (32 * length + (reserve_dictionary_workspace ? 16 * words : 0));
         const auto per_curve = 88 * length + 128 * words + dictionary;
         const auto fixed = 160 * length + 32 * words + size_t(request.b1 / 4 + 16);
-        size_t cap = std::min(host_cap, device.budget > fixed ? (device.budget - fixed) / per_curve : 0);
+        size_t cap = std::min<size_t>(batch_limit, device.budget > fixed ? (device.budget - fixed) / per_curve : 0);
         if (dictionary_budget && dictionary)
             cap = std::min(cap, dictionary_budget / dictionary);
+        while (entries && cap) {
+            const bool gpu = ecm_edwards::ntt::production_device_dictionary(
+                p, unsigned(cap), window, request.options.execution.ntt.naf_gpu_min_bits);
+            const size_t prep = ecm_edwards::ntt::preparation_bytes(gpu, entries, words, cap);
+            if (prep + size_t(request.b1) * 5 <= host_budget) break;
+            --cap;
+        }
         capacities[mode] = {per_curve, device.device_budget, request.options.execution.ntt.memory_mib,
                             window ? dictionary_mb : 0u, unsigned(cap)};
     }

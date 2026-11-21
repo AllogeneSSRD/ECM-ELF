@@ -97,4 +97,8 @@ inline uint64_t cap_budget(uint64_t budget, const char* limit_name) {
         return budget;
     return (std::min)(budget, limit * mib);
 }
+inline uint64_t ntt_host_budget() {
+    const auto free = host_free_bytes();
+    return cap_budget(free ? usable_bytes(*free, 64 * mib) : UINT64_MAX, "ECM_EDWARDS_NTT_HOST_LIMIT_MIB");
+}
 } // namespace ecm_edwards_memory
