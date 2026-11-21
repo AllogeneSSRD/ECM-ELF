@@ -737,9 +737,20 @@ struct Profile {
         const bool native=optional_uint(sample,"naf_window")!=0;
         const auto bound=ecm_stage1::ntt_max_exp(n,weighted,native);
         const auto conservative=ecm_stage1::ntt_max_exp(n,weighted,false);
-        if(!sample.count("max_exp"))sample["max_exp"]=std::to_string(bound);
+        // Before the 5M extension, 65536-point weighted and both 131072-point
+        // families stopped at 1M (the weighted 131072 plan could be forced).
+        // Keep that cap on the measurement; max_exp is part of its matrix key.
+        constexpr Word old_cap=1048576;
+        const bool old_family=n==131072 || (weighted && n==65536);
+        if(!sample.count("max_exp")) {
+            const bool old_format=metadata.count("format") && uint(metadata,"format")<17;
+            sample["max_exp"]=std::to_string(old_format && old_family ? old_cap : bound);
+        }
         const auto limit=uint(sample,"max_exp");
-        if(limit!=bound && limit!=conservative)throw std::runtime_error("invalid Stage1 NTT max_exp");
+        const bool historical=old_family && limit==old_cap &&
+            optional_uint(sample,"reference_bits")<=old_cap && optional_uint(sample,"arithmetic_bits")<=old_cap;
+        if(limit!=bound && limit!=conservative && !historical)
+            throw std::runtime_error("invalid Stage1 NTT max_exp");
         const auto same=[&](const Fields& old) {
             return !matrix_row_less(old,sample,ntt_row_order) && !matrix_row_less(sample,old,ntt_row_order);
         };

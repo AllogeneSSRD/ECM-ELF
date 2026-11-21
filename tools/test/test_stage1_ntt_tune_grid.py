@@ -150,6 +150,37 @@ def main():
         assert winner["b1"] == 32 and winner["program_version"] == "0.71.6"
         assert winner["iter_per_s"] == baseline["iter_per_s"] and winner["updated_at"] == baseline["updated_at"]
 
+    # The 1M release capped these three families, including forced 131072-point
+    # weighted transforms. Loading a wide search must preserve their old scope.
+    wide_rows = []
+    for n, kind in ((65536, "stage1_weighted"), (131072, "stage1_linear"), (131072, "stage1_weighted")):
+        row = dict(zip(modern, best))
+        layers = [4, 12] if n == 65536 else [1, 4, 12]
+        row.update(length=n, ntt_type=kind, max_exp=1048576, reference_bits=1048576,
+                   tile=12, max_radix_bits=4, passes_forward=len(layers),
+                   forward="+".join(map(str, layers)), inverse="+".join(map(str, reversed(layers))),
+                   segments=128, bpw=24 if kind == "stage1_linear" else 1048576 // n,
+                   uniform_digits=int(kind == "stage1_weighted"), program_version="0.71.14")
+        wide_rows.append(row)
+    for version in (16, 17):
+        database = out / f"legacy_1m_v{version}.toml"
+        columns = [k for k in modern if version == 17 or k != "max_exp"]
+        write_matrix(text.replace("format = 17", f"format = {version}"), columns,
+                     [[r[k] for k in columns] for r in wide_rows])
+        run(f"legacy_1m_load_{version}", ["-tune", "length=8,naf=6,batch=1,time=0.01", "32"])
+        preserved = [r for r in rows() if r["length"] >= 65536]
+        assert len(preserved) == 3 and all(r["max_exp"] == r["reference_bits"] == 1048576 and
+            r["program_version"] == "0.71.14" and r["iter_per_s"] == best[modern.index("iter_per_s")]
+            for r in preserved)
+    for tag, changes in (("wrong_limit", {"max_exp": 1048577}),
+                         ("wrong_family", {"length": 81920}),
+                         ("outside_old_range", {"reference_bits": 1048577, "segments": 129})):
+        database = out / f"bad_1m_{tag}.toml"
+        damaged = dict(wide_rows[0], **changes)
+        write_matrix(text, modern, [[damaged[k] for k in modern]])
+        assert "invalid Stage1 NTT max_exp" in run("reject_1m_" + tag,
+            ["-tune", "ntt,exp=3000000,time=1"], success=False)
+
     database = out / "recheck_roles.toml"
     flags = ["-tune", "exp=127,naf=6,time=0.02", "32"]
     limits = "ntt_max_batch = 2\nntt_profile = 1"
