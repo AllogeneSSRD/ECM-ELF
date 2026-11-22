@@ -149,8 +149,12 @@ Fields encode(const Measurement& m, unsigned iterations) {
     return row;
 }
 
+std::vector<Fields> compact_batch_rows(std::vector<Fields> rows, const std::string& search);
+bool fits_recorded_memory(const Fields&, const Device&, const ecm_stage1::Stage1Request&);
+
 void persist(const std::string& path, const Device& device, std::vector<Fields> rows,
-             const std::string& replace_scope = {}, bool partial = false, bool observation = false) {
+             const std::string& replace_scope = {}, bool partial = false, bool observation = false,
+             const std::string& forced_search = {}, const ecm_stage1::Stage1Request* request = nullptr) {
     if (path.empty() || rows.empty()) return;
     const auto parent = std::filesystem::path(path).parent_path();
     if (!parent.empty()) std::filesystem::create_directories(parent);
@@ -163,6 +167,18 @@ void persist(const std::string& path, const Device& device, std::vector<Fields> 
             return r.at("condition") == condition && r.count("batch_scope") &&
                    pt::text(r,"batch_scope") == replace_scope;
         };
+        // Force searches run cold. Compare with the latest completed search only
+        // at publication, so a slower rerun cannot demote its best batch.
+        if (!forced_search.empty()) {
+            pt::Profile merged;
+            merged.conditions = db.conditions;
+            for (const auto& old : db.stage1_ntt)
+                if (belongs(old) && old.count("batch_search") && pt::text(old,"batch_search")==forced_search &&
+                    fits_recorded_memory(old,device,*request))
+                    merged.update_stage1_ntt(old);
+            for (auto& row : rows) merged.update_stage1_ntt(std::move(row));
+            rows = compact_batch_rows(std::move(merged.stage1_ntt),forced_search);
+        }
         // A shorter interrupted run must not evict a completed search.
         if (partial && std::any_of(db.stage1_ntt.begin(),db.stage1_ntt.end(),
                 [&](const Fields& r) { return belongs(r) && r.count("batch_search"); })) return;
@@ -857,7 +873,7 @@ public:
         if (path.empty()) return;
         const auto key = device_.uuid + "/" + scope + "/" + search + "/" + std::to_string(grid_.group_ms);
         checkpoint_ = path + "." + std::to_string(ecm_io::fingerprint(key)) + ".partial";
-        if (!std::filesystem::exists(checkpoint_)) return;
+        if (grid_.force || !std::filesystem::exists(checkpoint_)) return;
         ecm_io::FileLock lock(checkpoint_);
         for (const auto& row : load(checkpoint_).stage1_ntt)
             if (fits_recorded_memory(row,device_,request_) && row.count("batch_scope") && pt::text(row,"batch_scope")==scope && same_workload(row,request_,window_))
@@ -984,7 +1000,8 @@ public:
                 (pt::text(row,"ntt_type")==pt::weighted_ntt_type) != base.weighted ||
                 pt::tested_ms(row,2,grid_.fine_repeats) < grid_.group_ms) continue;
             auto hit = decode(row,shape->shape,device_,batch,base);
-            if (!hit || hit->options.mixed_layout != base.mixed_layout) continue;
+            if (!hit || (base.mixed_layout != Stage1NttOptions::MixedLayout::Automatic &&
+                         hit->options.mixed_layout != base.mixed_layout)) continue;
             try {
                 auto plan = describe(device_,p_,batch,hit->options,window_);
                 if (!same_dispatch(row,plan)) continue;
@@ -1059,8 +1076,12 @@ public:
             row.erase("batch_roles");
         }
         if (!complete && !checkpoint_.empty()) persist(checkpoint_,device_,rows);
-        auto retained = compact_batch_rows(std::move(rows),complete ? search : std::string{});
-        persist(request_.options.execution.ntt.tune_file,device_,std::move(retained),scope,!complete);
+        if (grid_.force && complete)
+            persist(request_.options.execution.ntt.tune_file,device_,std::move(rows),scope,false,false,search,&request_);
+        else {
+            auto retained = compact_batch_rows(std::move(rows),complete ? search : std::string{});
+            persist(request_.options.execution.ntt.tune_file,device_,std::move(retained),scope,!complete);
+        }
         if (complete) finish_checkpoint();
     }
     Score sample(const Stage1NttOptions& options, unsigned batch, SamplePhase phase,
@@ -1179,7 +1200,11 @@ void refine_batch(TuneMatrix& matrix, Family& f, unsigned batch, std::map<unsign
     const auto base = best.plan;
     std::vector<Stage1NttOptions> trials;
     const auto& o = f.options;
-    if (auto previous=matrix.previous_plan(o,batch,base)) trials.push_back(*previous);
+    if (auto previous=matrix.previous_plan(o,batch,base)) {
+        previous->mixed_layout = o.mixed_layout;
+        previous->window = o.window;
+        trials.push_back(*previous);
+    }
     if (!o.profile && !o.tile && base.tile >= 5) {
         auto alt=o; alt.tile=base.tile-2; trials.push_back(alt);
         if (batch==1 && base.weighted && base.length==16384 && base.tile==12 && !o.outer_max) {
@@ -1227,13 +1252,9 @@ struct WindowSearch {
             ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_plan: p=%u length=%u bpw=%u naf=%u capacity=%u%s\n",
                 p,shape.shape.length,shape.shape.bpw,w,cap,cap ? "" : " reason=memory_budget");
             if (cap < grid.batch.first) continue;
-            if (mode == Mixed) {
-                for (auto layout : {Layout::Twiddle,Layout::Pfa,Layout::Coalesced}) {
-                    auto o = shape.options;
-                    o.mixed_layout = layout;
-                    families.push_back({o, cap});
-                }
-            } else families.push_back({shape.options, cap});
+            auto base = shape.options;
+            if (mode == Mixed) base.mixed_layout = Layout::Coalesced;
+            families.push_back({base, cap});
         }
         // Hold Graph size constant while comparing windows, layouts and batches.
         if (scan_graph)
@@ -1345,13 +1366,24 @@ struct WindowSearch {
                     if (b>=grid.batch.first && b<=f.cap) refine_batch(matrix,f,b,finals);
             }
         }
-        if (grid.find95 && grid.batch_explicit) restore_fine_scores(finals,FineHistory::All);
         if (finals.empty()) return false;
         const auto best = std::max_element(finals.begin(),finals.end(),[](const auto& a,const auto& b){
             return a.second.rate<b.second.rate;
         });
+        auto& winner = best->second;
+        if (ecm_stage1::stage1_ntt_radix5(winner.plan.length)) {
+            using Layout = Stage1NttOptions::MixedLayout;
+            auto options = fixed_plan(families.front().options,winner.plan);
+            ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_pfa_scan: p=%u naf=%u batch=%u length=%u graph=%u\n",
+                           p,w,winner.batch,winner.plan.length,winner.plan.window);
+            matrix.header_pending = true;
+            for (const auto layout : {Layout::Twiddle,Layout::Pfa,Layout::Coalesced}) {
+                options.mixed_layout = layout;
+                const auto score = matrix.sample(options,winner.batch,SamplePhase::Fine);
+                if (score.rate > winner.rate) winner = score;
+            }
+        }
         if (scan_graph) {
-            auto& winner = best->second;
             auto options = fixed_plan(families.front().options,winner.plan);
             ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_graph_scan: p=%u naf=%u batch=%u length=%u\n",
                            p,w,winner.batch,winner.plan.length);
@@ -1371,11 +1403,13 @@ struct WindowSearch {
         for (const auto& f : families) {
             auto base = f.options;
             if (scan_graph) base.window = -1;
+            base.mixed_layout = Stage1NttOptions::MixedLayout::Automatic;
             matrix.restore_finals(base,f.cap,scores,mode);
         }
     }
 
     void find95() {
+        if (grid.batch_explicit) restore_fine_scores(finals,FineHistory::All);
         if (cached_fine) {
             auto& best = cached.at(Fastest);
             const double previous = best.rate;
@@ -1465,7 +1499,7 @@ bool tune_windows(const Device& device, const ecm_stage1::Stage1Request& request
                   const Candidates& shapes, const ecm_stage1::NttTuneGrid& grid, TuneNafSamples& naf_samples,
                   const std::vector<unsigned>& windows, bool compete, bool exhaustive, double deadline,
                   bool recheck_cached = false) {
-    const auto db = load(request.options.execution.ntt.tune_file);
+    const auto db = grid.force ? pt::Profile{} : load(request.options.execution.ntt.tune_file);
     std::deque<WindowSearch> searches;
     std::map<unsigned,WindowSearch*> leaders;
     bool finished = false;

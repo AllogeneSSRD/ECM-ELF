@@ -126,7 +126,7 @@ matrix = [
     assert saved_points(out / "mixed_default/out.save", p, b1) == saved_points(out / "seed_binary/out.save", p, b1)
     print("PASS radix-5, explicit tile fallback and reuse of a covered binary plan", flush=True)
 
-    # This matrix checks mixed-layout coverage at every shortlisted batch.
+    # This matrix checks mixed-layout coverage at the winning batch.
     # The preceding full matrix already verifies the default timing and reuse.
     log = run("full_mixed", ["--tune", f"ntt,exp={p},time=0.25"])
     lengths = [int(n) for n in re.findall(r"^(?:\[[^\n]*\] )?Best +(\d+) +\d+ +[01]:", log, re.M)]

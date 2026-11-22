@@ -41,7 +41,7 @@ def main():
         for i, line in enumerate(lines):
             if "stage1_ntt_tune:" in line:
                 assert re.fullmatch(prefix + r"=+", lines[i+1]), name
-            if "stage1_ntt_round:" in line or "stage1_ntt_graph_scan:" in line or "stage1_ntt_find95:" in line:
+            if "stage1_ntt_round:" in line or "stage1_ntt_pfa_scan:" in line or "stage1_ntt_graph_scan:" in line or "stage1_ntt_find95:" in line:
                 first_measurement = True
             header = prefix + "length max_exp ntt_type batch iter/s dataflow actual/target steps/group steps/block radix5_layout"
             if re.fullmatch(header, line):
@@ -66,13 +66,13 @@ def main():
         matrix = "".join(json.dumps(row) + ",\n" for row in [fields, *values])
         database.write_text(header.split("matrix = [", 1)[0] + "matrix = [\n" + matrix + "]\n", encoding="utf-8")
 
-    for index, spec in enumerate(("exp=61,length=8", "naf=12-6", "batch=0", "batch=513",
+    for index, spec in enumerate(("force=2", "force,force=0", "exp=61,length=8", "naf=12-6", "batch=0", "batch=513",
                                   "exp=31", "time=0", "ntt,naf=6,naf=7", "typo=1",
                                   "repeat=2", "repeat=1:0", "repeat=:2", "repeat=21:1",
                                   "find95=2", "find95,find95=1", "repeat=1:2:3", "repeat=2:2,repeat=1:1")):
         log = run(f"bad{index}", ["-tune", spec], success=False)
         assert "INPUT[cli]" in log
-        if index == 0:
+        if spec == "exp=61,length=8":
             assert "conflict" in log and "length" in log and "exp" in log
     assert not database.exists()
 
@@ -234,6 +234,45 @@ def main():
         write_matrix(text, modern, [[damaged[k] for k in modern]])
         assert "invalid Stage1 NTT max_exp" in run("reject_1m_" + tag,
             ["-tune", "ntt,exp=3000000,time=1"], success=False)
+
+    database = out / "pfa_force.toml"
+    flags = ["-tune", "length=2560,naf=6,time=0.01,find95", "32"]
+    settings = "ntt_max_batch = 2"
+    def mixed_run(name, args):
+        return run(name, args, settings=settings, convolution="weighted")
+
+    def check_scan(log):
+        phases = ["phase=coarse", "phase=fine", "stage1_ntt_pfa_scan:", "stage1_ntt_graph_scan:", "stage1_ntt_find95:"]
+        offsets = [log.index(phase) for phase in phases]
+        assert offsets == sorted(offsets)
+        before = log[:offsets[2]]
+        assert "pfa-coalesced" in before and "pfa-direct" not in before and "twiddle" not in before
+        scan = log[offsets[2]:offsets[3]]
+        batch = re.search(r"batch=(\d+)", scan)[1]
+        measured = re.findall(r" (\d+)c [^\n]+ (twiddle|pfa-direct|pfa-coalesced)$", scan, re.M)
+        assert {(b,layout) for b,layout in measured} >= {(batch,"twiddle"),(batch,"pfa-direct")}
+        assert all(b == batch for b,_ in measured)
+        assert f"batch={batch} " in log[offsets[3]:offsets[4]]
+        assert re.search(r"measured=[1-9]\d* reused=0 ", log)
+
+    check_scan(mixed_run("pfa_cold", flags))
+    text_before = database.read_text(encoding="utf-8")
+    fields, *values = tomllib.loads(text_before)["ntt"]["matrix"]
+    for row in values:
+        scale = 10000 if row[fields.index("batch_roles")] & 4 else 0.00001
+        row[fields.index("iter_per_s")] *= scale
+        for key in ("median_ms", "stddev_seconds", "total_device_ms"):
+            row[fields.index(key)] /= scale
+    write_matrix(text_before, fields, values)
+    def layout_key(row):
+        return tuple(row[k] for k in ("batch","tile","max_radix_bits","graph_bits","warp_tail","dataflow"))
+    old_rates = {layout_key(r): r["iter_per_s"] for r in rows()}
+    old_peak = max(old_rates.values())
+    check_scan(mixed_run("pfa_force", [flags[0], flags[1] + ",force", flags[2]]))
+    assert any(r["iter_per_s"] == old_peak and r.get("batch_roles",0) & 4 for r in rows())
+    assert any(layout_key(r) in old_rates and r["iter_per_s"] > old_rates[layout_key(r)] for r in rows())
+    hot = mixed_run("pfa_hot", [flags[0],flags[1].replace(",find95",",force=0"),flags[2]])
+    assert "stage1_ntt_pfa_scan:" not in hot and "stage1_ntt_recheck:" in hot
 
     database = out / "recheck_roles.toml"
     flags = ["-tune", "exp=127,naf=6,time=0.02", "32"]
