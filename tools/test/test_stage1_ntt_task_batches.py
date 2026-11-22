@@ -41,15 +41,24 @@ def log_records(log, label):
 
 def batch_launches(log):
     keys = ("offset", "total", "curves", "capacity", "resumed")
-    return [{key: int(row[key]) for key in keys}
-            for row in log_records(log, "stage1_ntt_batch:")]
+    launches = []
+    for line in log.splitlines():
+        if "stage1_ntt_batch:" in line:
+            row, = log_records(line, "stage1_ntt_batch:")
+            launches.append({key: int(row[key]) for key in keys})
+        elif "stage1_ntt_batch_retry:" in line:
+            retry, = log_records(line, "stage1_ntt_batch_retry:")
+            assert launches and launches[-1]["offset"] == int(retry["offset"])
+            assert 0 < int(retry["curves"]) < launches[-1]["curves"]
+            launches.pop()
+    return launches
 
 
 def tune_rows(tune, p):
     columns, *values = tomllib.loads(tune.read_text(encoding="utf-8"))["ntt"]["matrix"]
     rows = [dict(zip(columns, row, strict=True)) for row in values]
-    return [row for row in rows if row.get("benchmark_kind") == "stage1_runtime"
-            and row["curve"] == "edwards" and row["arithmetic_bits"] == p
+    return [row for row in rows if (row.get("benchmark_kind") == "stage1_runtime" or row.get("runtime_observations"))
+            and row["curve"] == "edwards" and row["reference_bits"] == p
             and row["naf_window"] == 6 and row["b1"] == BOUND]
 
 
@@ -260,11 +269,15 @@ def main():
     incumbents = {row["batch"] for row in tune_rows(small_tune, EXPONENT)}
     assert incumbents == {row["curves"] for row in seed_launches}, incumbents
 
+    fields, *values = tomllib.loads(small_tune.read_text(encoding="utf-8"))["ntt"]["matrix"]
+    tuned_batches = {r["batch"] for value in values if (r := dict(zip(fields, value))).get("sample_target_ms")}
     work, command, _ = fixture("trial_at_capacity", requested=128, pad=0, tune=small_tune)
     log, _ = run(work, command)
     selections = log_records(log, "stage1_ntt_batch_selection:")
-    assert (selections[0]["remaining"], selections[0]["capacity"], selections[0]["source"]) == ("128", "128", "production")
-    assert int(selections[0]["batch"]) in incumbents, selections
+    assert (selections[0]["remaining"], selections[0]["capacity"]) == ("128", "128")
+    assert selections[0]["source"] in ("production", "tune"), selections
+    expected_batches = incumbents if selections[0]["source"] == "production" else tuned_batches
+    assert int(selections[0]["batch"]) in expected_batches, selections
     assert all(row["source"] != "production_trial" for row in selections)
     assert_finished(work, 128)
 
@@ -296,6 +309,15 @@ def main():
     for memory, expected in ((6144, (54, 98)), (1024, (14, 25))):
         work, command, _ = fixture(f"per_plan_capacity_{memory}", pad=0, naf_window=12,
                                   extra_stage1=f"naf_memory_mb = 4096\nntt_memory_mib = {memory}\n")
+        # Seed the weighted-only part of the admissible range. Capacity
+        # assertions must not depend on which convolution wins a timing race.
+        seed_config = work / "seed.toml"
+        seed_config.write_text((work / "ecm.toml").read_text(encoding="utf-8") +
+                               'ntt_convolution = "weighted"\nntt_length = 1024\nntt_profile = 1\n',
+                               encoding="utf-8")
+        seed_batch = 64 if memory == 6144 else 16
+        run(work, [str(exe), "--config", str(seed_config), "-tune",
+                   f"exp=15919,naf=12,batch={seed_batch},time=0.01", "32"], label="seed")
         (work / "worktodo.txt").write_text(f'ECM=1,2,15919,-1,1024,1024,95,{SIGMA},"1782929"\n',
                                          encoding="ascii")
         log, wall = run(work, command)
@@ -327,9 +349,11 @@ def main():
         _, x, z = edwards_stage1(n, sigma, BOUND)
         assert saved[sigma] == x * pow(z, -1, n) % n, sigma
     measured = tune_rows(tune, EXPONENT)
-    assert any(row["batch"] == row["valid_curves"] for row in measured), measured
+    observed = log_records(log, "stage1_ntt_production_sample:")
+    assert any(row["batch"] == row["valid_curves"] for row in observed), observed
+    assert measured
+    assert all(math.isfinite(float(row["curves_per_s"])) and float(row["curves_per_s"]) > 0 for row in observed)
     assert all(math.isfinite(row["iter_per_s"]) and row["iter_per_s"] > 0
-               and math.isfinite(row["curves_per_s"]) and row["curves_per_s"] > 0
                and row["repeats"] > 0 for row in measured), measured
     passed("uninterrupted_1000", launches=schedule, seconds=wall, production_rows=measured,
            oracle_sigmas=[SIGMA + lane for lane in sample_lanes])
@@ -360,7 +384,7 @@ def main():
     assert_schedule(prior + resumed, CURVES, expect_pad=False)
     save, handoff = assert_finished(work, CURVES)
     assert save.read_bytes() == points
-    assert any(row.get("source") == "production"
+    assert any(row.get("source") in ("production", "tune")
                for row in log_records(read_log(work / "stop.log") + log, "stage1_ntt_batch_selection:"))
     published = [save, todo, work / "stage1_results.jsonl", work / "results.json.txt", work / "finished.txt"]
     before = [path.read_bytes() for path in published]

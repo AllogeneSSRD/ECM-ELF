@@ -46,6 +46,9 @@ def load_reports(pairs):
 
 
 def row_fields(prefix, row):
+    row = dict(row)
+    if "ntt_memory_bytes" in row:
+        row["owned_bytes"] = row["ntt_memory_bytes"]
     keys = ("batch", "ntt_type", "length", "bpw", "tile", "max_radix_bits", "forward", "inverse", "graph_bits",
             "warp_tail", "iter_per_s", "owned_bytes", "peak_bytes", "budget_bytes")
     return {prefix + key: row[key] for key in keys}

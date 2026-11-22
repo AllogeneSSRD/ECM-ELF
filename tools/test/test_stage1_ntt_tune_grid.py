@@ -135,28 +135,74 @@ def main():
     baseline = dict(zip(modern, best))
     for key in ("max_exp", "explicit_batch", "tested_groups", "budget_limit_bytes", "naf_memory_mb"):
         baseline.pop(key, None)
+    baseline["owned_bytes"] = baseline.pop("ntt_memory_bytes")
+    baseline.pop("naf_memory_bytes", None)
     baseline["log2_length"] = baseline["length"].bit_length()-1
     baseline.update(program_version="0.71.6", b1=32)
-    slow = dict(baseline, b1=64, program_version="0.71.9", updated_at="2026-11-20T23:59:59.000000000Z")
+    baseline.update(budget_limit_bytes=6 * 1048576, naf_memory_mb=3)
+    slow = dict(baseline, budget_limit_bytes=8 * 1048576, naf_memory_mb=5, b1=64, program_version="0.71.9", updated_at="2026-11-20T23:59:59.000000000Z")
     slow["carry_bits"] = 1 if slow["carry_bits"] != 1 else 2
     slow["iter_per_s"] /= 2
     for key in ("median_ms", "total_device_ms", "stddev_seconds"):
         slow[key] *= 2
     for name, duplicates in (("first", [baseline, slow]), ("last", [slow, baseline])):
         database = out / f"legacy_{name}.toml"
-        header = text.split("matrix = [",1)[0].replace("format = 17","format = 16")
+        header = text.split("matrix = [",1)[0].replace("format = 18","format = 16")
         write_matrix(header,list(baseline),[list(r.values()) for r in duplicates])
         run("migrate_"+name, ["-tune","length=8,naf=6,batch=1,time=0.01","32"])
         converted = tomllib.loads(database.read_text(encoding="utf-8"))
         cols = converted["ntt"]["matrix"][0]
-        assert converted["profile"]["format"] == 17 and cols[:5] == ["max_exp","length","iter_per_s","batch","ntt_type"]
+        assert converted["profile"]["format"] == 18 and cols[:5] == ["max_exp","length","iter_per_s","batch","ntt_type"]
         assert "log2_length" not in cols and all(any(r.get(k)!="" for r in rows()) for k in cols)
         assert cols[cols.index("program_version")+1] == "updated_at" and cols.index("b1") > cols.index("updated_at")
         winner, = (r for r in rows() if r["length"] == baseline["length"])
+        assert "budget_limit_bytes" not in cols and "naf_memory_mb" not in cols
+        assert winner["ntt_memory_bytes"] == baseline["owned_bytes"]
+        assert not winner.get("naf_memory_bytes")
         assert winner["carry_bits"] == baseline["carry_bits"]
-        assert cols.index("segments") > cols.index("budget_limit_bytes")
+        assert cols.index("segments") > cols.index("dataflow")
         assert winner["b1"] == 32 and winner["program_version"] == "0.71.6"
         assert winner["iter_per_s"] == baseline["iter_per_s"] and winner["updated_at"] == baseline["updated_at"]
+
+    # Same dispatch, independent NTT/dictionary requirements. Use controlled
+    # measurements so the winners do not depend on the GPU's clock frequency.
+    mib = 1024**2
+    timed = dict(zip(modern, best))
+    runtime = {k: v for k, v in timed.items() if k not in
+               ("sample_target_ms", "sample_phase", "batch_scope", "batch_roles", "batch_search",
+                "tested_groups", "explicit_batch", "sample_pool_steps", "naf_columns", "sample_nonzero",
+                "median_ms", "timed_steps", "block_steps", "total_device_ms", "reference_bits")}
+    runtime.update(benchmark_kind="stage1_runtime", arithmetic_bits=127, target_bits=127,
+                   lcm_multiplier=48, valid_curves=1, curves_per_s=1)
+    def footprint(record, ntt, naf, rate):
+        return dict(record, ntt_memory_bytes=64*ntt*mib, naf_memory_bytes=naf*1_000_000,
+                    iter_per_s=rate, budget_bytes=512*mib, peak_bytes=64*ntt*mib)
+    middle = footprint(timed, 4, 3, 300)
+    for k in ("median_ms", "total_device_ms", "stddev_seconds"):
+        middle[k] *= timed["iter_per_s"] / 300
+    scoped = footprint(middle, 7, 1, 300)
+    scoped.update(batch_scope="frontier", batch_search="full", batch_roles=15)
+    unknown = footprint(runtime, 6, 1, 10)
+    del unknown["naf_memory_bytes"]
+    frontier = [footprint(runtime, 2, 1, 100), middle, footprint(runtime, 7, 1, 500), scoped, unknown,
+                footprint(runtime, 5, 4, 300), footprint(runtime, 4, 3, 299),
+                footprint(dict(runtime, naf_window=8), 2, 1, 250)]
+    for label, records in (("forward", frontier), ("reverse", frontier[::-1])):
+        database = out / f"frontier_{label}.toml"
+        fields = list(dict.fromkeys(k for r in records for k in r))
+        write_matrix(text, fields, [[r.get(k, "") for k in fields] for r in records])
+        run("frontier_import_"+label, ["-tune", "length=8,naf=6,batch=1,time=0.01", "32"])
+        stored = [r for r in rows() if r["length"] == timed["length"] and r["naf_window"] == 6]
+        assert {r["iter_per_s"] for r in stored} == {10, 100, 300, 500} and len(stored) == 4
+        assert not next(r for r in stored if r["iter_per_s"] == 10).get("naf_memory_bytes")
+        assert all(r["reference_bits"] == 127 for r in stored if r["benchmark_kind"] == "stage1_runtime")
+        assert all(k not in stored[0] for k in ("arithmetic_bits", "target_bits", "lcm_multiplier", "valid_curves"))
+        assert list(stored[0]).index("benchmark_kind") > list(stored[0]).index("naf_memory_bytes")
+        assert next(r for r in stored if r["iter_per_s"] == 300)["benchmark_kind"] == timed["benchmark_kind"]
+    for ntt, naf, expected in ((3, 3, 8), (4, 3, 6), (4, 2, 8), (8, 2, 6)):
+        log = run(f"frontier_select_{ntt}_{naf}", ["--param", "e", "-gpucurves", "1", "-sigma", "26", "32", "32"],
+                  stdin="2^127-1\n", settings=f"ntt_profile = 1\nntt_memory_mib = {64*ntt}\nnaf_memory_mb = {naf}")
+        assert f"p=127 naf={expected} source=tune" in log, log
 
     # The 1M release capped these three families, including forced 131072-point
     # weighted transforms. Loading a wide search must preserve their old scope.
@@ -173,7 +219,7 @@ def main():
     for version in (16, 17):
         database = out / f"legacy_1m_v{version}.toml"
         columns = [k for k in modern if version == 17 or k != "max_exp"]
-        write_matrix(text.replace("format = 17", f"format = {version}"), columns,
+        write_matrix(text.replace("format = 18", f"format = {version}"), columns,
                      [[r[k] for k in columns] for r in wide_rows])
         run(f"legacy_1m_load_{version}", ["-tune", "length=8,naf=6,batch=1,time=0.01", "32"])
         preserved = [r for r in rows() if r["length"] >= 65536]
@@ -294,9 +340,8 @@ def main():
     manual = [r for r in rows() if r.get("explicit_batch")]
     assert {r["batch"] for r in manual if (2, 2) in coverage(r)} == set(range(1,reports["Max"]+1))
     run("compact_grow", automatic, settings=settings.replace("mb = 3", "mb = 5"))
-    for budget in (3, 5):
-        retained = {r["batch"] for r in rows() if r.get("batch_scope") and r["naf_memory_mb"] == budget}
-        assert 1 <= len(retained) <= 4
+    assert all("budget_limit_bytes" not in r and "naf_memory_mb" not in r for r in rows())
+    assert all(0 < r["naf_memory_bytes"] <= r["ntt_memory_bytes"] for r in rows())
     by_batch = {r["batch"]: r["iter_per_s"] for r in rows() if r.get("explicit_batch")}
     assert all(by_batch[r["batch"]] >= r["iter_per_s"] for r in manual)
 

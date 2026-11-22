@@ -121,8 +121,8 @@ def main():
         assert points == reference[model]
         columns, *values = tomllib.loads((work / "tune.toml").read_text(encoding="utf-8"))["ntt"]["matrix"]
         measurements = [dict(zip(columns, row, strict=True)) for row in values]
-        assert any(row.get("benchmark_kind") == "stage1_runtime" and row.get("target_bits") == 15899
-                   and row.get("arithmetic_bits") == 15919 for row in measurements), measurements
+        assert any((row.get("benchmark_kind") == "stage1_runtime" or row.get("runtime_observations"))
+                   and row.get("reference_bits") == 15919 for row in measurements), measurements
         passed(name, target_bits=n.bit_length(), arithmetic_bits=15919)
         if model == "e":
             stage2_handoff = handoffs[0]

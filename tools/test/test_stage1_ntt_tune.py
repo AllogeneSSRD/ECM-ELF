@@ -74,7 +74,7 @@ matrix = [
     mirrored = mirror.read_text(encoding="utf-8")
     assert legend in mirrored and len(best_lines) == 3 and all(line in mirrored for line in best_lines)
     profile = tomllib.loads(database.read_text(encoding="utf-8"))
-    assert profile["profile"]["format"] == 17 and set(profile["ntt"]) == {"matrix"}
+    assert profile["profile"]["format"] == 18 and set(profile["ntt"]) == {"matrix"}
     columns, *values = profile["ntt"]["matrix"]
     assert columns[:5] == ["max_exp", "length", "iter_per_s", "batch", "ntt_type"]
     assert not {"p", "exponent", "measurement_ids", "mean_seconds", "log2_length"} & set(columns)
@@ -85,7 +85,7 @@ matrix = [
         group = [r for r in rows if r["ntt_type"] == f"stage1_{mode}"]
         assert {1, 128} <= {r["batch"] for r in group}
         assert all(r["max_exp"] >= r["reference_bits"] and
-                   0 < r["owned_bytes"] <= r["peak_bytes"] <= r["budget_bytes"] and
+                   0 < r["ntt_memory_bytes"] <= r["peak_bytes"] <= r["budget_bytes"] and
                    r["program_version"] and r["updated_at"].endswith("Z") for r in group)
         for r in group:
             assert abs(r["iter_per_s"] * r["median_ms"] / (1000*r["batch"]*r["timed_steps"]) - 1) < 1e-7
@@ -109,7 +109,8 @@ matrix = [
     one_curve = [*flags[:1], "1", *flags[2:]]
     assert "length=4096" in run("seed_binary", one_curve, cfg=fixture + "ntt_length = 4096\n", expression=wide)
     added = run("add_mixed_to_binary", one_curve, expression=wide)
-    assert "source=short_tune" in added or "stage1_ntt_runtime_tune:" in added
+    assert "source=tune" in added and "stage1_ntt_runtime_tune:" not in added
+    run("seed_mixed", one_curve, cfg=fixture + 'ntt_convolution = "weighted"\nntt_length = 2560\n', expression=wide)
     columns, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]
     rows = [dict(zip(columns, row)) for row in values]
     assert any(row["ntt_type"] == "stage2_convolution" for row in rows)
@@ -123,7 +124,7 @@ matrix = [
     assert "length=2560" in run("mixed_default", one_curve, cfg=weighted, expression=wide)
     assert "length=4096" in run("binary_for_tile", one_curve, cfg=weighted + "ntt_tile = 10\n", expression=wide)
     assert saved_points(out / "mixed_default/out.save", p, b1) == saved_points(out / "seed_binary/out.save", p, b1)
-    print("PASS default radix-5, explicit tile fallback, short tune with an existing binary row and cache reuse", flush=True)
+    print("PASS radix-5, explicit tile fallback and reuse of a covered binary plan", flush=True)
 
     # This matrix checks mixed-layout coverage at every shortlisted batch.
     # The preceding full matrix already verifies the default timing and reuse.
