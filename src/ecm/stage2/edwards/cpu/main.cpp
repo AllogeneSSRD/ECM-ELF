@@ -122,7 +122,7 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
             std::cout<<"CPU Edwards Stage2\n[--config FILE] [--worker N] [--worktodo FILE] [--once] [--stage2-stop-handle HANDLE]\n--save FILE --b2 DECIMAL [--backend auto|ntt|plain|gwpoly] [--memory-mib 512]\n"
                 "[--threads 1] [--b2-round-chain 0|1] [--results INTERNAL.jsonl] [--submission results.json.txt] [--config FILE] [--worker N]\n"
                 "[--skip N] [--curves N] [--dry-run] [--d D (gwpoly only)] [--gw-check] [--selftest-gwpoly]\n"
-                "[--f-tree-splits auto|segmented|0..63 (with --d)] [--cpu-tune-candidates 1..16] [--cpu-tune-dense-d 0|1]\n"
+                "[--f-tree-splits auto|segmented|compact|0..63 (with --d)] [--cpu-tune-candidates 1..16] [--cpu-tune-dense-d 0|1]\n"
                 "[--tune-runtime 0|1] [--tune-profile FILE] [--tune-min-repeats N] [--tune-runtime-samples N]\n"
                 "[--exponent P] [--known-factor DECIMAL (repeatable)] [--user NAME] [--computer NAME] [--aid HEX32]\n"
                 "B2 limit: libecm=1000000000000, gwpoly=1000000000000000\n";
@@ -155,6 +155,7 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
         else if(key=="--f-tree-splits"){
             if(value=="auto")o.f_tree_splits=ecm_gwpoly::automatic_tree;
             else if(value=="segmented")o.f_tree_splits=ecm_gwpoly::segmented_tree;
+            else if(value=="compact")o.f_tree_splits=ecm_gwpoly::compact_tree;
             else{
                 const auto splits=decimal(value);
                 if(splits>63)throw std::runtime_error("F-tree splits must be in 0..63");

@@ -131,7 +131,7 @@ F 为初始化各层的打印值之和，G 和 H 按各块求和。up、down 是
 
 ### CPU Stage2 的 F 树预算与 D 选型
 
-`cpu_memory_mib` 是 CPU GW 多项式规划的准入上限。tune 中的 `planned_mib` 估算所选布局的算术内存峰值。令 $P=\varphi(D)/2$，$T$ 为计算线程数，$C=\texttt{gwnum\_size(gw)}+64$ 为每个系数槽的估算字节数，$L=\texttt{polymult\_fft\_size}(2P+2)$ 为暂存估算采用的**外层多项式 FFT 长度**。以 $Q$ 表示峰值活跃系数槽数，则
+`cpu_memory_mib` 是 CPU GW 多项式规划的准入上限。tune 中的 `planned_mib` 估算所选布局的算术内存峰值。令 $P=\varphi(D)/2$，$T$ 为计算线程数，$C=\texttt{gwnum\_size(gw)}+64$ 为每个系数槽的估算字节数，$L=\texttt{polymult\_fft\_size}(2P+2)$ 为暂存估算采用的**外层多项式 FFT 长度**。完整和普通分段布局的峰值活跃系数槽数记为 $Q$ 时，
 
 $$
 \texttt{planned\_mib}=\frac{(Q+256+48T)\,C\,1.06+520LT}{2^{20}}.
@@ -144,6 +144,8 @@ $$
 $$
 Q=\max\!\left(R+2P+8,\ R+4P+8,\ R+3P+U(\lceil\log_2 U\rceil+3)\right).
 $$
+
+紧凑布局用二进制保存两层 F 检查点和 baby 根，额外计入 $3P$ 个定长二进制余数。GW 槽数分别估算 F 建树、至多半行 giant 分母的主循环和单个 F 子树的重建，固定余量为 128 槽。[4 GiB 实测](CPU_GWPOLY_STAGE2.md#m3033533-的-4-gib-紧凑-f-树)
 
 HX 370 生产 `tune-HX370.toml` 的三条记录均为 4T、GWNUM 31.6、AVX-512，B1=3,000,000、实际 B2=8,305,517,219、D/P=120120/11520。三条的 $L=24576$，外层 FFT 暂存为 48.75 MiB。表中 $C$ 从记录反算。记录中的宿主程序均标为 0.69.19，分段记录复现的是旧 DLL 在下降阶段使用的 $R+4P$ 公式。工作区从 0.69.8 起复用根余式缓冲，将这项降至 $R+3P$。
 

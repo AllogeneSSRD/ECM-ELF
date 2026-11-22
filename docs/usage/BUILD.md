@@ -230,13 +230,13 @@ Windows x64 的 `ecm.exe` 与 `ecm_cuda.exe` 默认包含 GWNUM 加载接口。�
 
 ## Stage2 本地构建与 GWNUM
 
-统一版 Stage2 可以在本机构建时一并生成 `gwnum.dll`。
+统一版 Stage2 构建到 `build_stage2_local` 时，默认从当前源码一并构建 `gwnum.dll`，放在 `ecm_stage2.exe` 旁。
 
 ```powershell
-.\tools\build\build_stage2_local.bat -WithGwDll
+.\tools\build\build_stage2_local.bat
 ```
 
-该选项通过现有 GWNUM 构建脚本，用与 Stage2 相同的 MSVC 和 GMP 构建插件。默认读取 `.refactor/p95v3106b01.source/gwnum`，并复用已有的 GWNUM／polymult 静态库。输出位于 `build_stage2_local/gwnum.dll`，构建结束会验证相邻的 `ecm_stage2.exe` 能加载它。仅更新主机端时，可在 CUDA 对象通过复用检查的前提下同时加 `-HostOnly`。该选项仅用于本机，发布角色会拒绝它。
+插件使用与 Stage2 相同的 MSVC 和 GMP，默认读取 `.refactor/p95v3106b01.source/gwnum` 并复用已有的 GWNUM／polymult 静态库。构建会验证 `ecm_stage2.exe` 能加载相邻 DLL。CUDA 对象通过复用检查时，`-HostOnly` 也会更新插件。其他自定义构建目录可用 `-WithGwDll` 启用，发布角色不接受该选项。
 
 ## GMP 与打包
 

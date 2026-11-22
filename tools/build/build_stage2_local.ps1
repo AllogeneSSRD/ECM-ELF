@@ -7,10 +7,11 @@ Local builds always use build_stage2_local. A valid incompatible default profile
 is archived under build_dev before rebuilding. Build overrides the final directory;
 BuildRoot explicitly retains the profile hierarchy under the requested root.
 Incompatible profiles in explicit directories are refused, never overwritten.
+Builds targeting build_stage2_local also build and verify the adjacent GWNUM DLL.
 .EXAMPLE
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage2_local.ps1 -Arch sm_89
 .EXAMPLE
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage2_local.ps1 -WithGwDll
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage2_local.ps1 -HostOnly
 #>
 param(
     [string]$Build = '',
@@ -51,6 +52,8 @@ $vc = Resolve-EcmVcEnvironment $cuda -VcVars $VcVars
 $buildProfile = New-EcmStage2Profile $repo $BuildRole $Engine $Arch $GlBackend $OuterUnrollU $AddSubMask $SplitCompile $cuda $vc $gmpDependency $PtxArch $KernelLayout
 $fixedLocal = $BuildRole -eq 'local' -and -not $Build -and -not $BuildRoot
 $Build = Resolve-EcmBuildDirectory $repo $buildProfile $Build $BuildRoot
+$buildGwDll = $WithGwDll -or ($Build -ieq (Join-Path $repo 'build_stage2_local') -and
+                            -not $PSBoundParameters.ContainsKey('WithGwDll'))
 if ($fixedLocal -and $HostOnly) { Assert-EcmBuildProfile $Build $buildProfile -ReadOnly }
 Assert-EcmBuildProfile $Build $buildProfile -ArchiveLocalStage2:$fixedLocal
 Write-Host '== Stage2 build =='
@@ -276,7 +279,8 @@ foreach ($name in $gmpHashes.Keys) {
     if ((Get-FileHash -LiteralPath (Join-Path $Gmp $name)).Hash -ne $gmpHashes[$name]) { throw "GMP changed during build: $name" }
 }
 Copy-Item -LiteralPath (Join-Path $Gmp 'bin/gmp-10.dll') -Destination $Build -Force
-if ($WithGwDll) {
+if ($buildGwDll) {
+    Write-Host '== build local Stage2 GWNUM DLL =='
     $gwBuild = Join-Path $Build 'gwnum-build'
     Initialize-EcmBuildDirectory $gwBuild
     $gwScript = Join-Path $PSScriptRoot 'build_gwnum_local.ps1'

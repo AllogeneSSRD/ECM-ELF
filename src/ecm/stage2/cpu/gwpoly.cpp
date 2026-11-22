@@ -611,8 +611,77 @@ std::unique_ptr<Tree> partial_ftree(Context &c,const Array &roots,size_t lo,size
     }
     return t;
 }
-struct FTreePlan {bool rebuild;double bytes;unsigned splits;};
-FTreePlan ftree_plan(size_t p,double bytes,double budget,unsigned threads,int requested=automatic_tree){
+// Keep two top checkpoint levels. Each non-root polynomial and the baby
+// roots are stored as binary residues, without their implicit leading one.
+constexpr unsigned compact_depth=2;
+using PackedFTree=std::array<std::vector<uint32_t>,1u<<(compact_depth+1)>;
+size_t compact_words(const Context& c) {
+    return c.stats.fft_length>=65536 && c.supports_deferred_h_fold()
+        ? (static_cast<size_t>(c.gw.bit_length)+31)/32+8 : 0;
+}
+std::vector<uint32_t> pack_values(Context& c,const Array& values,size_t count,size_t words) {
+    std::vector<uint32_t> packed(count*words);
+    Array scratch(c.gw,1);
+    for(size_t i=0;i<count;++i){
+        gwunfft(&c.gw,values[i],scratch[0]);
+        if(gwtobinary(&c.gw,scratch[0],packed.data()+i*words,static_cast<uint32_t>(words))<0)
+            throw std::runtime_error("Cannot pack CPU Stage2 coefficient");
+        if(!(i&63))c.check("pack F coefficients");
+    }
+    return packed;
+}
+Array unpack_values(Context& c,const std::vector<uint32_t>& packed,size_t lo,size_t count,size_t words) {
+    Array values(c.gw,count);
+    for(size_t i=0;i<count;++i){
+        binarytogw(&c.gw,packed.data()+(lo+i)*words,static_cast<uint32_t>(words),values[i]);
+        if(!(i&63))c.check("unpack F coefficients");
+    }
+    return values;
+}
+Array build_compact_ftree(Context& c,const Array& roots,size_t lo,size_t hi,
+                          PackedFTree& packed,size_t node,size_t words) {
+    if(node>=(1u<<compact_depth)){
+        auto tree=product_tree(c,roots,lo,hi);
+        return std::move(tree->polynomial);
+    }
+    const auto mid=lo+(hi-lo)/2;
+    auto left=build_compact_ftree(c,roots,lo,mid,packed,2*node,words);
+    auto right=build_compact_ftree(c,roots,mid,hi,packed,2*node+1,words);
+    Array out(c.gw,hi-lo+1);
+    c.monic_product(left,right,out);
+    packed[2*node]=pack_values(c,left,mid-lo,words);
+    packed[2*node+1]=pack_values(c,right,hi-mid,words);
+    return out;
+}
+void descend_compact(Context& c,const PackedFTree& packed,size_t node,size_t lo,size_t hi,
+                     Array& values,gwnum scratch,size_t words,double& rebuild_seconds) {
+    const auto start=Clock::now();
+    Array part(c.gw,values.v+lo,hi-lo);
+    if(node>=(1u<<compact_depth)){
+        auto roots=unpack_values(c,packed[0],lo,hi-lo,words);
+        auto segment=retained_ftree(c,roots,0,hi-lo,false);
+        rebuild_seconds+=seconds(start);
+        descend_node(c,*segment,part,nullptr,scratch,rebuild_seconds);
+        return;
+    }
+    const auto mid=lo+(hi-lo)/2;
+    {
+        auto left=unpack_values(c,packed[2*node],0,mid-lo,words);
+        auto right=unpack_values(c,packed[2*node+1],0,hi-mid,words);
+        rebuild_seconds+=seconds(start);
+        c.scaled_children(part,left,right,mid-lo,hi-mid);
+    }
+    descend_compact(c,packed,2*node,lo,mid,values,scratch,words,rebuild_seconds);
+    descend_compact(c,packed,2*node+1,mid,hi,values,scratch,words,rebuild_seconds);
+}
+struct FTreePlan {
+    bool rebuild;
+    double bytes;
+    unsigned splits;
+    bool compact() const {return splits==compact_tree;}
+};
+FTreePlan ftree_plan(size_t p,double bytes,double budget,unsigned threads,int requested=automatic_tree,
+                     size_t packed_bytes=0){
     const auto levels=static_cast<unsigned>(std::ceil(std::log2(double(p))));
     // Each layer has at most P coefficients plus one monic term per node.
     // Allow four FFT vectors per worker (two inputs, monic adjustment and
@@ -624,6 +693,18 @@ FTreePlan ftree_plan(size_t p,double bytes,double budget,unsigned threads,int re
     const double full_rows=(levels+3.0)*p;
     const double limit=budget*1048576;
     FTreePlan best{false,estimate(full_rows+4.0*p+8),0};
+    FTreePlan compact{true,std::numeric_limits<double>::infinity(),compact_tree};
+    if(packed_bytes && p>=128){
+        const size_t chunk=(p+3)/4;
+        // Build: full baby row, both sibling polynomials and their parent.
+        // Main: F, reciprocal, H, G and at most half a row of denominators.
+        // Descent: in-place values and one rebuilt segment with its roots.
+        const double peak=std::max({3.0*p+8,4.0*p+(p+1)/2+8,
+            p+chunk*(std::ceil(std::log2(double(chunk)))+1)+8});
+        compact.bytes=(peak+128+48.0*threads)*bytes*1.06 +
+                      (compact_depth+1.0)*p*packed_bytes + scratch;
+    }
+    if(requested==compact_tree)return compact;
     if(requested==0 || (requested==automatic_tree && best.bytes<=limit))return best;
     if(requested>=static_cast<int>(levels))return {true,std::numeric_limits<double>::infinity(),0};
     if(requested!=automatic_tree)best={true,std::numeric_limits<double>::infinity(),0};
@@ -641,6 +722,7 @@ FTreePlan ftree_plan(size_t p,double bytes,double budget,unsigned threads,int re
         const double peak=estimate(std::max({init,main,descent}));
         if(peak<=limit || (best.bytes>limit && peak<best.bytes))best={true,peak,splits};
     }
+    if(best.bytes>limit && requested<0 && compact.bytes<=limit)return compact;
     return best;
 }
 const std::vector<uint64_t>& wheel_choices(){
@@ -674,20 +756,26 @@ const std::vector<uint64_t>& dense_wheel_choices(){
     }();
     return choices;
 }
-double wheel_cost(uint64_t d,uint64_t b2,double bytes,uint64_t budget,unsigned threads,int splits=automatic_tree){
+double wheel_cost(uint64_t d,uint64_t b2,double bytes,uint64_t budget,unsigned threads,int splits,
+                  size_t packed_bytes){
     const auto p=phi(d)/2;
-    const auto plan=ftree_plan(static_cast<size_t>(p),bytes,budget,threads,splits);
+    const auto plan=ftree_plan(static_cast<size_t>(p),bytes,budget,threads,splits,packed_bytes);
     if(plan.bytes>double(budget)*1048576)return std::numeric_limits<double>::infinity();
     const double levels=std::ceil(std::log2(double(p)));
     return (plan.rebuild?8:6)*p*levels+(double(b2)/d+p)*(levels+8);
 }
-uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget,unsigned threads,int splits){
-    if(forced && std::isfinite(wheel_cost(forced,b2,bytes,budget,threads,splits)))return forced;
+uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget,unsigned threads,int splits,
+                  size_t packed_bytes){
+    if(forced && std::isfinite(wheel_cost(forced,b2,bytes,budget,threads,splits,packed_bytes)))return forced;
     double best=std::numeric_limits<double>::infinity();
     uint64_t result=0;
-    if(!forced)for(auto d:wheel_choices()){
-        const auto cost=wheel_cost(d,b2,bytes,budget,threads);
+    const auto consider=[&](uint64_t d){
+        const auto cost=wheel_cost(d,b2,bytes,budget,threads,automatic_tree,packed_bytes);
         if(cost<best){best=cost;result=d;}
+    };
+    if(!forced){
+        for(auto d:wheel_choices())consider(d);
+        if(packed_bytes)consider(3570);
     }
     if(!result)throw std::runtime_error("No CPU polynomial plan within memory budget");
     return result;
@@ -718,7 +806,8 @@ std::unique_ptr<Context> prepare_plan(mpz_srcptr n,mpz_ptr factor,uint64_t b1,ui
         auto owner=std::make_unique<Context>(n,factor,o,stats,degree,preflight);
         owner->poll();
         const double bytes=double(gwnum_size(&owner->gw)+64);
-        const auto candidate=choose_d(b2,o.d,bytes,o.memory_mib,o.threads,o.f_tree_splits);
+        const auto candidate=choose_d(b2,o.d,bytes,o.memory_mib,o.threads,o.f_tree_splits,
+                                      compact_words(*owner)*sizeof(uint32_t));
         degree=phi(candidate)/2;
         const auto required=polymult_safety_margin(degree+1,degree+1)+0.25f;
         if(owner->gw.EXTRA_BITS/2.0f+owner->gw.polymult_safety_margin<=required)continue;
@@ -733,7 +822,8 @@ std::unique_ptr<Context> prepare_plan(mpz_srcptr n,mpz_ptr factor,uint64_t b1,ui
         gwset_polymult_safety_margin(&owner->gw,required);
         stats.d=candidate;
         stats.poly_size=degree;
-        fplan=ftree_plan(static_cast<size_t>(degree),double(gwnum_size(&owner->gw)+64),o.memory_mib,o.threads,o.f_tree_splits);
+        fplan=ftree_plan(static_cast<size_t>(degree),double(gwnum_size(&owner->gw)+64),o.memory_mib,o.threads,
+                         o.f_tree_splits,compact_words(*owner)*sizeof(uint32_t));
         stats.estimated_memory_mib=fplan.bytes/1048576.0;
         if(stats.estimated_memory_mib>o.memory_mib)
             throw std::runtime_error("Actual GWNUM layout exceeds planned memory budget; choose a smaller D");
@@ -769,6 +859,7 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,
     FTreePlan tree_plan{};
     auto owner=prepare_plan(n,unused_factor.v,b1,b2,o,automatic,tree_plan,true);
     const double bytes=double(gwnum_size(&owner->gw)+64);
+    const auto packed_bytes=compact_words(*owner)*sizeof(uint32_t);
     const auto width = o.exponent ? o.exponent : mpz_sizeinbase(n, 2);
     const auto describe = [&](const Stats& stats, const gwhandle& gw) {
         const auto exponent = std::max<uint64_t>(width, gw.n);
@@ -814,7 +905,8 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,
         for(const auto d:o.dense_d?dense_wheel_choices():wheel_choices()){
             if(d==automatic.d)continue;
             const auto p=phi(d)/2;
-            const auto plan=ftree_plan(static_cast<size_t>(p),bytes,o.memory_mib,o.threads);
+            const auto plan=ftree_plan(static_cast<size_t>(p),bytes,o.memory_mib,o.threads,
+                                       automatic_tree,packed_bytes);
             if(plan.bytes>double(o.memory_mib)*1048576)continue;
             ranked.push_back(rank(d,p,plan.rebuild));
         }
@@ -850,7 +942,7 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,
     std::vector<std::pair<double,uint64_t>> ranked;
     for(auto d:wheel_choices()){
         if(d==automatic.d)continue;
-        const auto cost=wheel_cost(d,b2,bytes,o.memory_mib,o.threads);
+        const auto cost=wheel_cost(d,b2,bytes,o.memory_mib,o.threads,automatic_tree,packed_bytes);
         if(std::isfinite(cost))ranked.emplace_back(cost,d);
     }
     std::sort(ranked.begin(),ranked.end());
@@ -875,7 +967,8 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
     auto &c=*owner;
     const auto d=stats.d,p=stats.poly_size;
     std::printf("gwpoly-plan: ftree=%s bytes_per_value=%zu retained_splits=%u\n",
-                fplan.rebuild?"segmented":"full",static_cast<size_t>(gwnum_size(&c.gw))+64,fplan.splits);
+                fplan.compact()?"compact":fplan.rebuild?"segmented":"full",
+                static_cast<size_t>(gwnum_size(&c.gw))+64,fplan.compact()?compact_depth:fplan.splits);
     bool main_started=false;auto main_begin=begin;
     try {
         progress(ECM_GW_BABY);
@@ -983,7 +1076,16 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         const double baby_seconds=stats.point_seconds;
         progress(ECM_GW_FTREE);
         auto init_tree_begin=Clock::now();
-        auto ftree=fplan.rebuild?partial_ftree(c,roots,0,p,fplan.splits):retained_ftree(c,roots,0,p);
+        PackedFTree packed;
+        const auto words=compact_words(c);
+        std::unique_ptr<Tree> ftree;
+        if(fplan.compact()){
+            ftree=std::make_unique<Tree>(0,p);
+            ftree->polynomial=build_compact_ftree(c,roots,0,p,packed,1,words);
+            packed[0]=pack_values(c,roots,p,words);
+        }else{
+            ftree=fplan.rebuild?partial_ftree(c,roots,0,p,fplan.splits):retained_ftree(c,roots,0,p);
+        }
         struct Probe {Integer root,product;size_t index;};
         std::array<Probe,3> probes;
         if(o.check){
@@ -993,7 +1095,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                 mpz_set_ui(probe.product.v,1);
             }
         }
-        if(!fplan.rebuild)roots=Array();
+        if(!fplan.rebuild || fplan.compact())roots=Array();
         progress(ECM_GW_INVERSE);
         const auto inverse_begin=Clock::now();
         auto inv=c.inverse(reverse(ftree->polynomial),p);
@@ -1031,52 +1133,60 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         const uint64_t batches=first<=last?1+(last-first)/p:0;
         // With large coefficient FFTs even a short giant chain amortizes the
         // ladder and worker startup. Keep the smaller FFTs' existing threshold.
-        const size_t giant_chunk=stats.fft_length>=65536?64:256;
+        const size_t giant_chunk=fplan.compact()?32:stats.fft_length>=65536?64:256;
         auto last_report=main_begin;
         for(uint64_t pos=first;pos<=last;){
             c.poll();const size_t count=static_cast<size_t>(std::min<uint64_t>(p,last-pos+1));
             auto part_begin=Clock::now();
-            Array gx(c.gw,g_workspace.v,count),gz(c.gw,count);
-            parallel_points(c,count,[&](Context &worker,size_t lo,size_t hi){
-                Points ops(worker);
-                Array work(worker.gw,5);
-                Point previous{work[0],work[1]}, local_base{work[2],work[3]};
-                Point current{gx[lo],gz[lo]};
-                auto a24=work[4];
-                ops.copy(base,local_base);
-                gwcopy(&worker.gw,storage[12],a24);
-                // A differential ladder already computes two adjacent
-                // multiples; use both as the seed for the chain.
-                ops.ladder(local_base,pos+lo-1,previous,a24,&current);
-                const bool use_fused=worker.o.exponent &&
-                    (worker.gw.cpu_flags & (CPU_AVX512F|CPU_FMA3));
-                for(size_t i=lo+1;i<hi;++i){
-                    Point next{gx[i],gz[i]};
-                    if(pos+i==2)ops.dbl(local_base,next,a24);
-                    else if(use_fused)ops.add_fused(current,local_base,previous,next);
-                    else ops.add(current,local_base,previous,next);
-                    previous=current;
-                    current=next;
-                    if(!(i&127))worker.check();
-                }
-                ops.normalize(gx.v+lo,gz.v+lo,hi-lo,true);
-                if(o.check){
-                    // Compare both ends of each lane with [iD]Q computed
-                    // directly, independently of the base and the paired seed.
-                    Point reference{work[0],work[1]};
-                    ops.copy(q,local_base);
-                    Integer negative,ref_x,ref_z;
-                    for(const size_t sample:{lo,hi-1}){
-                        ops.ladder(local_base,d*(pos+sample),reference,a24);
-                        worker.get(negative.v,gx[sample]);
-                        worker.get(ref_x.v,reference.x);
-                        worker.get(ref_z.v,reference.z);
-                        mpz_addmul(ref_x.v,negative.v,ref_z.v);
-                        if(!mpz_divisible_p(ref_x.v,n))
-                            throw std::runtime_error("Giant point differs from direct ladder");
+            Array gx(c.gw,g_workspace.v,count);
+            const auto generate=[&](size_t offset,size_t length) {
+                Array gz(c.gw,length);
+                parallel_points(c,length,[&](Context &worker,size_t begin,size_t end){
+                    const size_t lo=offset+begin,hi=offset+end;
+                    Points ops(worker);
+                    Array work(worker.gw,5);
+                    Point previous{work[0],work[1]}, local_base{work[2],work[3]};
+                    Point current{gx[lo],gz[begin]};
+                    auto a24=work[4];
+                    ops.copy(base,local_base);
+                    gwcopy(&worker.gw,storage[12],a24);
+                    // A differential ladder already computes two adjacent
+                    // multiples; use both as the seed for the chain.
+                    ops.ladder(local_base,pos+lo-1,previous,a24,&current);
+                    const bool use_fused=worker.o.exponent &&
+                        (worker.gw.cpu_flags & (CPU_AVX512F|CPU_FMA3));
+                    for(size_t i=lo+1;i<hi;++i){
+                        Point next{gx[i],gz[i-offset]};
+                        if(pos+i==2)ops.dbl(local_base,next,a24);
+                        else if(use_fused)ops.add_fused(current,local_base,previous,next);
+                        else ops.add(current,local_base,previous,next);
+                        previous=current;
+                        current=next;
+                        if(!(i&127))worker.check();
                     }
-                }
-            },giant_chunk);gz=Array();stats.point_seconds+=seconds(part_begin);
+                    ops.normalize(gx.v+lo,gz.v+begin,hi-lo,true);
+                    if(o.check){
+                        // Compare both ends of each lane with [iD]Q computed
+                        // directly, independently of the base and the paired seed.
+                        Point reference{work[0],work[1]};
+                        ops.copy(q,local_base);
+                        Integer negative,ref_x,ref_z;
+                        for(const size_t sample:{lo,hi-1}){
+                            ops.ladder(local_base,d*(pos+sample),reference,a24);
+                            worker.get(negative.v,gx[sample]);
+                            worker.get(ref_x.v,reference.x);
+                            worker.get(ref_z.v,reference.z);
+                            mpz_addmul(ref_x.v,negative.v,ref_z.v);
+                            if(!mpz_divisible_p(ref_x.v,n))
+                                throw std::runtime_error("Giant point differs from direct ladder");
+                        }
+                    }
+                },giant_chunk);
+            };
+            const auto first_wave=fplan.compact()?(count+1)/2:count;
+            generate(0,first_wave);
+            if(first_wave<count)generate(first_wave,count-first_wave);
+            stats.point_seconds+=seconds(part_begin);
             if(o.check){
                 Integer negative_giant,difference;
                 for(size_t i=0;i<count;++i){c.get(negative_giant.v,gx[i]);for(auto &probe:probes){
@@ -1095,6 +1205,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         }
         // The descent only needs F, its reciprocal and the accumulated remainder.
         g_workspace=Array();
+        if(fplan.compact())ftree.reset();
         if(!h.size)h=c.constant(1);
         progress(ECM_GW_DESCENT);
         auto descent_begin=Clock::now();
@@ -1103,7 +1214,13 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         // Parent and child coefficients occupy the same interval of this row.
         Array values=c.scaled_remainder(h,inv);h=Array();inv=Array();
         const double scale_seconds=seconds(descent_begin);
-        const double rebuild_seconds=descend(c,*ftree,values,fplan.rebuild?&roots:nullptr);
+        double rebuild_seconds=0;
+        if(fplan.compact()){
+            Array scratch(c.gw,1);
+            descend_compact(c,packed,1,0,p,values,scratch[0],words,rebuild_seconds);
+        }else{
+            rebuild_seconds=descend(c,*ftree,values,fplan.rebuild?&roots:nullptr);
+        }
         ftree.reset();roots=Array();
         stats.descent_seconds=seconds(descent_begin);
         if(o.check){Integer got;for(auto &probe:probes){
@@ -1211,15 +1328,35 @@ static void selftest_polynomials(unsigned threads,unsigned long exponent){
         auto inv=c.inverse(rf,count);
         Array h(c.gw,count);for(size_t i=0;i<count;++i)u64togw(&c.gw,103*(i+3),h[i]);
         auto partial=partial_ftree(c,roots,0,count,3);
+        // Odd subtrees and the implicit leading ones must survive packing.
+        PackedFTree packed;
+        Array compact_inverse;
+        const auto words=c.binary.size();
+        if(exponent && count==129){
+            auto root=build_compact_ftree(c,roots,0,count,packed,1,words);
+            packed[0]=pack_values(c,roots,count,words);
+            compact_inverse=c.inverse(reverse(root),count);
+        }
         for(size_t terms:{count,(count+1)/2}){
             auto out=c.scaled_remainder(Array(c.gw,h.v,terms),inv);
             auto rebuilt=c.copy(out);
             descend(c,*t,out);
             descend(c,*partial,rebuilt,&roots);
+            Array compact;
+            if(compact_inverse.size){
+                compact=c.scaled_remainder(Array(c.gw,h.v,terms),compact_inverse);
+                Array scratch(c.gw,1);
+                double unpack_seconds=0;
+                descend_compact(c,packed,1,0,count,compact,scratch[0],words,unpack_seconds);
+            }
             for(size_t i=0;i<count;++i){
                 mpz_set_ui(y.v,0);for(size_t k=terms;k-->0;){mpz_mul_ui(y.v,y.v,expected_roots[i]);mpz_add_ui(y.v,y.v,103*(k+3));mpz_mod(y.v,y.v,n.v);}
                 c.get(x.v,out[i]);if(mpz_cmp(x.v,y.v))throw std::runtime_error("Scaled polynomial descent differs from GMP Horner");
                 c.get(x.v,rebuilt[i]);if(mpz_cmp(x.v,y.v))throw std::runtime_error("Rebuilt F subtree differs from GMP Horner");
+                if(compact.size){
+                    c.get(x.v,compact[i]);
+                    if(mpz_cmp(x.v,y.v))throw std::runtime_error("Compact F subtree differs from GMP Horner");
+                }
             }
         }
         auto product=c.convolution(h,t->polynomial);auto rem=c.remainder(product,t->polynomial,inv);

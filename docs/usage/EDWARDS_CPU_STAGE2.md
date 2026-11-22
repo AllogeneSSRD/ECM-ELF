@@ -4,7 +4,7 @@ CPU 与 GPU Edwards Stage1 均生成 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=4
 
 ## 构建与运行
 
-Windows x64 统一版使用 MSVC、CMake、Ninja、CUDA、GMP 和本地 GMP-ECM 源码。CPU 路径随 CUDA 版 `ecm_stage2.exe` 构建，`gwnum.dll` 可自行编译并放在程序旁。只需 CPU 的机器也可用下面的本机构建入口，输出包括 `ecm_stage2.exe`、`gwnum.dll` 和 `gmp-10.dll`。
+Windows x64 统一版使用 MSVC、CMake、Ninja、CUDA、GMP 和本地 GMP-ECM 源码。默认本机构建把统一版 `ecm_stage2.exe` 和 `gwnum.dll` 放在 `build_stage2_local`。只需 CPU 的机器也可用下面的本机构建入口，输出包括 `ecm_stage2.exe`、`gwnum.dll` 和 `gmp-10.dll`。
 
 ```powershell
 tools/build/build_stage2_cpu_local.ps1
@@ -34,9 +34,11 @@ Stage1 的 N 由标准输入提供；上例的 `--exponent 127` 仅适用于保�
 
 `--b2` 使用精确十进制整数，必须大于所选记录 B1。libecm 入口限制为 10^12，gwpoly 的整数规划范围为 10^15；后者不是最大界限的性能资格，当前实际完成的正确性界限为 B2=2.6×10^12、N=M347。`--memory-mib` 默认 512，是规划预算，不限制进程工作集或包含全部运行时开销。GW 以实际 FFT 布局估计 F 树、G 工作区及临时系数，自动选择平滑 D；`--d D` 可固定偶数 D（6…20,000,000），P=φ(D)/2，预算不足拒绝执行。自动选择是静态成本估计，未保证最快。
 
-自动规划在最终 D 比试探轮更小时，会按最终的 P 重新选取满足 GWNUM 安全余量的 FFT 长度，再按该布局复核内存预算。每个 D 先尝试完整 F 树。超出预算时，规划器比较顶部保留层数，保存归一化 baby 根，下降时逐棵重建底层子树。估算分别覆盖初始化、G/H 主循环和下降时同时存活的数组，另外计入线程工作区、多项式 FFT 暂存及分配余量，FFT 安全检查换档后重新计算。`gwpoly-plan` 报告完整或分段布局、单个系数的估计字节和顶部保留分裂次数，`planned_mib` 为布局估值。调优候选与显式 D 均使用同一准入条件。[CPU 规划源码](../../src/ecm/stage2/cpu/gwpoly.cpp)
+自动规划在最终 D 比试探轮更小时，会按最终的 P 重新选取满足 GWNUM 安全余量的 FFT 长度，再按该布局复核内存预算。每个 D 先尝试完整 F 树。超出预算时，规划器比较顶部保留层数，保存归一化 baby 根，下降时逐棵重建底层子树。原生循环梅森 FFT 长度达到 65536、P 至少为 128 时，还可以尝试紧凑布局。估算分别覆盖初始化、G/H 主循环和下降时同时存活的数组，另外计入线程工作区、多项式 FFT 暂存及分配余量，FFT 安全检查换档后重新计算。`gwpoly-plan` 报告完整、分段或紧凑布局、单个系数的估计字节和顶部保留分裂次数，`planned_mib` 为布局估值。调优候选与显式 D 均使用同一准入条件。[CPU 规划源码](../../src/ecm/stage2/cpu/gwpoly.cpp)
 
 完整 F 树按层连续保存各首一多项式的低次系数，整棵树的根另存首项 1。分段下降只重建该段根以下的树行。同一父节点下，两个待重建段的根数相等时，右段复用左段的系数行并重新计算系数。Newton 倒数只计算每次扩展的新系数。缩放后的根余式直接作为最终叶数组。每个父节点用一次 polymult 调用共用父变换，两个孩子分别覆盖原行中自己的区间。下降预算计入这一个输出行，并另留两个系数行的 GW 分配余量。最后一对线性因子直接用乘加计算两个叶值。
+
+紧凑布局把 baby 根和 F 树顶端两层的低次系数存为内存中的定长二进制余数。主循环用原生 GW 格式的 F 根。下降时按需解包兄弟多项式，逐段还原 baby 根并重建子树。每个 G 块最多分两批生成 giant 点并归一化，至多保留半块分母，两个批次共用完整的 G 根行。算术目标和实际 B2 沿用任务规划。[宽位内存与性能对照](../performance/CPU_GWPOLY_STAGE2.md#m3033533-的-4-gib-紧凑-f-树)
 
 在能减少至少一个 G 块时，CPU 只遍历原 giant 网格的高位后缀，保留原终点和小素数检查。日志 `gwpoly-range` 给出原起点、当前起点与终点。后缀发现因子或分母／GCD 饱和时，释放工作区，按完整区间重算后再交付因子或报告错误。中断和舍入错误直接上报。[覆盖与因子恢复](../reference/ECM_STAGE2_RELOCATION.md)
 
@@ -98,7 +100,7 @@ tune_runtime_sample_limit = 10
 
 路径默认位于 `ecm.toml` 旁，支持 worker 覆盖。CLI `--tune-profile FILE` 优先，相对路径以启动目录为准。CLI 的 `--tune-min-repeats` 和 `--tune-runtime-samples` 可覆盖重复数和每个候选的样本上限。达到上限后保留已有均值。`--tune-runtime 0` 只读复用合格记录。将 `tune_file` 或 `--tune-profile` 显式置空可以停用读写。指定非零 `--d`、`--dry-run` 或 `--gw-check` 时直接走相应执行路径。
 
-命令行可用 `--cpu-tune-candidates N` 和 `--cpu-tune-dense-d 0|1` 覆盖。固定 `--backend gwpoly --d D` 后，ABI 5 还支持用 `--f-tree-splits 0` 强制完整树、用正整数固定顶部分裂次数、用 `segmented` 选预算内容纳的最深分段布局。`auto` 沿用按预算先尝试完整树的行为。实际 FFT、分裂次数和内存仍须通过准入。 [F 树预算与性能对照](../performance/STAGE2.md#cpu-stage2-的-f-树预算与-d-选型)
+命令行可用 `--cpu-tune-candidates N` 和 `--cpu-tune-dense-d 0|1` 覆盖。固定 `--backend gwpoly --d D` 后，ABI 5 支持 `--f-tree-splits 0` 强制完整树、用 1…62 固定顶部分裂次数、用 `segmented` 在分段方案中选择、用 `compact` 强制紧凑布局。`auto` 按完整、普通分段、紧凑的顺序准入。实际 FFT、布局和内存须通过对应检查。紧凑布局在 ABI 和 tune 的 `f_tree_splits` 字段中记为 63。 [F 树预算与性能对照](../performance/STAGE2.md#cpu-stage2-的-f-树预算与-d-选型)
 
 CPU 与 CUDA 可以共用同一个 `tune.toml`。CPU 使用 `[cpu_stage2]` 的 `format = 3`，矩阵上方的 `cpu` 和 `supported` 分别记录型号和支持的指令集。不同的型号或指令集组合各占一张矩阵，附加表为 `[cpu_stage2.host.N]`。CPU 与 CUDA 矩阵共用列宽对齐方式。CPU 每行记录 GWNUM 版本、P/E 线程数、模数模式、`polymult_isa`、`fft_length`、B1/B2、D/P、F 树方案、`planned_mib`、重复次数、整曲线平均耗时、样本标准差、实测位宽区间、程序版本和 UTC 更新时间。计时包含 GW 初始化及清理，排除调优预检、读写文件和结果发布。完整 FFT 描述和分项耗时仍在运行日志中。
 
@@ -106,7 +108,7 @@ CPU 与 CUDA 可以共用同一个 `tune.toml`。CPU 使用 `[cpu_stage2]` 的 `
 
 不同位宽或预算可复用同一行。程序先用当前模数、D 和预算检查 FFT 布局、误差余量及 F 树方案，再按 FFT 长度、polymult 指令集、F 树方案和规划内存等条件匹配。保存新样本前会校验实际 FFT 描述与本次预检一致。`max_exponent` 是该系数 FFT 在当前多项式余量下的规划上界，普通模数的内部 FFT 指数可能大于实际位宽。`tested_min`、`tested_max` 记录已有样本的位宽，梅森承载时记录承载指数。`planned_mib` 是规划估值。
 
-CPU 与 CUDA 使用同一发布锁和原子替换。原 `format = 2` 矩阵可以直接读取，下一次合格观测会将现有样本转写为新版。更早的 `[[cpu_stage2]]` 样本跳过。联合搜索 D 和 F 树布局需要 ABI 5。ABI 4 仍支持原有的最多 3 个 D 和旧记录复用，ABI 3 支持实时进度。可用 `build_stage2_local.bat -WithGwDll` 同时构建程序和 DLL。也可用 `build_gwnum_local.ps1 -Stage2` 单独构建 DLL，再放到 `ecm_stage2.exe` 旁。 [本机构建说明](BUILD.md#stage2-本地构建与-gwnum)
+CPU 与 CUDA 使用同一发布锁和原子替换。原 `format = 2` 矩阵可以直接读取，下一次合格观测会将现有样本转写为新版。更早的 `[[cpu_stage2]]` 样本跳过。联合搜索 D 和 F 树布局需要 ABI 5。ABI 4 仍支持原有的最多 3 个 D 和旧记录复用，ABI 3 支持实时进度。`build_stage2_local.bat` 默认把程序和 DLL 构建到 `build_stage2_local`。也可用 `build_gwnum_local.ps1 -Stage2` 单独构建 DLL，再放到 `ecm_stage2.exe` 旁。 [本机构建说明](BUILD.md#stage2-本地构建与-gwnum)
 
 ## worktodo、停止与跨后端续算
 

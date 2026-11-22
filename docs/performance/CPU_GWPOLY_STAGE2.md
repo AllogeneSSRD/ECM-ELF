@@ -1,5 +1,26 @@
 # CPU GW 多项式 Stage2 性能
 
+## M3033533 的 4 GiB 紧凑 F 树
+
+沿用下面的 M3033533 余因子存档，B1=50000、σ=85473165105590。完整样本固定实际 B2=19,602,870，关闭 B2 凑整和运行时 tune，由各构建按 4096 MiB 自动选择 D/P。另用 Windows Job 对单进程施加 4096 MiB 提交量硬限。1T 绑逻辑 CPU 1，4T 绑 1、3、5、7，避让编译并串行测量，每格一次。计时从曲线重构到引擎清理。设备为 Ryzen AI 9 HX 370，主机另有 RTX 4070 Ti 在运行，未记录 CPU 有效频率和功耗。对照为 0.72.11 计时构建 DLL `584e782b18848f56`，紧凑为基于 0.72.18 的 DLL `9ac4070641228173`。两者均使用 GWNUM 31.6 和 AVX-512 系数 FFT 196608。 [存档来源、命令与原始证据](../../data/experiments/cpu_stage2_compact_f_20261122/)
+
+旧规划在 1T、4T 均选 D/P=1890/216，紧凑布局可选 3570/384，规划估值为 3649、3894 MiB。F 树占用降低后，完整 B2 的计划 G 块数从 44 降至 14，最后一块只有一个根。Prime95 的同 B1/B2 日志为 13 个 PolyG 块，区间边界略有差异。 [准入结果](../../data/experiments/cpu_stage2_compact_f_20261122/plan-final.json)
+
+| 线程 | 布局 | D/P | Giant 点 | G 块 | 整曲线秒 | 进程提交峰值 MiB |
+|---:|---|---:|---:|---:|---:|---:|
+| 1 | 普通分段 | 1890/216 | 9430 | 44 | 164.541 | 3226.4 |
+| 1 | 紧凑 | 3570/384 | 4993 | 14 | 105.144 | 3276.2 |
+| 4 | 普通分段 | 1890/216 | 9430 | 44 | 93.821 | 3308.1 |
+| 4 | 紧凑 | 3570/384 | 4993 | 14 | 61.783 | 3397.4 |
+
+四个样本均为 NF。整曲线耗时在 1T 和 4T 分别缩短 36.1% 和 34.1%。F 建树与下降合计在 1T 从 3.845 增到 11.341 秒，在 4T 从 2.864 增到 8.718 秒。少做 G 块节省的主循环时间覆盖了 F 系数的打包、解包和重建成本。 [1T 对照](../../data/experiments/cpu_stage2_compact_f_20261122/old_1t_full/summary.json) · [1T 紧凑](../../data/experiments/cpu_stage2_compact_f_20261122/compact_1t_full/summary.json) · [4T 对照](../../data/experiments/cpu_stage2_compact_f_20261122/old_4t_full/summary.json) · [4T 紧凑](../../data/experiments/cpu_stage2_compact_f_20261122/compact_4t_full/summary.json)
+
+紧凑 1T 的 giant 点与 G 树合计 61.441 秒，比 Prime95 的 PolyG 总计多 11.892 秒。H 折叠为 22.627 对 20.602 秒，完整耗时差 22.222 秒。Prime95 的 PolyG 包含 giant 点生成，日志未列出已知因子，G 区间边界也略有差异。紧凑 1T 的两批 giant 归一化和 F 系数解包是后续可单独配对的开销。 [单线程 Prime95 日志](../../tools/benchmarks/prime95/ECM-M3033533_B2=19602870.log)
+
+实际 B2=3,600,000 的 4T 独立校验覆盖两个满块和 228 根短尾。在硬限下完成 996 个 giant 点、逐段首尾的直接梯形校验和三个 GMP 叶投影，结果为 NF，提交峰值 3404.0 MiB。 [第三块短尾校验](../../data/experiments/cpu_stage2_compact_f_20261122/check_final4/summary.json)
+
+CPU 回归 55 项通过，包含 1T 和 4T 下紧凑 F 下降与 GMP Horner 的逐叶对照。实际 B2=8,000,000 的 4T 运行时调优在同一硬限下选中 D/P=3570/384，完成六个 G 块并把紧凑布局标识 63 写入 `tune.toml`。 [回归报告](../../data/experiments/cpu_stage2_compact_f_20261122/regression/summary.json) · [调优记录](../../data/experiments/cpu_stage2_compact_f_20261122/tune4/tune.toml)
+
 ## M3033533 的 3033447 位余因子
 
 Prime95 单线程 Edwards 日志给出的 Stage2 总耗时为 82.922 秒，含初始化 6.536 秒、主计算 76.160 秒和最终 GCD 0.226 秒。实际 B2 为 19,602,870，D/P=3570/384，系数 FFT 为 AVX-512 196608，Pass1=3K、Pass2=64。13 次 PolyG 共用 49.549 秒，含 giant 点。12 次 PolyH 共用 20.602 秒。配置预算为 4096 MiB，日志报告使用 3690 MB。[Prime95 原始日志](../../tools/benchmarks/prime95/ECM-M3033533_B2=19602870.log)
@@ -23,7 +44,7 @@ ECM-ELF 在 Ryzen AI 9 HX 370 上复跑同一行 Edwards save。N 为 M3033533 �
 
 仿照 Prime95 的单仿射基点差分加法，另测了 DLL `44e734225f0bee34`。完整曲线 1T 为 104.170 秒、4T 为 62.535 秒，giant 点为 29.612 秒、18.424 秒。单独归一化基点会新增一次求逆，而两种融合差分公式在 Prime95 的参考实现中均为 12 次 FFT。生产路径继续使用射影步进。Prime95 的更短链还复用了归一化的前驱点，值得随归一化池一并测量。[Prime95 点加与归一化池](../../.refactor/p95v3106b01.source/ecm.cpp) · [仿射试验](../../data/experiments/cpu_stage2_3033533_20261121/m3033533_final_1t/engine.log)
 
-同一输入按 4096 MiB 规划时，ECM-ELF 的 1T 和 4T 自动候选均为 D/P=1890/216，规划估值分别为 3841 和 4085 MiB，预计 44 个 G 块。指定 Prime95 的 D/P=3570/384 无法通过当前内存准入。一个 GW 系数的规划大小为 1,672,248 字节，P=384 的一整行约占 612 MiB。下一步可测减少常驻 F 树、giant 分母和 H/G 临时空间对 D/P 的影响。Prime95 的归一化池与 F 树按行留存可用作对照。随后可拆测 G 树低层合并、H 的乘积写回和单根尾块。[内存规划输出](../../data/experiments/cpu_stage2_3033533_20261121/plan-release.json)
+对照版在 4096 MiB 预算下，1T 和 4T 自动候选均为 D/P=1890/216，规划估值分别为 3841 和 4085 MiB。指定 Prime95 的 D/P=3570/384 无法通过对照版的内存准入。一个 GW 系数的规划大小为 1,672,248 字节，P=384 的一整行约占 612 MiB。[对照版内存规划](../../data/experiments/cpu_stage2_3033533_20261121/plan-release.json) · [紧凑布局实测](#m3033533-的-4-gib-紧凑-f-树)
 
 最终构建在实际 B2=1,800,000 上用 4T 检查 492 个 giant 点组成的满块与短尾，逐段首尾与直接梯形一致，三个 GMP 叶值投影通过，结果为 NF，最大舍入误差为 0.008823。CPU GW 多项式回归共 55 项通过，包含因子、后缀重放、停止及 Stage1 命中记录的跳过行为。[宽位校验](../../data/experiments/cpu_stage2_3033533_20261121/m3033533_release_projection_4t/engine.log) · [回归报告](../../data/experiments/cpu_stage2_3033533_20261121/regression-confirmed/summary.json)
 
