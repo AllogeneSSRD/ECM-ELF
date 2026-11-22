@@ -29,6 +29,24 @@ namespace {
 using ecm_edwards::Integer;
 using Clock=std::chrono::steady_clock;
 double seconds(Clock::time_point t){return std::chrono::duration<double>(Clock::now()-t).count();}
+#ifdef ECM_GWPOLY_TIMELINE
+void log_window(const char *phase,Clock::time_point start,Clock::time_point end){
+    using Ns=std::chrono::nanoseconds;
+    std::printf("gwpoly-window: phase=%s begin_ns=%lld end_ns=%lld\n",phase,
+                static_cast<long long>(std::chrono::duration_cast<Ns>(start.time_since_epoch()).count()),
+                static_cast<long long>(std::chrono::duration_cast<Ns>(end.time_since_epoch()).count()));
+}
+#endif
+struct GiantTimings {
+    double stepping=0,normalization=0,inverse=0;
+    uint64_t inversions=0;
+    void merge(const GiantTimings &other){
+        stepping+=other.stepping;
+        normalization+=other.normalization;
+        inverse+=other.inverse;
+        inversions+=other.inversions;
+    }
+};
 struct Hit {};
 struct Saturated : std::runtime_error {using std::runtime_error::runtime_error;};
 struct Context;
@@ -53,6 +71,7 @@ struct Context {
     const Options &o;Stats &stats;mpz_srcptr n;mpz_ptr factor;
     std::vector<uint32_t> binary;
     double pack_seconds=0,unpack_seconds=0;
+    GiantTimings giant_timing;
     using PlanKey=std::tuple<size_t,size_t,size_t,size_t,int,unsigned>;
     std::map<PlanKey,void *> plans;
     Context(const mpz_t modulus,mpz_t f,const Options &opt,Stats &s,size_t max_poly,bool preflight=false)
@@ -346,6 +365,62 @@ double descend(Context &c,const Tree &t,Array &values,const Array *roots=nullptr
     descend_node(c,t,values,roots,scratch[0],rebuild_seconds);
     return rebuild_seconds;
 }
+void denominator_product(Context &c,gwnum *x,gwnum *z,size_t count,gwnum product){
+    // Multiply each numerator by the preceding denominators while their
+    // product is live. Keep the denominator values for factor recovery.
+    auto &gw=c.gw;
+    gwcopy(&gw,z[0],product);
+    for(size_t i=1;i<count;++i){
+        gwmul3(&gw,product,x[i],x[i],GWMUL_FFT_S1|GWMUL_STARTNEXTFFT);
+        gwmul3(&gw,product,z[i],product,GWMUL_FFT_S2|GWMUL_STARTNEXTFFT);
+    }
+}
+void apply_denominator_inverse(Context &c,gwnum *x,gwnum *z,size_t count,gwnum inverse){
+    auto &gw=c.gw;
+    for(size_t i=count-1;i>0;--i){
+        gwmul3(&gw,inverse,x[i],x[i],GWMUL_FFT_S1);
+        gwmul3(&gw,inverse,z[i],inverse,GWMUL_STARTNEXTFFT);
+    }
+    gwmul3(&gw,inverse,x[0],x[0],0);
+    c.check("batch point normalization");
+}
+void invert_denominator_product(Context &c,mpz_ptr result,mpz_srcptr product,gwnum *z,size_t count,
+                                GiantTimings *timing){
+    const auto start=timing?Clock::now():Clock::time_point{};
+    const bool invertible=mpz_invert(result,product,c.n)!=0;
+    if(timing){
+        timing->inverse+=seconds(start);
+        ++timing->inversions;
+    }
+    if(!invertible){
+        for(size_t i=0;i<count;++i)c.divisor(z[i]);
+        throw Saturated("Saturated point denominator; no NF result");
+    }
+}
+Array invert_negative_products(Context &c,const Array &products,gwnum *z,size_t count){
+    const auto start=Clock::now();
+    auto &timing=c.giant_timing;
+    const auto previous_inverse_time=timing.inverse;
+    // Prefix products can stay in the GW carrier, which is a multiple of N.
+    // Only the complete product has to be converted for inversion modulo N.
+    Array prefixes(c.gw,products.size),remaining(c.gw,1);
+    gwcopy(&c.gw,products[0],prefixes[0]);
+    for(size_t i=1;i<products.size;++i)c.mul(prefixes[i-1],products[i],prefixes[i]);
+    c.check("giant lane denominator products");
+    Integer product,inverse;
+    c.get(product.v,prefixes[products.size-1]);
+    invert_denominator_product(c,inverse.v,product.v,z,count,&timing);
+    mpz_sub(inverse.v,c.n,inverse.v);
+    c.put(inverse.v,remaining[0]);
+    for(size_t i=products.size-1;i>0;--i){
+        c.mul(prefixes[i-1],remaining[0],prefixes[i]);
+        c.mul(products[i],remaining[0],remaining[0]);
+    }
+    gwcopy(&c.gw,remaining[0],prefixes[0]);
+    c.check("giant lane denominator inverses");
+    timing.normalization+=seconds(start)-(timing.inverse-previous_inverse_time);
+    return prefixes;
+}
 struct Point {gwnum x,z;};
 struct Points {
     Context &c;Array work;
@@ -396,39 +471,29 @@ struct Points {
         copy(a,out);
         if(successor)copy(b,*successor);
     }
-    void normalize(gwnum *x,gwnum *z,size_t count,bool negate=false){
-        auto &gw=c.gw;
-        // Multiply each numerator by the product of preceding denominators
-        // while that product is live. Keep the original z values for GCDs.
-        Array prefix(gw,1);
-        gwcopy(&gw,z[0],prefix[0]);
-        for(size_t i=1;i<count;++i){
-            gwmul3(&gw,prefix[0],x[i],x[i],GWMUL_FFT_S1|GWMUL_STARTNEXTFFT);
-            gwmul3(&gw,prefix[0],z[i],prefix[0],GWMUL_FFT_S2|GWMUL_STARTNEXTFFT);
-        }
+    static void normalize(Context &c,gwnum *x,gwnum *z,size_t count,bool negate=false,GiantTimings *timing=nullptr){
+        const auto start=timing?Clock::now():Clock::time_point{};
+        const auto previous_inverse_time=timing?timing->inverse:0.0;
+        Array prefix(c.gw,1);
+        denominator_product(c,x,z,count,prefix[0]);
         Integer product,inv;c.get(product.v,prefix[0]);
-        if(!mpz_invert(inv.v,product.v,c.n)){
-            for(size_t i=0;i<count;++i)c.divisor(z[i]);
-            throw Saturated("Saturated point denominator; no NF result");
-        }
-        // Walk the inverse prefix products backward to finish x[i]/z[i].
+        invert_denominator_product(c,inv.v,product.v,z,count,timing);
         // Giant leaves use X - x/z. Negate the shared inverse once per batch.
         if(negate)mpz_sub(inv.v,c.n,inv.v);
         c.put(inv.v,prefix[0]);
-        for(size_t i=count-1;i>0;--i){
-            gwmul3(&gw,prefix[0],x[i],x[i],GWMUL_FFT_S1);
-            gwmul3(&gw,prefix[0],z[i],prefix[0],GWMUL_STARTNEXTFFT);
-        }
-        gwmul3(&gw,prefix[0],x[0],x[0],0);
-        c.check("batch point normalization");
+        apply_denominator_inverse(c,x,z,count,prefix[0]);
+        if(timing)timing->normalization+=seconds(start)-(timing->inverse-previous_inverse_time);
     }
 };
+size_t point_workers(const Context &c,size_t count,size_t min_chunk){
+    return std::min<size_t>(c.o.threads,std::max<size_t>(1,count/min_chunk));
+}
 template<class Function> void parallel_points(Context &parent,size_t count,Function function,size_t min_chunk=256){
     struct Worker {
         Integer factor;Stats stats{};Context context;std::exception_ptr error;
         explicit Worker(Context &p):context(p,factor.v,stats){}
     };
-    const size_t threads=std::min<size_t>(parent.o.threads,std::max<size_t>(1,count/min_chunk));
+    const size_t threads=point_workers(parent,count,min_chunk);
     if(threads==1){
         function(parent,0,count);
         parent.check("point worker");
@@ -445,6 +510,7 @@ template<class Function> void parallel_points(Context &parent,size_t count,Funct
     for(auto &worker:workers){
         gwclone_merge_stats(&parent.gw,&worker->context.gw);
         parent.stats.polymults+=worker->stats.polymults;
+        parent.giant_timing.merge(worker->context.giant_timing);
         if(worker->error){mpz_set(parent.factor,worker->factor.v);std::rethrow_exception(worker->error);}
     }
     parent.check("parallel worker merge");
@@ -1001,11 +1067,14 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
     auto owner=prepare_plan(n,factor,b1,b2,o,stats,fplan);
     auto &c=*owner;
     const auto d=stats.d,p=stats.poly_size;
+    // A compact half-block repeats one seed ladder per lane. Three lanes
+    // avoid extra ladders and cache pressure when four threads are available.
+    const auto giant_lane_limit=fplan.splits==compact_tree && o.threads==4?3u:o.threads;
     std::printf("gwpoly-plan: ftree=%s bytes_per_value=%zu retained_splits=%u\n",
                 fplan.compact()?"compact":fplan.rebuild?"segmented":"full",
                 static_cast<size_t>(gwnum_size(&c.gw))+64,fplan.compact()?compact_depth:fplan.splits);
     if(fplan.compact())
-        std::printf("gwpoly-giant: denominator_batch=%zu\n",fplan.giant_batch(p));
+        std::printf("gwpoly-giant: denominator_batch=%zu lane_limit=%u\n",fplan.giant_batch(p),giant_lane_limit);
     bool main_started=false;auto main_begin=begin;
     try {
         progress(ECM_GW_BABY);
@@ -1082,7 +1151,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                         if((j&255)==1)worker.check();
                     }
                 }
-                ops.normalize(roots.v+lo,z.v+lo,hi-lo);
+                Points::normalize(worker,roots.v+lo,z.v+lo,hi-lo);
                 if(o.check){
                     // Check the retained roots against independent ladders,
                     // including the boundaries of each lane in this slice.
@@ -1178,52 +1247,86 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
             Array gx(c.gw,g_workspace.v,count);
             const auto generate=[&](size_t offset,size_t length) {
                 Array gz(c.gw,length);
-                parallel_points(c,length,[&](Context &worker,size_t begin,size_t end){
-                    const size_t lo=offset+begin,hi=offset+end;
+                const auto step=[&](Context &worker,size_t begin,size_t end){
                     Points ops(worker);
                     Array work(worker.gw,5);
                     Point previous{work[0],work[1]}, local_base{work[2],work[3]};
-                    Point current{gx[lo],gz[begin]};
+                    Point current{gx[offset+begin],gz[begin]};
                     auto a24=work[4];
                     ops.copy(base,local_base);
                     gwcopy(&worker.gw,storage[12],a24);
                     // A differential ladder already computes two adjacent
                     // multiples; use both as the seed for the chain.
-                    ops.ladder(local_base,pos+lo-1,previous,a24,&current);
+                    const auto step_begin=Clock::now();
+                    ops.ladder(local_base,pos+offset+begin-1,previous,a24,&current);
                     const bool use_fused=worker.o.exponent &&
                         (worker.gw.cpu_flags & (CPU_AVX512F|CPU_FMA3));
-                    for(size_t i=lo+1;i<hi;++i){
-                        Point next{gx[i],gz[i-offset]};
-                        if(pos+i==2)ops.dbl(local_base,next,a24);
+                    for(size_t i=begin+1;i<end;++i){
+                        Point next{gx[offset+i],gz[i]};
+                        if(pos+offset+i==2)ops.dbl(local_base,next,a24);
                         else if(use_fused)ops.add_fused(current,local_base,previous,next);
                         else ops.add(current,local_base,previous,next);
                         previous=current;
                         current=next;
-                        if(!(i&127))worker.check();
+                        if(!((offset+i)&127))worker.check();
                     }
-                    ops.normalize(gx.v+lo,gz.v+begin,hi-lo,true);
-                    if(o.check){
-                        // Compare both ends of each lane with [iD]Q computed
-                        // directly, independently of the base and the paired seed.
-                        Point reference{work[0],work[1]};
-                        ops.copy(q,local_base);
-                        Integer negative,ref_x,ref_z;
-                        for(const size_t sample:{lo,hi-1}){
-                            ops.ladder(local_base,d*(pos+sample),reference,a24);
-                            worker.get(negative.v,gx[sample]);
-                            worker.get(ref_x.v,reference.x);
-                            worker.get(ref_z.v,reference.z);
-                            mpz_addmul(ref_x.v,negative.v,ref_z.v);
-                            if(!mpz_divisible_p(ref_x.v,n))
-                                throw std::runtime_error("Giant point differs from direct ladder");
-                        }
+                    worker.giant_timing.stepping+=seconds(step_begin);
+                };
+                const auto verify=[&](Context &worker,size_t begin,size_t end){
+                    if(!o.check)return;
+                    // Compare both ends with [iD]Q computed independently.
+                    Points ops(worker);
+                    Array work(worker.gw,5);
+                    Point reference{work[0],work[1]},local_q{work[2],work[3]};
+                    ops.copy(q,local_q);
+                    gwcopy(&worker.gw,storage[12],work[4]);
+                    Integer negative,ref_x,ref_z;
+                    for(const size_t sample:{offset+begin,offset+end-1}){
+                        ops.ladder(local_q,d*(pos+sample),reference,work[4]);
+                        worker.get(negative.v,gx[sample]);
+                        worker.get(ref_x.v,reference.x);
+                        worker.get(ref_z.v,reference.z);
+                        mpz_addmul(ref_x.v,negative.v,ref_z.v);
+                        if(!mpz_divisible_p(ref_x.v,n))
+                            throw std::runtime_error("Giant point differs from direct ladder");
                     }
-                },giant_chunk);
+                };
+                const auto workers=std::min<size_t>(point_workers(c,length,giant_chunk),giant_lane_limit);
+                if(!fplan.compact() || workers==1){
+                    parallel_points(c,length,[&](Context &worker,size_t begin,size_t end){
+                        step(worker,begin,end);
+                        Points::normalize(worker,gx.v+offset+begin,gz.v+begin,end-begin,true,&worker.giant_timing);
+                        verify(worker,begin,end);
+                    },giant_chunk);
+                    return;
+                }
+                // Keep the normal point partition and denominator capacity.
+                // Join forward scans before sharing one GMP inverse across the lanes.
+                Array products(c.gw,workers);
+                parallel_points(c,workers,[&](Context &worker,size_t index,size_t){
+                    const auto begin=index*length/workers,end=(index+1)*length/workers;
+                    step(worker,begin,end);
+                    const auto start=Clock::now();
+                    denominator_product(worker,gx.v+offset+begin,gz.v+begin,end-begin,products[index]);
+                    worker.giant_timing.normalization+=seconds(start);
+                },1);
+                auto inverses=invert_negative_products(c,products,gz.v,length);
+                parallel_points(c,workers,[&](Context &worker,size_t index,size_t){
+                    const auto begin=index*length/workers,end=(index+1)*length/workers;
+                    const auto start=Clock::now();
+                    apply_denominator_inverse(worker,gx.v+offset+begin,gz.v+begin,end-begin,inverses[index]);
+                    worker.giant_timing.normalization+=seconds(start);
+                    verify(worker,begin,end);
+                },1);
             };
             const auto first_wave=fplan.giant_batch(count);
             generate(0,first_wave);
             if(first_wave<count)generate(first_wave,count-first_wave);
-            stats.point_seconds+=seconds(part_begin);
+            const auto point_end=Clock::now();
+            stats.point_seconds+=std::chrono::duration<double>(point_end-part_begin).count();
+#ifdef ECM_GWPOLY_TIMELINE
+            log_window("giant",part_begin,point_end);
+#endif
             if(o.check){
                 Integer negative_giant,difference;
                 for(size_t i=0;i<count;++i){c.get(negative_giant.v,gx[i]);for(auto &probe:probes){
@@ -1233,7 +1336,11 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
             part_begin=Clock::now();auto g=product_tree(c,gx,0,count,&g_workspace,true);gx=Array();stats.tree_seconds+=seconds(part_begin);
             part_begin=Clock::now();
             c.fold(h,g_workspace,g->polynomial.size-1,ftree->polynomial,reciprocal,defer_low);
-            stats.fold_seconds+=seconds(part_begin);
+            const auto fold_end=Clock::now();
+            stats.fold_seconds+=std::chrono::duration<double>(fold_end-part_begin).count();
+#ifdef ECM_GWPOLY_TIMELINE
+            log_window("fold",part_begin,fold_end);
+#endif
             pos+=count;++stats.blocks;stats.giants+=count;
             if(o.progress && (stats.blocks==1 || stats.blocks==batches || seconds(last_report)>=1.0)) {
                 progress(ECM_GW_BATCH,stats.blocks,batches);
@@ -1278,6 +1385,10 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         if(fplan.compact())
             std::printf("gwpoly-ftree-conversion: pack_seconds=%.6f unpack_seconds=%.6f\n",
                         c.pack_seconds,c.unpack_seconds);
+        std::printf("gwpoly-giant-timing: step_worker_seconds=%.6f normalize_worker_seconds=%.6f "
+                    "inverse_worker_seconds=%.6f inversions=%llu\n",c.giant_timing.stepping,
+                    c.giant_timing.normalization,c.giant_timing.inverse,
+                    static_cast<unsigned long long>(c.giant_timing.inversions));
         std::printf("gwpoly-phases: baby=%.6f ftree=%.6f reciprocal=%.6f giant=%.6f gtree=%.6f fold=%.6f scale=%.6f descent=%.6f leaf_gcd=%.6f\n",
                     phases.baby_seconds,phases.ftree_seconds,phases.reciprocal_seconds,phases.giant_seconds,
                     phases.gtree_seconds,phases.fold_seconds,phases.scale_seconds,phases.descent_seconds,phases.leaf_gcd_seconds);
@@ -1358,6 +1469,18 @@ static void selftest_polynomials(unsigned threads,unsigned long exponent){
     Options o;o.threads=threads;o.exponent=exponent;
     Stats stats{};
     Context c(n.v,f.v,o,stats,exponent?1024:512);
+    if(!exponent){
+        // Each lane has a different divisor. Their product is zero modulo N,
+        // but recovery must still report a proper divisor from a denominator.
+        Array products(c.gw,2);
+        u64togw(&c.gw,1000003,products[0]);
+        u64togw(&c.gw,1000033,products[1]);
+        bool recovered=false;
+        try{(void)invert_negative_products(c,products,products.v,products.size);}
+        catch(const Hit &){recovered=mpz_cmp_ui(f.v,1000003)==0;}
+        if(!recovered)throw std::runtime_error("Shared denominator inverse lost a proper divisor");
+        mpz_set_ui(f.v,0);
+    }
     if(c.supports_deferred_h_fold() && !c.use_deferred_h_fold(509))
         throw std::runtime_error("Self-test carrier lacks margin for deferred H fold");
     // At 509 roots a lone tail crosses the 128-job batched normalization boundary.
@@ -1419,7 +1542,7 @@ static void selftest_polynomials(unsigned threads,unsigned long exponent){
                     u64togw(&c.gw,(j+2)*affine,workspace[j]);
                     u64togw(&c.gw,j+2,denominators[j]);
                 }
-                Points(c).normalize(workspace.v,denominators.v,leaves,true);
+                Points::normalize(c,workspace.v,denominators.v,leaves,true);
             }else{
                 for(size_t j=0;j<leaves;++j)u64togw(&c.gw,1237*(j+5)+97*block,roots[j]);
             }

@@ -1,5 +1,104 @@
 # CPU GW 多项式 Stage2 性能
 
+## uProf 6.0 的 L3 实测与线程分工
+
+Ryzen AI 9 HX 370 在 Hyper-V `hypervisorperfmon=System` 下重启后，AMD uProf 6.0.1520 报告 6 个 Core、4 个 L3、4 个 DF PMC，APERF、MPERF 和 IRPERF 可用。L3 已实际采到访问与未命中。UMC PMC 仍为 0，`memory` 指标未列出，`--config df` 也缺少本机型号的内置配置。因此直接 DRAM 读写带宽缺测。[重启后的能力与采集探测](../../data/experiments/cpu_stage2_bandwidth_uprof6/) · [AMD 的 Windows 采集条件](https://docs.amd.com/r/en-US/57368-uProf-user-guide/4.4.1.-Windows)
+
+沿用下节相同的两个 Edwards 存档、B2、D/P、系数 FFT、物理核和 4 GiB 硬限。DLL `0509b47e1ce2ebad` 使用 GW 共用求逆，4T 紧凑 giant 以四段分工作为基线。每格一次，分时串行测量，避让编译，未采 CPU 功耗。用 uProf 内置 L3 配置的访问、未命中事件和 HX 370 的核心填充事件，每约 100 ms 采样一次。L3 计数覆盖目标所在的大核 CCX，核心计数只汇总绑核列表。将 uProf 原始采样的 QPC 时间戳与引擎阶段窗对齐，只纳入完整落在窗内的区间，并与 CSV 的时间与计数逐行核对。有效频率按 PDH 的活跃时间加权。[命令、原始计数与对齐脚本](../../data/experiments/cpu_stage2_bandwidth_uprof6/)
+
+| 负载 | 线程 | 阶段秒 | GHz | L3 未命中（百万/秒） | L3 未命中率 | 内存或 I/O 来源的核心填充（百万行/秒） | IPC |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 16k H 折叠 | 1 | 5.602 | 4.004 | 61.88 | 10.0% | 42.74 | 2.02 |
+| 16k H 折叠 | 2 | 3.434 | 4.001 | 222.06 | 22.3% | 100.67 | 1.69 |
+| 16k H 折叠 | 4 | 3.360 | 4.001 | 371.74 | 35.2% | 169.83 | 1.05 |
+| 3M giant | 1 | 32.438 | 4.004 | 55.90 | 22.3% | 9.82 | 2.51 |
+| 3M giant | 2 | 22.922 | 3.975 | 118.13 | 31.3% | 27.45 | 2.39 |
+| 3M giant | 4 | 21.359 | 3.967 | 235.97 | 46.6% | 75.00 | 1.69 |
+
+16k H 折叠从 2T 到 4T 只缩短 2.2%，L3 未命中速率却增加约 67%，IPC 从 1.69 降至 1.05。3M giant 从 2T 到 4T 缩短 6.8%，L3 未命中速率约翻倍。两档的有效频率变化都小。3M 的三个线程档均执行 27 次求逆，求逆合计约 9.1 秒，步进从 15.96 增到 32.71 线程秒。结合下节的流式压力对照，结果支持缓存和共享内存访问制约扩展。核心填充只记录指定来源返回到核心的缓存行，整机读、写流量及 DRAM 饱和程度仍需对应的控制器或 DF 事件。[16k 4T 对齐数据](../../data/experiments/cpu_stage2_bandwidth_uprof6/16k_4t/aligned.json) · [3M 4T 对齐数据](../../data/experiments/cpu_stage2_bandwidth_uprof6/3m_4t/aligned.json)
+
+### 16k H 折叠的线程分工实验
+
+沿用 16k、实际 B2=440 亿的固定条件，每种策略测两次。全曲线允许 4T，仅修改 H 折叠。2T 限制用 DLL `0e71215e53b369c7` 测试，3T 和 4T 协作由 DLL `331a529703681cb4` 测试。4T 协作时，线程共同处理同一条多项式 FFT 数据行。每组按正反顺序执行，表中为两次均值，与各自同 DLL 的默认路径配对。[两轮 H 分工原始记录](../../data/experiments/cpu_stage2_bandwidth_uprof6/)
+
+| H 折叠策略 | H 折叠秒，默认 → 候选 | H 的 L3 未命中（百万/秒），默认 → 候选 | 整曲线秒，默认 → 候选 | Job CPU 秒，默认 → 候选 |
+|---|---:|---:|---:|---:|
+| 限 2T | 3.419 → 3.547 | 414.0 → 251.7 | 10.86 → 11.02 | 31.94 → 27.84 |
+| 限 3T | 3.779 → 3.705 | 435.5 → 411.6 | 11.13 → 11.04 | 32.84 → 31.47 |
+| 4T 协作处理单行 | 3.779 → 4.929 | 435.5 → 124.5 | 11.13 → 12.22 | 32.84 → 27.13 |
+
+限 2T 以约 1.5% 的整曲线时间换来约 13% 的 CPU 时间节省。4T 协作把 H 的 L3 未命中速率降低约 71%，但折叠变慢约 30%，折叠窗口平均只活跃约 1.8 核。限 3T 的整曲线变化小于 1%。默认 H 分工保持不变。[限 2T](../../data/experiments/cpu_stage2_bandwidth_uprof6/h2_44b_r1/summary.json) · [限 3T](../../data/experiments/cpu_stage2_bandwidth_uprof6/hs_three_r1/summary.json) · [4T 协作](../../data/experiments/cpu_stage2_bandwidth_uprof6/hs_coop_r1/summary.json)
+
+### 3M giant 的梯形坐标复用
+
+用 DLL `0e71215e53b369c7` 在同一 M3033533 存档和 4T 条件下比较。候选让差分加法直接写入独立输出，再交换梯形中的坐标引用，省去中间坐标的复制。D/P、FFT、分母槽数与实际 B2 一致，每档一对。目标阶段的有效频率均约 3.95–3.97 GHz。
+
+| 实际 B2 | Giant 秒，原路径 → 复用 | Giant 的 L3 未命中（百万/秒），原路径 → 复用 | 整曲线秒，原路径 → 复用 |
+|---:|---:|---:|---:|
+| 3,600,000 | 4.282 → 4.525 | 178.00 → 160.26 | 23.69 → 23.82 |
+| 8,000,000 | 9.818 → 9.258 | 184.38 → 181.63 | 34.83 → 33.44 |
+| 19,602,870 | 22.483 → 22.396 | 218.27 → 183.47 | 57.14 → 57.83 |
+
+三个 B2 档的 L3 未命中速率均下降。长档下降约 16%，giant 墙钟只缩短约 0.4%，整曲线时间增加约 1.2%。梯形保留原实现。[长档原路径](../../data/experiments/cpu_stage2_bandwidth_uprof6/ladderbase_19m/aligned.json) · [长档复用](../../data/experiments/cpu_stage2_bandwidth_uprof6/ladderreuse_19m/aligned.json)
+
+### 4T 紧凑半块的 giant 分工
+
+紧凑半块中，各段需独立生成种子梯形，再在整批共用一次求逆。4T 时将 giant 每批最多分成三段，G 树、H 折叠和其他阶段沿用原线程数。用同一 DLL `465a5fbd68e2a94f` 比较 M3033533 的两档实际 B2，每档先测三段、再测四段，沿用 192 个分母槽。
+
+| 实际 B2 | Giant 秒，四段 → 三段 | 步进线程秒，四段 → 三段 | Giant 的 L3 未命中（百万/秒），四段 → 三段 | 整曲线秒，四段 → 三段 |
+|---:|---:|---:|---:|---:|
+| 8,000,000 | 9.827 → 9.150 | 14.440 → 10.611 | 189.28 → 170.22 | 33.87 → 33.68 |
+| 19,602,870 | 21.905 → 20.682 | 34.030 → 24.747 | 206.05 → 180.54 | 57.35 → 55.59 |
+
+三段分别缩短 giant 6.9% 和 5.6%，求逆次数保持为 12 和 27。长档整曲线缩短 3.1%，Job CPU 时间从 125.45 降至 120.53 秒，进程提交峰值从 3400.4 降至 3360.7 MiB。正式策略仅用于配置 4T 的紧凑半块。[长档四段](../../data/experiments/cpu_stage2_bandwidth_uprof6/giant4_19m/summary.json) · [长档三段](../../data/experiments/cpu_stage2_bandwidth_uprof6/giant3_19m/summary.json) · [逐档硬件样本](../../data/experiments/cpu_stage2_bandwidth_uprof6/)
+
+正式 DLL `b41acdc523576065` 在实际 B2=2,450,000 下覆盖一个 384 根满块和一个 290 根短尾。短尾每半块 145 根，无法均分为三段。各段首尾与直接梯形一致，三个 GMP 叶值投影通过，返回 NF，进程提交峰值为 3300.5 MiB。55 项 CPU Stage2 回归全部通过。[宽位投影](../../data/experiments/cpu_stage2_bandwidth_uprof6/final_projection/summary.json) · [CPU Stage2 回归](../../data/experiments/cpu_stage2_bandwidth_uprof6/regression/summary.json)
+
+## H 折叠的内存压力与 giant 分项
+
+在 Ryzen AI 9 HX 370 上用 GWNUM 31.6、计时 DLL `ddce882d7d8591e1` 逐次运行独立求逆基线。1T 绑逻辑 CPU 1，2T 绑 1、3，4T 绑 1、3、5、7。规划预算和 Windows Job 单进程提交量硬限均为 4096 MiB。关闭 B2 凑整和运行时调优，避让编译。每格一次，整曲线计入重构至引擎清理。未采集 CPU 功耗。[逐次命令与样本](../../data/experiments/cpu_stage2_bandwidth_07221/)
+
+16k 使用 M16319 的 16272 位余因子，B1=1000、σ=26、实际 B2=44,000,000,000、D/P=210210/20160，AVX-512 系数 FFT 长 896，共 10 块，保留完整 F 树。3M 使用 M3033533 的 3033447 位余因子，B1=50000、σ=85473165105590、实际 B2=19,602,870、D/P=3570/384，FFT 长 196608，共 14 块。三个线程档都固定紧凑 F 树和 192 个分母槽。[16k 输入](../../data/experiments/cpu_stage2_bandwidth_07221/base_16k_4t/command.json) · [3M 输入](../../data/experiments/cpu_stage2_bandwidth_07221/base_3m_4t/command.json)
+
+有效频率由 Windows PDH 的 `% Processor Performance` 乘以 2 GHz 标称频率估计。采样约每 100 ms 一次，只汇总完整落在目标阶段时间窗内的区间，按核活跃时间加权。目标阶段各线程档的有效频率估计均约 4.0 GHz。AMD uProf PCM 5.3.521 对本机 Family 1Ah Model 24h 报 `Missing configuration file - unsupported processor model`。直接 DRAM 读写带宽与 L3 未命中暂缺。[采样脚本](../../data/experiments/cpu_stage2_bandwidth_07221/bench.py) · [PCM 能力探测](../../data/experiments/cpu_stage2_bandwidth_07221/uprof-pcm-probe.txt)
+
+计时 DLL 用 `ECM_GWPOLY_TIMELINE` 构建，记录各块的 giant 和 H 折叠时间窗。重启后启用的 L3 计数和 DF 配置探测见 [uProf 6.0 实测](#uprof-60-的-l3-实测与线程分工)。
+
+| 线程 | 16k H 折叠秒（GHz） | 折叠窗口平均活跃核 | 3M giant 墙钟秒（GHz） | 3M 步进线程秒 | 3M 归一化线程秒 | 3M GMP 求逆线程秒（次数） |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 5.896（4.003） | 1.00 | 38.560（4.006） | 18.824 | 8.285 | 10.808（27） |
+| 2 | 3.868（4.000） | 1.99 | 26.002（4.001） | 22.202 | 8.230 | 19.481（53） |
+| 4 | 3.755（4.005） | 3.97 | 25.638（3.996） | 37.554 | 8.744 | 42.202（105） |
+
+Giant 的步进含种子梯形，归一化含前缀和反向扫描及进出 GW 格式的转换，求逆只计 `mpz_invert`。三项由各 worker 记录耗时再求和，线程同时执行的时间会重叠。Giant 墙钟还含缓冲分配与线程汇合。[计时实现](../../src/ecm/stage2/cpu/gwpoly.cpp)
+
+4T 另在两个共享独立 L3 的小核（逻辑 CPU 17、19）上用同一复制循环施压。对照每核反复复制 256 KiB，源和目标可留在 1 MiB L2。流式组每核复制 64 MiB。两组的大核有效频率估计均约 4.0 GHz，每种负载各测一次。[16k 缓存对照](../../data/experiments/cpu_stage2_bandwidth_07221/cache_16k_4t/summary.json) · [16k 流式对照](../../data/experiments/cpu_stage2_bandwidth_07221/stream_16k_4t/summary.json) · [3M 缓存对照](../../data/experiments/cpu_stage2_bandwidth_07221/cache_3m_4t/summary.json) · [3M 流式对照](../../data/experiments/cpu_stage2_bandwidth_07221/stream_3m_4t/summary.json)
+
+- 16k 的 H 折叠从 4.046 秒增到 6.034 秒（+49.1%）。无额外负载时从 2T 到 4T 只缩短 2.9%，4T 平均占用 3.97 核。这组对照支持 H 折叠受共享内存吞吐限制。
+- 3M 的 giant 墙钟从 26.273 秒增到 33.788 秒（+28.6%）。步进从 38.749 增到 60.637 线程秒（+56.5%），分母归一化从 9.142 增到 11.855 线程秒（+29.7%），求逆从 45.010 增到 46.606 线程秒（+3.5%）。额外流式负载主要拖慢步进和归一化。无额外负载时，2T 到 4T 的求逆次数从 53 增到 105，巨步墙钟只缩短 1.4%。
+
+流式负载的逻辑复制吞吐约 55.5–59.6 GB/s，按每次复制的源读和目标写字节合计。该值描述施加的负载。Stage2 的 DRAM 流量和内存控制器饱和程度仍需硬件计数器确认。
+
+16k 在同一 4T、实际 B2 和硬限下试测更大的 D/P。210210/20160、240240/23040、270270/25920 各一次，G 块为 10、8、6，H 折叠分别为 3.628、4.753、4.097 秒，整曲线为 11.08、12.08、12.30 秒。最大一档把系数 FFT 从 896 推到 1024。两个候选的折叠成本都上升，保留这组样本的 210210/20160。 [原几何](../../data/experiments/cpu_stage2_bandwidth_07221/geometry_16k_4t_D210210/summary.json) · [240240](../../data/experiments/cpu_stage2_bandwidth_07221/geometry_16k_4t_D240240/summary.json) · [270270](../../data/experiments/cpu_stage2_bandwidth_07221/geometry_16k_4t_D270270/summary.json)
+
+### 紧凑 giant 分母共用求逆
+
+紧凑布局中，同一分母批次的 worker 分别计算各自的前缀乘积，再用 GW 格式合并，只把总乘积转换给 GMP。沿批次反向分配各 worker 的负逆元后，各自完成归一化。各段保留原分母供因子恢复，分母槽数与 G 块几何沿用原计划。把每段乘积转换到 GMP 再合并的实验也减少了求逆次数，但 4T 长档 giant 从 25.301 增至 28.796 秒，整曲线从 60.98 增至 64.62 秒。[GMP 合并对照](../../data/experiments/cpu_stage2_bandwidth_07221/shared_3m_4t/summary.json)
+
+用同一 GW 计时 DLL `0509b47e1ce2ebad` 开关共用求逆，沿用上述 3M 存档、绑核、D/P、系数 FFT 和 4 GiB 硬限。每格一对。长档先测共用，800 万档先测独立。引擎计时均从曲线重构至清理，Job CPU 秒包括计算线程与采样进程。六次均返回 NF。
+
+| 实际 B2 · 线程 | G 块 | 求逆次数，独立 → 共用 | Giant 秒 | 整曲线秒 | Job CPU 秒 |
+|---|---:|---:|---:|---:|---:|
+| 19,602,870 · 4T | 14 | 105 → 27 | 29.135 → 24.452 | 68.90 → 63.47 | 159.77 → 128.89 |
+| 8,000,000 · 4T | 6 | 48 → 12 | 11.266 → 9.974 | 36.52 → 35.20 | 80.50 → 68.22 |
+| 8,000,000 · 2T | 6 | 24 → 12 | 11.087 → 10.778 | 42.04 → 41.52 | 67.17 → 62.11 |
+
+两组 4T 的 giant 分别缩短 16.1% 和 11.5%，整曲线缩短 7.9% 和 3.6%。同一长档在另一轮独立求逆曾用 61.92 秒，绝对墙钟受运行条件影响。长档的进程提交峰值为 3397.7 → 3400.5 MiB。[长档独立](../../data/experiments/cpu_stage2_bandwidth_07221/gw_independent_3m_4t/summary.json) · [长档共用](../../data/experiments/cpu_stage2_bandwidth_07221/gw_shared_3m_4t/summary.json) · [800 万档](../../data/experiments/cpu_stage2_bandwidth_07221/)
+
+3M／4T 在实际 B2=3,600,000 下覆盖两个 384 根满块和一个 228 根短尾，六次共用求逆后通过各段首尾的直接梯形核对和三个 GMP 叶值投影。结果为 NF，进程提交峰值为 3417.8 MiB。[宽位投影](../../data/experiments/cpu_stage2_bandwidth_07221/gw_shared_projection/summary.json)
+
+正式路径 DLL `292a531c4bdafe6e` 通过 55 项 CPU Stage2 回归，包含总分母乘积模 N 为零时从单个分母恢复真因子的自测。[CPU Stage2 回归](../../data/experiments/cpu_stage2_bandwidth_07221/regression/summary.json)
+
 ## 紧凑 F 系数打包与解包
 
 用同一计时 DLL `df9f690de977bb11` 分别运行全串行、仅并行打包、仅并行解包和两项并行。每个输入按正反顺序各测一轮，固定实际 B2=2,000,000、D/P=3570/384、紧凑半块布局及 4096 MiB 规划预算和 Windows Job 进程提交量硬限。两端沿用 GWNUM 31.6、AVX-512 FFT 196608，关闭 tune 和 B2 凑整。Ryzen AI 9 HX 370 的 4P 样本使用 M3033533 余因子（B1=50000，逻辑 CPU 1、3、5、7），4E 样本使用 M2813323 余因子（B1=250000，逻辑 CPU 17、19、21、23）。避让编译，主机另有 RTX 4070 Ti 任务，未采集 CPU 频率和功耗。[逐次命令与数据](../../data/experiments/cpu_stage2_f_conversion/)

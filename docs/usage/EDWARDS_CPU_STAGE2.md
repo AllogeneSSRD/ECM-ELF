@@ -42,6 +42,8 @@ Stage1 的 N 由标准输入提供；上例的 `--exponent 127` 仅适用于保�
 
 紧凑 F 树打包和解包时，把同一行系数分给多个线程，每个分工线程至少分到 32 个系数，线程数受任务设置约束。`gwpoly-ftree-conversion` 分别报告 `pack_seconds` 和 `unpack_seconds`。这两项分别已计入 F 建树和下降用时。[分项性能对照](../performance/CPU_GWPOLY_STAGE2.md#紧凑-f-系数打包与解包)
 
+紧凑布局的同批 giant 分母在多个线程各自完成前缀乘积后合并，只对总乘积调用一次 GMP 求逆。配置 4T 且使用紧凑半块时，每批 giant 最多分为三段，以减少种子梯形开销。G 树和 H 折叠沿用各自的线程策略。`gwpoly-giant` 报告 `lane_limit`。`gwpoly-giant-timing` 累计步进、归一化和 GMP 求逆的线程秒，并报告求逆次数。各线程耗时可重叠，giant 墙钟见 `gwpoly-phases`。[紧凑半块的分工对照](../performance/CPU_GWPOLY_STAGE2.md#4t-紧凑半块的-giant-分工)
+
 在能减少至少一个 G 块时，CPU 只遍历原 giant 网格的高位后缀，保留原终点和小素数检查。日志 `gwpoly-range` 给出原起点、当前起点与终点。后缀发现因子或分母／GCD 饱和时，释放工作区，按完整区间重算后再交付因子或报告错误。中断和舍入错误直接上报。[覆盖与因子恢复](../reference/ECM_STAGE2_RELOCATION.md)
 
 ### 将 B2 扩展到整块
