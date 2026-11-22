@@ -1235,6 +1235,22 @@
     },
     {
       "owner": "stage1",
+      "key": "ntt_batch_target_percent",
+      "field": "ntt_batch_target_percent",
+      "type": "int",
+      "default": 95,
+      "domain": "[1,100]",
+      "fx": "NTT tune(S1 CUDA)",
+      "parser": "legacy",
+      "minimum": 1,
+      "maximum": 100,
+      "description": [
+        "Select the smallest eligible CUDA Stage1 NTT batch reaching this percentage of the fastest saved throughput.",
+        "CUDA Stage1 NTT 生产选批从可用记录中选择吞吐达到峰值指定百分比的最小曲线数。"
+      ]
+    },
+    {
+      "owner": "stage1",
       "key": "ntt_memory_mib",
       "field": "ntt_memory_mib",
       "type": "int",

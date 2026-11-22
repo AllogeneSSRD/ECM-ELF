@@ -41,6 +41,9 @@ bool read_config(const std::string& path, ParsedConfig& parsed, int active_worke
                     else if (key == "ntt_max_batch")
                         valid = scratch.ntt_max_batch >= ecm_config::limits::stage1_ntt_max_batch_minimum &&
                                 scratch.ntt_max_batch <= ecm_config::limits::stage1_ntt_max_batch_maximum;
+                    else if (key == "ntt_batch_target_percent")
+                        valid = scratch.ntt_batch_target_percent >= ecm_config::limits::stage1_ntt_batch_target_percent_minimum &&
+                                scratch.ntt_batch_target_percent <= ecm_config::limits::stage1_ntt_batch_target_percent_maximum;
                     else if (key == "ntt_pad_batch")
                         valid = scratch.ntt_pad_batch == 0 || scratch.ntt_pad_batch == 1;
                     else if (key == "ntt_warp_tail")

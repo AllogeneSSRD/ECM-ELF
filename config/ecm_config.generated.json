@@ -1,15 +1,15 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "94ce74940b2450d22f36de9db1bd2ae2a564f3375a6534b1a57e24b218a8c905",
-    "src/ecm/platform/generated/configuration_defaults.h": "315c66c3c10c65cc686e39d9690fa0f2449aa6da50ca9d2481cdf8fe4441d027",
-    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "6de5ddfa6caa939128f369b30c264e309a6e0d9fccb9e3d16132fa37c18a2250",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "a9ef3cd547eaa59cdb2c4d1cbaf4d7b067ca5d26943b2acd2b3620a26a82d90c",
+    "src/ecm/platform/generated/configuration_defaults.h": "e514827fd489143189674aa93ff6ef05abcea6e425c344f7ab294bfa094c6cc3",
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "a6cbec9b601d92097012a2c0c3038c67fd651926f4b43f081f6d8176d1ec66dd",
     "src/ecm/application/configuration/generated/ecm_toml_template.h": "dca7c2ab01bf354de007e218d1a3567a226e1664c30f1d3469d762f86858f278",
     "config/ecm.toml.default": "1dca67ff7d349759cb55f38e2f29866a2dd3cc4f275d199b5730445d2cbcf990",
-    "config/ecm.toml.example": "fb93fe3a5bd1260a449c865d2c29b7917f9d9a10487710bf6c4a12807a92386a",
-    "docs/ECM_TOML_REFERENCE.en.md": "de94ef919e37e2a870ce3100153c4cd19a5c49efbf0ebf368099c2a5f95ce373",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "bf6ada4600d55395624d6150a7e1c8cad1b15aaee63b637598e94163185a6d14",
-    "config/ecm_options.json": "263508b2c676a104ca464fc4ccdac5d788f240aab4d40a9a27a5ffcbe4228e6a",
+    "config/ecm.toml.example": "1a6e2492d6e9d1b6bf776f434ec344cd0081aaca746a0dc075c6e06ac2887a4d",
+    "docs/ECM_TOML_REFERENCE.en.md": "45518a82f4ab78687411fba570fcc84725cfe029a14674929199aa15d83d1230",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "af95289b067319b54a1edae1d5dc38c3403b506838703d7fcae6e052f71fd1f0",
+    "config/ecm_options.json": "b526d96821a8cb7ce7f722f24beeab7c42b2392ec90fb30422797497fa3c966c",
     "tools/gen/generate_ecm_config.py": "21f961c8ed18725d03632a59ee56647a5abf93f2a204ddbae8083130feb92f77"
   }
 }

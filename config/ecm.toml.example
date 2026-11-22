@@ -439,6 +439,11 @@ target = "gpu"  # string: [cpu|gpu]
 # CUDA Stage1 NTT 调优和生产每个新批次的曲线数上限。各变换长度和 NAF 窗口的实际容量还受内存预算限
 # 制。
 
+# ntt_batch_target_percent = 95  # int: [1,100]
+# Select the smallest eligible CUDA Stage1 NTT batch reaching this percentage of the fastest saved
+# throughput.
+# CUDA Stage1 NTT 生产选批从可用记录中选择吞吐达到峰值指定百分比的最小曲线数。
+
 # ntt_memory_mib = 0  # int: [0,1048576]
 # Total Stage1 NTT VRAM budget in MiB. Zero uses 80% of free VRAM after CUDA initialization. An
 # explicit cap is also bounded by available VRAM.

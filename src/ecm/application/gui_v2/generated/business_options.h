@@ -73,6 +73,7 @@ inline constexpr BusinessOption business_options[]={
     {"stage1","ntt_tight_weighted_bound","[false|true|0|1]","option_stage1_ntt_tight_weighted_bound","bool",false,false,0,0},
     {"stage1","ntt_tune_file","<path>","option_stage1_ntt_tune_file","string",false,false,0,0},
     {"stage1","ntt_max_batch","[1,512]","option_stage1_ntt_max_batch","int",true,true,1,512},
+    {"stage1","ntt_batch_target_percent","[1,100]","option_stage1_ntt_batch_target_percent","int",true,true,1,100},
     {"stage1","ntt_memory_mib","[0,1048576]","option_stage1_ntt_memory_mib","int",true,true,0,1048576},
     {"stage1","ntt_length","0, 2^k in [2,524288], or 5*2^k in [2560,163840] (weighted)","option_stage1_ntt_length","int",true,true,0,524288},
     {"stage1","ntt_bpw","0 or [16,31]","option_stage1_ntt_bpw","int",true,true,0,31},

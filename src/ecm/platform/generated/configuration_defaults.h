@@ -73,6 +73,7 @@ inline constexpr int stage1_ntt_pad_batch=0;
 inline constexpr bool stage1_ntt_tight_weighted_bound=true;
 inline constexpr char stage1_ntt_tune_file[]="tune.toml";
 inline constexpr int stage1_ntt_max_batch=512;
+inline constexpr int stage1_ntt_batch_target_percent=95;
 inline constexpr int stage1_ntt_memory_mib=0;
 inline constexpr int stage1_ntt_length=0;
 inline constexpr int stage1_ntt_bpw=0;

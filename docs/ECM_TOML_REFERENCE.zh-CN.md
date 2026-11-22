@@ -437,6 +437,16 @@ ntt_allow_known_factors = 1
 
 1 允许带已知因子的梅森任务使用完整 2^p-1 进行 NTT 运算。曲线构造、因子检查和发布存档使用剩余余因子。0 禁用此承载路径。算法切片仍按余因子的位宽匹配。
 
+### ntt_batch_target_percent
+
+```toml
+ntt_batch_target_percent = 95
+```
+
+类型 `int` · 范围 `[1,100]` · Worker 覆盖 `[worker.N] ntt_batch_target_percent` · 级别 `高级`。
+
+CUDA Stage1 NTT 生产选批从可用记录中选择吞吐达到峰值指定百分比的最小曲线数。
+
 <a id="ntt_bpw"></a>
 
 ### ntt_bits_per_word

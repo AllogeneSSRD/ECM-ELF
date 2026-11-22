@@ -149,12 +149,12 @@ Fields encode(const Measurement& m, unsigned iterations) {
     return row;
 }
 
-std::vector<Fields> compact_batch_rows(std::vector<Fields> rows, const std::string& search);
+std::vector<Fields> compact_batch_rows(std::vector<Fields> rows, const std::string& search, unsigned selected_batch = 0);
 bool fits_recorded_memory(const Fields&, const Device&, const ecm_stage1::Stage1Request&);
 
 void persist(const std::string& path, const Device& device, std::vector<Fields> rows,
              const std::string& replace_scope = {}, bool partial = false, bool observation = false,
-             const std::string& forced_search = {}, const ecm_stage1::Stage1Request* request = nullptr) {
+             const std::string& forced_search = {}, const ecm_stage1::Stage1Request* request = nullptr, unsigned selected_batch = 0) {
     if (path.empty() || rows.empty()) return;
     const auto parent = std::filesystem::path(path).parent_path();
     if (!parent.empty()) std::filesystem::create_directories(parent);
@@ -177,7 +177,7 @@ void persist(const std::string& path, const Device& device, std::vector<Fields> 
                     fits_recorded_memory(old,device,*request))
                     merged.update_stage1_ntt(old);
             for (auto& row : rows) merged.update_stage1_ntt(std::move(row));
-            rows = compact_batch_rows(std::move(merged.stage1_ntt),forced_search);
+            rows = compact_batch_rows(std::move(merged.stage1_ntt),forced_search,selected_batch);
         }
         // A shorter interrupted run must not evict a completed search.
         if (partial && std::any_of(db.stage1_ntt.begin(),db.stage1_ntt.end(),
@@ -635,14 +635,14 @@ struct BatchRate {
     unsigned repeats = 0;
 };
 
-unsigned recommended_batch(const std::map<unsigned, BatchRate>& rows, unsigned min_repeats = 1) {
+unsigned recommended_batch(const std::map<unsigned, BatchRate>& rows, unsigned percent = 95) {
     double peak = 0;
     for (const auto& item : rows)
-        if (item.second.repeats >= min_repeats)
+        if (item.second.repeats)
             peak = std::max(peak, item.second.rate);
     if (peak)
         for (const auto& item : rows)
-            if (item.second.repeats >= min_repeats && item.second.rate >= near_peak * peak)
+            if (item.second.repeats && item.second.rate >= (percent / 100.0) * peak)
                 return item.first;
     return 0;
 }
@@ -731,7 +731,7 @@ std::string throughput_change(double current, double previous) {
     return change;
 }
 
-void report_batches(const std::map<BatchRole,Score>& scores, const Score& old95, const Score& measured95, unsigned p, unsigned w) {
+void report_batches(const std::map<BatchRole,Score>& scores, const Score& old95, const Score& measured95, unsigned p, unsigned w, unsigned percent = 95) {
     if (old95.rate > 0 && measured95.rate > 0) {
         const auto& published = scores.at(Economical);
         const bool changed = published.batch != old95.batch || published.rate != old95.rate;
@@ -744,8 +744,9 @@ void report_batches(const std::map<BatchRole,Score>& scores, const Score& old95,
     }
     std::vector<std::array<std::string,8>> rows;
     std::array<int,6> widths{};
+    const auto target_label = std::to_string(percent) + "%";
     for (const auto& [role,label] : {std::pair{Single,"Single"}, {Capacity,"Max"},
-                                    {Fastest,"Best"}, {Economical,"95%"}}) {
+                                    {Fastest,"Best"}, {Economical,target_label.c_str()}}) {
         const auto found = scores.find(role);
         if (found == scores.end()) continue;
         const auto& s = found->second;
@@ -769,7 +770,7 @@ SamplePhase sample_phase(const Fields& row) {
     return static_cast<SamplePhase>(pt::optional_uint(row,"sample_phase",legacy));
 }
 
-std::vector<Fields> compact_batch_rows(std::vector<Fields> rows, const std::string& search) {
+std::vector<Fields> compact_batch_rows(std::vector<Fields> rows, const std::string& search, unsigned selected_batch) {
     using ecm_stage2::tune::uint;
     // Compare fine measurements when available. Coarse-only families still
     // establish a genuine upper admission endpoint even if pruned in refinement.
@@ -794,6 +795,9 @@ std::vector<Fields> compact_batch_rows(std::vector<Fields> rows, const std::stri
     roles[winners.rbegin()->first] |= Capacity;
     roles[best->first] |= Fastest;
     roles[economic->first] |= Economical;
+    // Keep the requested target available to production alongside the
+    // standard cached roles, even when fresh anchor rates differ from history.
+    if (selected_batch) roles.try_emplace(selected_batch,0);
     std::vector<Fields> retained;
     for (size_t i=0; i<rows.size(); ++i) {
         auto& row=rows[i];
@@ -1065,7 +1069,7 @@ public:
         return true;
     }
 
-    void save_batches(const std::string& scope, const std::string& search, bool complete) {
+    void save_batches(const std::string& scope, const std::string& search, bool complete, unsigned selected_batch) {
         using ecm_stage2::tune::uint;
         std::vector<Fields> rows = std::move(pending_);
         for (auto i : hits_) rows.push_back(history_[i]);
@@ -1077,15 +1081,15 @@ public:
         }
         if (!complete && !checkpoint_.empty()) persist(checkpoint_,device_,rows);
         if (grid_.force && complete)
-            persist(request_.options.execution.ntt.tune_file,device_,std::move(rows),scope,false,false,search,&request_);
+            persist(request_.options.execution.ntt.tune_file,device_,std::move(rows),scope,false,false,search,&request_,selected_batch);
         else {
-            auto retained = compact_batch_rows(std::move(rows),complete ? search : std::string{});
+            auto retained = compact_batch_rows(std::move(rows),complete ? search : std::string{},selected_batch);
             persist(request_.options.execution.ntt.tune_file,device_,std::move(retained),scope,!complete);
         }
         if (complete) finish_checkpoint();
     }
     Score sample(const Stage1NttOptions& options, unsigned batch, SamplePhase phase,
-                 Fields* remeasurement = nullptr, unsigned saved_target = 0) {
+                 Fields* remeasurement = nullptr, unsigned saved_target = 0, bool fresh = false) {
         const unsigned groups = phase == SamplePhase::Fine ? grid_.fine_repeats : grid_.coarse_repeats;
         const unsigned target = remeasurement ? saved_target : grid_.group_ms;
         if (ecm_stage1_stop_requested()) throw Cancelled();
@@ -1119,7 +1123,7 @@ public:
                         plan.tile,plan.outer_max,plan.window,target,best.rate,radix5_layout_name(plan));
                 return best;
             };
-            if (!remeasurement) {
+            if (!remeasurement && !fresh) {
                 if (auto hit = lookup(pending_, false); hit.rate) return observe(phase,hit);
                 if (auto hit = lookup(history_, true); hit.rate) return observe(phase,hit);
             }
@@ -1234,7 +1238,7 @@ struct WindowSearch {
     double single = 0, peak = 0;
     bool reached_caps = true, cached_fine = false, persisted = false;
     double seconds = 0;
-    std::map<BatchRole,Score> cached;
+    std::map<BatchRole,Score> cached, found;
     std::map<unsigned,Score> finals;
 
     WindowSearch(const Device& device, const ecm_stage1::Stage1Request& request, unsigned p, unsigned w,
@@ -1292,8 +1296,7 @@ struct WindowSearch {
         matrix.open_checkpoint(scope.str(),search.str());
         cached_fine = matrix.restore_batches(scope.str(),search.str(),cached,capacity);
         if (cached_fine) old95 = cached.at(Economical);
-        else
-            matrix.restore_batches(scope.str(),search.str()+"/screen",cached,capacity);
+        else matrix.restore_batches(scope.str(),search.str()+"/screen",cached,capacity);
     }
 
     void coarse() {
@@ -1408,60 +1411,44 @@ struct WindowSearch {
         }
     }
 
-    void find95() {
+    void find_target() {
         if (grid.batch_explicit) restore_fine_scores(finals,FineHistory::All);
-        if (cached_fine) {
-            auto& best = cached.at(Fastest);
-            const double previous = best.rate;
-            matrix.recheck(best,scope.str(),search.str());
-            if (best.rate > previous)
-                matrix.restore_batches(scope.str(),search.str(),cached,capacity);
-            for (auto role : {Economical, Fastest}) {
-                const auto& score = cached.at(role);
-                finals[score.batch] = score;
-            }
-            restore_fine_scores(finals,FineHistory::Hits);
-        }
-        auto best = std::max_element(finals.begin(),finals.end(),[](const auto& a,const auto& b){
-            return a.second.rate < b.second.rate;
-        })->second;
-        if (grid.batch_explicit && !matrix.measured) {
-            matrix.recheck(best,{},{});
-            finals[best.batch] = best;
-        }
-        ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_find95: p=%u naf=%u best_batch=%u graph=%u\n",
-                       p,w,best.batch,best.plan.window);
-        matrix.header_pending = true;
-        auto options = fixed_plan(families.front().options,best.plan);
-        unsigned low = grid.batch.first-1, high = best.batch;
-        while (high > low+1) {
-            const unsigned mid = low+(high-low)/2;
-            const auto score = matrix.sample(options,mid,SamplePhase::Fine);
-            if (score.rate && score.rate > finals[mid].rate) finals[mid] = score;
-            const auto at = finals.find(mid);
-            if (at != finals.end() && at->second.rate > best.rate) {
-                best = at->second;
-                options = fixed_plan(options,best.plan);
-            }
-            if (at != finals.end() && at->second.rate >= near_peak*best.rate) high = mid;
-            else low = mid;
-        }
-        if (cached_fine) {
-            cached[Fastest] = best;
-            cached[Economical] = std::find_if(finals.begin(),finals.end(),[&](const auto& item){
-                return item.second.rate >= near_peak*best.rate;
+        const auto peak = cached_fine ? cached.at(Fastest) :
+            std::max_element(finals.begin(),finals.end(),[](const auto& a,const auto& b){
+                return a.second.rate < b.second.rate;
             })->second;
-            for (auto role : {Single,Capacity}) {
-                auto it = cached.find(role);
-                if (it == cached.end()) continue;
-                auto improved = finals.find(it->second.batch);
-                if (improved != finals.end() && improved->second.rate > it->second.rate)
-                    it->second = improved->second;
+        const auto single_plan = cached_fine && cached.count(Single) ? cached.at(Single).plan :
+                                 finals.count(1) ? finals.at(1).plan : peak.plan;
+        auto options = fixed_plan(families.front().options,peak.plan);
+        round_header(p,w,"find_anchors");
+        matrix.header_pending = true;
+        // When the peak itself is at one curve there is only one anchor.
+        const auto single = matrix.sample(peak.batch == 1 ? options : fixed_plan(options,single_plan),
+                                          1,SamplePhase::Fine,nullptr,0,true);
+        auto best = peak.batch == 1 ? single : matrix.sample(options,peak.batch,SamplePhase::Fine,nullptr,0,true);
+        if (!single.rate || !best.rate) throw BudgetError("could not remeasure Stage1 NTT find anchors");
+        ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_find: p=%u naf=%u target=%u best_batch=%u graph=%u\n",
+                       p,w,grid.find_percent,best.batch,best.plan.window);
+        matrix.header_pending = true;
+        auto selected = best;
+        // Batch throughput need not be monotone. Check the smaller batches
+        // in ascending order, reusing compatible fine timings for interiors.
+        for (unsigned batch=grid.batch.first; batch<peak.batch; ++batch) {
+            const auto score = batch == 1 ? single : matrix.sample(options,batch,SamplePhase::Fine);
+            if (score.rate > best.rate) best = score;
+            if (score.rate > (grid.find_percent / 100.0) * best.rate) {
+                selected = score;
+                break;
             }
         }
+        found = {{Single,single},{Capacity,capacity},{Fastest,best},{Economical,selected}};
     }
 
     void report(bool repeat) {
+        if (!found.empty()) {
+            report_batches(found,{},{},p,w,grid.find_percent);
+            return;
+        }
         if (cached_fine) {
             if (repeat) {
                 auto& best = cached.at(Fastest);
@@ -1490,7 +1477,7 @@ struct WindowSearch {
         if (grid.batch_explicit) matrix.flush(true);
         else {
             const auto id = search.str() + (reached_caps ? "" : "/recheck") + (refined ? "" : "/screen");
-            matrix.save_batches(scope.str(),id,complete);
+            matrix.save_batches(scope.str(),id,complete,found.empty() ? 0 : found.at(Economical).batch);
         }
     }
 };
@@ -1531,12 +1518,12 @@ bool tune_windows(const Device& device, const ecm_stage1::Stage1Request& request
                                p,trial.w,trial.capacity.batch,trial.capacity.rate,unsigned(advance));
             const bool refined = advance && trial.refine(exhaustive);
             finished |= refined;
-            if (refined && grid.find95) trial.find95();
-            if (trial.cached.empty() || (refined && (!trial.cached_fine || grid.find95)))
+            if (refined && grid.find_percent) trial.find_target();
+            if (trial.cached.empty() || (refined && (!trial.cached_fine || grid.find_percent)))
                 trial.save(!advance || refined,refined);
             else trial.matrix.finish_checkpoint();
             trial.persisted = true;
-            if (refined) trial.report(recheck_cached && !grid.find95 && !trial.matrix.measured);
+            if (refined) trial.report(recheck_cached && !grid.find_percent && !trial.matrix.measured);
             trial.matrix.release_calibration();
             trial.matrix.report_lengths();
             ecm_log_accent(EcmLogAccent::Report,"stage1_ntt_tune: p=%u measured=%u reused=%zu seconds=%.3f naf=%u\n",
@@ -1838,7 +1825,7 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
     } catch (const std::exception& e) {
         ecm_ts_fprintf(stderr, "Stage1 NTT batch tune read: %s\n", e.what());
     }
-    const unsigned tuned = recommended_batch(eligible);
+    const unsigned tuned = recommended_batch(eligible,exec.ntt.batch_target_percent);
     const unsigned seed = tuned ? tuned : std::min(cap, 64u);
     unsigned selected = seed;
     const char* source = tuned ? (runtime_winner[tuned] ? "production" : "tune") : "default";

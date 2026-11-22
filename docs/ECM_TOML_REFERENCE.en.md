@@ -437,6 +437,16 @@ Type `int` · Range `[0|1]` · Worker override `[worker.N] ntt_allow_known_facto
 
 1 allows Mersenne assignments with known factors to use NTT arithmetic modulo the full 2^p-1. Construction, factor checks and published saves use the remaining cofactor. 0 excludes this carrier path. Algorithm slice rules still match the cofactor bit width.
 
+### ntt_batch_target_percent
+
+```toml
+ntt_batch_target_percent = 95
+```
+
+Type `int` · Range `[1,100]` · Worker override `[worker.N] ntt_batch_target_percent` · Level `advanced`.
+
+Select the smallest eligible CUDA Stage1 NTT batch reaching this percentage of the fastest saved throughput.
+
 <a id="ntt_bpw"></a>
 
 ### ntt_bits_per_word

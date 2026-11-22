@@ -41,7 +41,7 @@ def main():
         for i, line in enumerate(lines):
             if "stage1_ntt_tune:" in line:
                 assert re.fullmatch(prefix + r"=+", lines[i+1]), name
-            if "stage1_ntt_round:" in line or "stage1_ntt_pfa_scan:" in line or "stage1_ntt_graph_scan:" in line or "stage1_ntt_find95:" in line:
+            if "stage1_ntt_round:" in line or "stage1_ntt_pfa_scan:" in line or "stage1_ntt_graph_scan:" in line or "stage1_ntt_find:" in line:
                 first_measurement = True
             header = prefix + "length max_exp ntt_type batch iter/s dataflow actual/target steps/group steps/block radix5_layout"
             if re.fullmatch(header, line):
@@ -69,7 +69,7 @@ def main():
     for index, spec in enumerate(("force=2", "force,force=0", "exp=61,length=8", "naf=12-6", "batch=0", "batch=513",
                                   "exp=31", "time=0", "ntt,naf=6,naf=7", "typo=1",
                                   "repeat=2", "repeat=1:0", "repeat=:2", "repeat=21:1",
-                                  "find95=2", "find95,find95=1", "repeat=1:2:3", "repeat=2:2,repeat=1:1")):
+                                  "find", "find=", "find=0", "find=100", "find95", "find=1,find=99", "repeat=1:2:3", "repeat=2:2,repeat=1:1")):
         log = run(f"bad{index}", ["-tune", spec], success=False)
         assert "INPUT[cli]" in log
         if spec == "exp=61,length=8":
@@ -236,13 +236,13 @@ def main():
             ["-tune", "ntt,exp=3000000,time=1"], success=False)
 
     database = out / "pfa_force.toml"
-    flags = ["-tune", "length=2560,naf=6,time=0.01,find95", "32"]
+    flags = ["-tune", "length=2560,naf=6,time=0.01,find=95", "32"]
     settings = "ntt_max_batch = 2"
     def mixed_run(name, args):
         return run(name, args, settings=settings, convolution="weighted")
 
     def check_scan(log):
-        phases = ["phase=coarse", "phase=fine", "stage1_ntt_pfa_scan:", "stage1_ntt_graph_scan:", "stage1_ntt_find95:"]
+        phases = ["phase=coarse", "phase=fine", "stage1_ntt_pfa_scan:", "stage1_ntt_graph_scan:", "stage1_ntt_find:"]
         offsets = [log.index(phase) for phase in phases]
         assert offsets == sorted(offsets)
         before = log[:offsets[2]]
@@ -271,7 +271,7 @@ def main():
     check_scan(mixed_run("pfa_force", [flags[0], flags[1] + ",force", flags[2]]))
     assert any(r["iter_per_s"] == old_peak and r.get("batch_roles",0) & 4 for r in rows())
     assert any(layout_key(r) in old_rates and r["iter_per_s"] > old_rates[layout_key(r)] for r in rows())
-    hot = mixed_run("pfa_hot", [flags[0],flags[1].replace(",find95",",force=0"),flags[2]])
+    hot = mixed_run("pfa_hot", [flags[0],flags[1].replace(",find=95",",force=0"),flags[2]])
     assert "stage1_ntt_pfa_scan:" not in hot and "stage1_ntt_recheck:" in hot
 
     database = out / "recheck_roles.toml"
@@ -296,16 +296,29 @@ def main():
     assert re.search(r"2c, [\d.e+]+ vs 1c, 99 \(old\)  \+[\d.]+%, status=updated", log)
     assert {r["batch"]: r["batch_roles"] for r in rows() if (2, 2) in coverage(r)} == {1: 1, 2: 14}
 
-    # The old 95% batch is a cache hit. Only Best gets a fresh timing.
+    # Seed an unattainable historical peak to check both fresh anchor measurements.
     for row in values:
         row[fields.index("iter_per_s")] *= 10000
         for key in ("total_device_ms", "median_ms", "stddev_seconds"):
             row[fields.index(key)] /= 10000
     write_matrix(text, fields, values)
-    log = run("roles_kept_cached95", [flags[0], flags[1] + ",find95", flags[2]], settings=limits)
-    fresh = re.search(r"([\d.e+]+) vs 1000000 \(old\)  -[\d.]+%, status=kept", log)[1]
-    assert f"2c, {fresh} vs 1c, 990000 (old)" in log
-    assert re.search(r"95% +\d+ +\d+ +\S+ +1c +990000 iter/s", log)
+    log = run("roles_kept_cached95", [flags[0], flags[1] + ",find=95", flags[2]], settings=limits)
+    def anchors(log):
+        section = log.split("phase=find_anchors", 1)[1].split("stage1_ntt_find:", 1)[0]
+        return list(map(int, re.findall(r" (\d+)c [\d.]+ iter/s", section)))
+    assert anchors(log) == [1, 2]
+    current_peak = float(re.search(r"Best +\d+ +\d+ +\S+ +\d+c +([\d.]+) iter/s", log)[1])
+    assert current_peak < 990000 and max(r["iter_per_s"] for r in rows()) == 1000000
+
+    # A request larger than max_batch exercises the production scheduler.
+    for percent, expected in ((1,1),(99,1),(100,2)):
+        log = run(f"batch_target_{percent}", ["--param","e","-gpucurves","3","-sigma","26","32","32"],
+                  stdin="2^127-1\n", settings=limits + f"\nedwards_naf_window_bits = 6\nntt_batch_target_percent = {percent}")
+        assert re.search(rf"stage1_ntt_batch_selection: .*remaining=3 batch={expected} ", log), log
+    for percent in (0,101):
+        log = run(f"invalid_target_{percent}", ["-tune","length=16"],
+                  settings=f"ntt_batch_target_percent = {percent}", success=False)
+        assert "ntt_batch_target_percent" in log
 
     for cap in (0, 513):
         log = run(f"invalid_cap_{cap}", ["-tune", "exp=127,batch=1"], settings=f"ntt_max_batch = {cap}", success=False)
@@ -396,9 +409,9 @@ def main():
     assert len({r["batch"] for r in rows()}) <= 4 and not checkpoints[0].exists()
 
     database = out / "find95_first_run.toml"
-    log = run("find95_first_run", ["-tune", "length=16,naf=6,time=0.01,find95", "16"],
+    log = run("find95_first_run", ["-tune", "length=16,naf=6,time=0.01,find=95", "16"],
               settings="ntt_max_batch = 8")
-    assert log.index("stage1_ntt_graph_scan:") < log.index("stage1_ntt_find95:") < log.index("Single ")
+    assert log.index("stage1_ntt_graph_scan:") < log.index("stage1_ntt_find:") < log.index("Single ")
     best, = (r for r in rows() if r["batch_roles"] & 4)
     economical, = (r for r in rows() if r["batch_roles"] & 8)
     assert economical["iter_per_s"] >= 0.95 * best["iter_per_s"]
@@ -412,22 +425,27 @@ def main():
             return run(f"find95_{label}_{tag}", ["-tune", spec + extra, "16"], settings=settings)
         def best_batch(log):
             return int(re.search(r"Best +\d+ +\d+ +\S+ +(\d+)c ", log)[1])
-        cold = search("cold", ",find95=0")
-        assert "stage1_ntt_find95:" not in cold
-        for tag, extra in (("enabled", ",find95"), ("repeat", ",find95=1")):
+        cold = search("cold", "")
+        assert "stage1_ntt_find:" not in cold
+        for tag, percent in (("enabled", 1), ("repeat", 99)):
+            extra = f",find={percent}"
             log = search(tag, extra)
-            start = re.search(r"stage1_ntt_find95: .*best_batch=(\d+) graph=(\d+)", log)
-            assert start and int(start[1]) == best_batch(cold)
+            start = re.search(r"stage1_ntt_find: .*best_batch=(\d+) graph=(\d+)", log)
+            assert start and anchors(log) == ([1] if int(start[1]) == 1 else [1,int(start[1])])
             assert log.find("stage1_ntt_graph_scan:") < start.start()
             b = best_batch(log)
-            report = re.search(r"95% +\d+ +\d+ +\S+ +(\d+)c ", log)
+            report = re.search(rf"{percent}% +\d+ +\d+ +\S+ +(\d+)c ", log)
             assert (2 if batch_arg else 1) <= int(report[1]) <= b <= 8
             saved = rows()
             if not batch_arg:
-                assert {r["batch"] for r in saved if r["batch_roles"] & 4} == {b}
-                assert {r["batch"] for r in saved if r["batch_roles"] & 8} == {int(report[1])}
-                assert len({r["batch"] for r in saved}) <= 4
+                assert int(report[1]) in {r["batch"] for r in saved}
+            if percent == 1:
+                assert int(report[1]) == (2 if batch_arg else 1)
             cold = log
+
+    database = out / "find_single.toml"
+    log = run("find_single", ["-tune", "length=16,naf=6,batch=1,time=0.01,find=99", "16"])
+    assert anchors(log) == [1] and re.search(r"99% +\d+ +\d+ +\S+ +1c ", log)
 
     database = out / "range.toml"
     crossing = ["-tune", "ntt,exp=3554-3560,naf=6,batch=1,time=0.01", "16"]

@@ -20,7 +20,7 @@ struct NttTuneGrid {
     TuneRange exp, length, naf;
     TuneRange batch{1, stage1_ntt_max_curves};
     bool batch_explicit = false;
-    bool find95 = false;
+    unsigned find_percent = 0;
     bool force = false;
     unsigned group_ms = 100;
     unsigned coarse_repeats = ntt_default_repeats, fine_repeats = ntt_default_repeats;
