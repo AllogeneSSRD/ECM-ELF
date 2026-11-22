@@ -52,6 +52,7 @@ struct Context {
     gwhandle gw{};pmhandle pm{};bool ready=false,pmready=false;
     const Options &o;Stats &stats;mpz_srcptr n;mpz_ptr factor;
     std::vector<uint32_t> binary;
+    double pack_seconds=0,unpack_seconds=0;
     using PlanKey=std::tuple<size_t,size_t,size_t,size_t,int,unsigned>;
     std::map<PlanKey,void *> plans;
     Context(const mpz_t modulus,mpz_t f,const Options &opt,Stats &s,size_t max_poly,bool preflight=false)
@@ -448,8 +449,9 @@ template<class Function> void parallel_points(Context &parent,size_t count,Funct
     }
     parent.check("parallel worker merge");
 }
+constexpr size_t batched_tree_jobs=128;
 template<class Function> void tree_jobs(Context &c,size_t count,Function function){
-    if(count<128 || c.o.threads==1)function(c,0,count);
+    if(count<batched_tree_jobs || c.o.threads==1)function(c,0,count);
     else parallel_points(c,count,function,1);
 }
 void tree_layout(size_t lo,size_t hi,size_t depth,std::vector<size_t> &sizes){
@@ -514,10 +516,17 @@ std::unique_ptr<Tree> product_tree(Context &c,const Array &roots,size_t lo,size_
     // roots; larger blocks keep batched level normalization.
     constexpr size_t max_tiled_roots=20160;
     size_t tile=2;
+    constexpr size_t wide_tile_roots=32;
+    // Wide coefficients make the serial degree-4..32 merges expensive.
+    // Give each worker complete tiles when the small merges would otherwise
+    // run serially. Keep batched normalization for larger rows.
+    const bool parallel_tiles=negative_roots && c.o.threads>1 && c.stats.fft_length>=65536 &&
+        count/wide_tile_roots>=c.o.threads && (count+3)/4<batched_tree_jobs;
     if(negative_roots && c.o.threads==1 && count<=max_tiled_roots){
         const auto bytes_per_root=gwnum_size(&c.gw)+64;
         while(tile<32 && 2*tile*bytes_per_root<=256*1024)tile*=2;
     }
+    if(parallel_tiles)tile=wide_tile_roots;
     if(negative_roots && c.o.check)
         std::printf("gwpoly-gtree: roots=%zu tile=%zu\n",count,tile);
     if(tile==2){
@@ -527,24 +536,29 @@ std::unique_ptr<Tree> product_tree(Context &c,const Array &roots,size_t lo,size_
             worker.check("linear factor pairs");
         });
     }else{
-        Array sum(c.gw,1);
-        for(size_t first=0;first<count;first+=tile){
-            const auto last=std::min(count,first+tile);
-            pair_roots(c,sum,first,last);
-            for(size_t width=2;width<last-first;width*=2)
-                for(size_t offset=first;offset+width<last;offset+=2*width)
-                    merge(c,offset,width,last,false);
-            c.check("G tree tile");
-        }
+        const auto build_tiles=[&](Context &worker,size_t begin,size_t end){
+            Array sum(worker.gw,1);
+            for(size_t i=begin;i<end;++i){
+                const auto first=i*tile,last=std::min(count,first+tile);
+                pair_roots(worker,sum,first,last);
+                for(size_t width=2;width<last-first;width*=2)
+                    for(size_t offset=first;offset+width<last;offset+=2*width)
+                        merge(worker,offset,width,last,false);
+                worker.check("G tree tile");
+            }
+        };
+        const auto tiles=(count+tile-1)/tile;
+        if(parallel_tiles)parallel_points(c,tiles,build_tiles,1);
+        else build_tiles(c,0,tiles);
     }
     // Every node stores only the coefficients below its leading one. Left,
     // right and result can share a range of the packed row.
     for(size_t width=tile;width<count;width*=2){
         const size_t stride=2*width,jobs=(count+stride-1)/stride;
         tree_jobs(c,jobs,[&](Context &worker,size_t begin,size_t end){
-            for(size_t j=begin;j<end;++j)merge(worker,j*stride,width,count,jobs>=128);
+            for(size_t j=begin;j<end;++j)merge(worker,j*stride,width,count,jobs>=batched_tree_jobs);
         });
-        if(jobs>=128){
+        if(jobs>=batched_tree_jobs){
             polymult_set_num_threads(&c.pm,c.pm.max_num_threads);
             poly_unfft_fft_coefficients(&c.pm,row,count);
             c.check("G tree coefficient normalization");
@@ -569,10 +583,10 @@ std::unique_ptr<Tree> retained_ftree(Context &c,const Array &roots,size_t lo,siz
         tree_jobs(c,nodes.size(),[&](Context &worker,size_t begin,size_t end){for(size_t i=begin;i<end;++i){
             auto &node=*nodes[i];
             if(node.left)worker.monic_coefficients(node.left->polynomial.v,node.left->hi-node.left->lo,
-                node.right->polynomial.v,node.right->hi-node.right->lo,node.polynomial.v,nodes.size()>=128);
+                node.right->polynomial.v,node.right->hi-node.right->lo,node.polynomial.v,nodes.size()>=batched_tree_jobs);
             else {gwcopy(&worker.gw,roots[node.lo],node.polynomial[0]);gwsmallmul(&worker.gw,-1,node.polynomial[0]);}
         }});
-        if(nodes.size()>=128){
+        if(nodes.size()>=batched_tree_jobs){
             polymult_set_num_threads(&c.pm,c.pm.max_num_threads);
             poly_unfft_fft_coefficients(&c.pm,t->rows[depth].v,t->rows[depth].size);c.check("F tree coefficient normalization");
         }
@@ -614,28 +628,38 @@ std::unique_ptr<Tree> partial_ftree(Context &c,const Array &roots,size_t lo,size
 // Keep two top checkpoint levels. Each non-root polynomial and the baby
 // roots are stored as binary residues, without their implicit leading one.
 constexpr unsigned compact_depth=2;
+constexpr size_t compact_conversion_chunk=32;
 using PackedFTree=std::array<std::vector<uint32_t>,1u<<(compact_depth+1)>;
 size_t compact_words(const Context& c) {
     return c.stats.fft_length>=65536 && c.supports_deferred_h_fold()
         ? (static_cast<size_t>(c.gw.bit_length)+31)/32+8 : 0;
 }
 std::vector<uint32_t> pack_values(Context& c,const Array& values,size_t count,size_t words) {
+    const auto start=Clock::now();
     std::vector<uint32_t> packed(count*words);
-    Array scratch(c.gw,1);
-    for(size_t i=0;i<count;++i){
-        gwunfft(&c.gw,values[i],scratch[0]);
-        if(gwtobinary(&c.gw,scratch[0],packed.data()+i*words,static_cast<uint32_t>(words))<0)
-            throw std::runtime_error("Cannot pack CPU Stage2 coefficient");
-        if(!(i&63))c.check("pack F coefficients");
-    }
+    // Each worker owns its conversion scratch and writes a disjoint limb range.
+    parallel_points(c,count,[&](Context& worker,size_t begin,size_t end){
+        Array scratch(worker.gw,1);
+        for(size_t i=begin;i<end;++i){
+            gwunfft(&worker.gw,values[i],scratch[0]);
+            if(gwtobinary(&worker.gw,scratch[0],packed.data()+i*words,static_cast<uint32_t>(words))<0)
+                throw std::runtime_error("Cannot pack CPU Stage2 coefficient");
+            if(!(i&63))worker.check("pack F coefficients");
+        }
+    },compact_conversion_chunk);
+    c.pack_seconds+=seconds(start);
     return packed;
 }
 Array unpack_values(Context& c,const std::vector<uint32_t>& packed,size_t lo,size_t count,size_t words) {
+    const auto start=Clock::now();
     Array values(c.gw,count);
-    for(size_t i=0;i<count;++i){
-        binarytogw(&c.gw,packed.data()+(lo+i)*words,static_cast<uint32_t>(words),values[i]);
-        if(!(i&63))c.check("unpack F coefficients");
-    }
+    parallel_points(c,count,[&](Context& worker,size_t begin,size_t end){
+        for(size_t i=begin;i<end;++i){
+            binarytogw(&worker.gw,packed.data()+(lo+i)*words,static_cast<uint32_t>(words),values[i]);
+            if(!(i&63))worker.check("unpack F coefficients");
+        }
+    },compact_conversion_chunk);
+    c.unpack_seconds+=seconds(start);
     return values;
 }
 Array build_compact_ftree(Context& c,const Array& roots,size_t lo,size_t hi,
@@ -1251,6 +1275,9 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                       stats.descent_seconds-scale_seconds,seconds(leaf_begin)};
         const auto &phases=stats.phases;
         std::printf("gwpoly-descent: ftree_rebuild_seconds=%.6f\n",rebuild_seconds);
+        if(fplan.compact())
+            std::printf("gwpoly-ftree-conversion: pack_seconds=%.6f unpack_seconds=%.6f\n",
+                        c.pack_seconds,c.unpack_seconds);
         std::printf("gwpoly-phases: baby=%.6f ftree=%.6f reciprocal=%.6f giant=%.6f gtree=%.6f fold=%.6f scale=%.6f descent=%.6f leaf_gcd=%.6f\n",
                     phases.baby_seconds,phases.ftree_seconds,phases.reciprocal_seconds,phases.giant_seconds,
                     phases.gtree_seconds,phases.fold_seconds,phases.scale_seconds,phases.descent_seconds,phases.leaf_gcd_seconds);
