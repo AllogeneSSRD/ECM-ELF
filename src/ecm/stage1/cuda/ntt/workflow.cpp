@@ -691,19 +691,23 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                                          opt.execution.ntt, opt.execution.device_index, headroom);
                 };
             }
-            control.poll = [&](unsigned cursor) {
-                const auto now = Clock::now();
+            const auto report_progress = [&](unsigned cursor, Clock::time_point now, bool stop) {
                 if (first_poll)progress_started=now;
                 else if(cursor>=rate_cursor)iter_speed.add(cursor-rate_cursor, std::chrono::duration<double,std::milli>(now-rate_clock).count());
                 rate_clock=now;rate_cursor=cursor;
-                if (first_poll || cursor==count || ecm_stage1_stop_requested() || now - last_progress >= std::chrono::seconds(2)) {
-                    ecm_ts_fprintf(stdout, "stage1_ntt_progress: %s=%u/%u (%.1f%%) elapsed=%.3f iter_per_s=%.3f\n",
+                if (first_poll || cursor == count || stop || now - last_progress >= std::chrono::seconds(2)) {
+                    const double eta = cursor == count ? 0 : iter_speed.speed() > 0 ? iter_speed.remaining(count, cursor) : -1;
+                    ecm_ts_fprintf(stdout, "stage1_ntt_progress: %s=%u/%u (%.1f%%) elapsed=%.3f iter_per_s=%.3f eta=%.3f\n",
                                    naf_window ? "columns" : "bits", cursor, count, 100.0 * cursor / count,
-                                   std::chrono::duration<double>(now-progress_started).count(), iter_speed.speed()*1000);
+                                   std::chrono::duration<double>(now-progress_started).count(), iter_speed.speed()*1000, eta);
                     last_progress = now;
                 }
                 first_poll=false;
+            };
+            control.poll = [&](unsigned cursor) {
+                const auto now = Clock::now();
                 const bool stop = ecm_stage1_stop_requested();
+                report_progress(cursor, now, stop);
                 const auto elapsed = std::chrono::duration<double, std::milli>(now - last_save).count();
                 const bool due = opt.persistence.ckpt_ms && elapsed >= opt.persistence.ckpt_ms;
                 return ecm_mersenne_ntt::Control::Action{!checkpoint.path().empty() && (stop || due), stop};
@@ -739,6 +743,9 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                  batch, initial, naf, selected, control)
                 : ecm_mersenne_ntt::ladder(opt.execution.device_index, unsigned(p),
                     batch, initial, packed, count, selected, control);
+            // The ladder polls before launching a slice, so it never polls the final cursor.
+            if (!run.stopped && run.completed_bits == count)
+                report_progress(count, Clock::now(), false);
             workspace.reset();
             ecm_ts_fprintf(stdout, "stage1_ntt_memory: owned_bytes=%zu observed_bytes=%zu budget_bytes=%zu\n",
                 run.owned_bytes, run.observed_bytes, run.budget_bytes);

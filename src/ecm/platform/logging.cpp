@@ -61,27 +61,33 @@ double now_seconds_monotonic() {
         .count();
 }
 
-// Both progress shapes carry an ASCII bar plus a percentage:
-//     GPU: [====>       ]  42.1%  ...   (CUDA / OpenCL stage 1)
-//     stage1: [====>    ]  42.1%  ...   (CPU stage 1, ecm_driver.cpp)
-// Anything else (banners, results, warnings) is never a progress line.
-bool line_is_progress(const char *text) {
-    if (text == nullptr) return false;
-    if (std::strstr(text, "GPU: [") == nullptr && std::strstr(text, "stage1: [") == nullptr) {
-        return false;
-    }
-    return std::strchr(text, '%') != nullptr;
-}
+enum class ProgressLine { None, Intermediate, Complete };
 
-// The task-complete line ("... ] 100.0% ...") is written whatever the cadence.
-bool line_is_progress_end(const char *text) {
-    return line_is_progress(text) && std::strstr(text, " 100.0%") != nullptr;
+ProgressLine classify_progress_line(const char* text) {
+    constexpr std::string_view ntt_prefix = "stage1_ntt_progress: ";
+    const std::string_view line(text);
+    if (line.substr(0, ntt_prefix.size()) == ntt_prefix) {
+        const auto progress = line.substr(ntt_prefix.size());
+        size_t field_size = 0;
+        if (progress.substr(0, 5) == "bits=") field_size = 5;
+        else if (progress.substr(0, 8) == "columns=") field_size = 8;
+        unsigned cursor = 0, total = 0;
+        if (field_size && std::sscanf(progress.data() + field_size, "%u/%u", &cursor, &total) == 2 &&
+            total && cursor <= total) {
+            // The printed percentage can round up to 100.0% before the last iteration.
+            return cursor == total ? ProgressLine::Complete : ProgressLine::Intermediate;
+        }
+    }
+    // CPU, CGBN and OpenCL still use the existing progress bars.
+    if ((line.find("GPU: [") != line.npos || line.find("stage1: [") != line.npos) && line.find('%') != line.npos)
+        return line.find(" 100.0%") != line.npos ? ProgressLine::Complete : ProgressLine::Intermediate;
+    return ProgressLine::None;
 }
 
 // Does the file get this progress line? Updates the gate when it says yes.
-bool file_wants_progress(const char *text) {
+bool file_wants_progress(ProgressLine line) {
+    if (line != ProgressLine::Intermediate) return true;
     if (g_progress_log_seconds < 0.0) return true;          // every line
-    if (line_is_progress_end(text)) return true;            // always the 100% line
     if (g_progress_log_seconds == 0.0) return false;        // never
     const double now = now_seconds_monotonic();
     if (now - g_last_progress_log_s < g_progress_log_seconds) return false;
@@ -478,7 +484,7 @@ static int write_timestamped(FILE *stream, const char *fmt, va_list ap, const ch
         va_copy(apc, ap);
         const int n = std::vsnprintf(buf, sizeof(buf), fmt, apc);
         va_end(apc);
-        if (n >= 0 && (!line_is_progress(buf) || file_wants_progress(buf))) {
+        if (n >= 0 && file_wants_progress(classify_progress_line(buf))) {
             if (static_cast<size_t>(n) < sizeof(buf)) {
                 append_mirror(g_stdio_pending, std::string_view(buf, n));
             } else {

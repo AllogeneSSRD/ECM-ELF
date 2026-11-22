@@ -42,7 +42,7 @@ def main():
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             text = log.read_text(encoding="utf-8")
-            if "batch=curve 129–160  50.0%" in text:
+            if "batch=curve 129–160  50.0%  ETA 16 s" in text:
                 break
             assert process.poll() is None, text[-2000:]
             time.sleep(.1)
@@ -52,10 +52,9 @@ def main():
         rows = [json.loads(line.split(" text=", 1)[1]) for line in text.splitlines()
                 if line.startswith("worker_summary: index=1 ")]
         lines = rows[-1].splitlines()
-        assert len(lines) == 3 and "M15919 / 已知因子  curves = 1000" in lines[0]
+        assert len(lines) == 2 and "M15919 / 已知因子  curves = 1000" in lines[0]
         assert "Stage2 →" in lines[0] and "CUDA/NTT" in lines[1], lines
-        assert "39.93 MiB/曲线" in lines[2] and "6144 MiB / 8000 MiB" in lines[2], lines
-        assert "最多 98 条 | NAF 4096 MB" in lines[2], lines
+        assert "MiB" not in lines[1], lines
         time.sleep(.3)
         capture(hwnd, out / "ntt-wide.png")
         user.SetWindowPos(hwnd, None, 40, 40, 780, 900, 0x14)
@@ -63,7 +62,7 @@ def main():
         capture(hwnd, out / "ntt-narrow.png")
         (out / "summary.json").write_text(json.dumps({"task_pct": 14.4,
             "batch_pct": 50, "range": [129, 160], "s_per_curve": 1,
-            "eta_seconds": 856, "caption_lines": lines}, ensure_ascii=False, indent=2), encoding="utf-8")
+            "eta_seconds": 856, "batch_eta_seconds": 16, "caption_lines": lines}, ensure_ascii=False, indent=2), encoding="utf-8")
         print("NTT total/batch progress, caption, s/curve and ETA: PASS")
     finally:
         if hwnd:

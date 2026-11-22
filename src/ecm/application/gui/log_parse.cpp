@@ -128,6 +128,7 @@ bool parse_stage1_ntt(const std::string& line, Stage1NttEvent& out) {
         double ms=0;if(read_after(line," wall_ms=",ms))out.seconds=ms/1000.;
     } else read_after(line," elapsed=",out.seconds);
     read_after(line," iter_per_s=",out.iter_per_s);
+    if (out.kind==Kind::Progress) read_after(line," eta=",out.batch_eta_s);
     const bool valid=out.kind==Kind::Progress?out.units&&out.cursor<=out.units:
         out.kind==Kind::Plan?out.curves&&out.units&&out.resume<=out.units:
         out.kind==Kind::Batch?out.total&&out.curves:
@@ -304,13 +305,14 @@ void Stage1NttStatus::apply(const Stage1NttEvent& e, double now_seconds) {
     if(e.kind==Kind::Batch || e.kind==Kind::Resume) {
         batched=true;completed=e.offset;first=e.offset;curves=e.curves;
         total=std::max(e.total,first+curves);active=e.kind==Kind::Batch;
-        cursor=units=resume=sample_cursor=0;elapsed=0;sample_clock=-1;iter_per_s=0;
+        cursor=units=resume=sample_cursor=0;elapsed=0;sample_clock=-1;iter_per_s=0;batch_eta_s=-1;
     } else if(e.kind==Kind::Plan) {
         if(!batched){first=completed=0;curves=total?total:e.curves;total=curves;}
         active=true;units=e.units;cursor=resume=sample_cursor=std::min(e.resume,units);
-        elapsed=0;sample_clock=-1;iter_per_s=0;
+        elapsed=0;sample_clock=-1;iter_per_s=0;batch_eta_s=-1;
     } else if(e.kind==Kind::Progress) {
         iter_per_s=std::isfinite(e.iter_per_s)&&e.iter_per_s>0?e.iter_per_s:0;
+        batch_eta_s=std::isfinite(e.batch_eta_s)&&e.batch_eta_s>=0?e.batch_eta_s:-1;
         if(e.units)units=e.units;
         cursor=std::min(e.cursor,units);
         if(e.seconds>=0 && std::isfinite(e.seconds)) {
@@ -331,7 +333,7 @@ void Stage1NttStatus::apply(const Stage1NttEvent& e, double now_seconds) {
         if(!batched && units && cursor==units){completed=curves;active=false;}
     } else if(e.kind==Kind::BatchComplete) {
         completed=e.offset;total=std::max(total,std::max(e.total,completed));
-        cursor=units;active=false;
+        cursor=units;active=false;batch_eta_s=0;
     }
 }
 ProgressInfo Stage1NttStatus::progress() const {

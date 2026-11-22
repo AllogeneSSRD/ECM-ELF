@@ -45,10 +45,12 @@ int main() {
     check(near(parse_line("GPU: [bar] 50.0%  500, +100 bits (~1.20 s/curve) elapsed 1s remaining 1s iter_per_s=1234.5").progress.iter_per_s,1234.5),"Stage1 explicit iteration rate");
     Stage1NttStatus rate;rate.start(8);
     rate.apply(parse_line("stage1_ntt_plan: curves=8 bits=1000 resume=500").stage1_ntt);
-    rate.apply(parse_line("stage1_ntt_progress: columns=600/1000 (60%) elapsed=1 iter_per_s=100").stage1_ntt);
+    rate.apply(parse_line("stage1_ntt_progress: columns=600/1000 (60%) elapsed=1 iter_per_s=100 eta=4.000").stage1_ntt);
     check(near(rate.progress().iter_per_s,100),"NTT rate is scalar iterations, not batch throughput");
+    check(near(rate.batch_eta_s,4),"NTT batch ETA comes from the worker");
     rate.apply(parse_line("stage1_ntt_batch: offset=8 total=16 curves=8").stage1_ntt);
     check(rate.progress().iter_per_s==0,"NTT new batch resets iteration rate");
+    check(rate.batch_eta_s<0,"NTT new batch does not reuse the previous batch ETA");
     {
         Stage1NttStatus status;status.start(1000);
         const auto apply=[&](const char* line,double now=-1.){status.apply(parse_line(line).stage1_ntt,now);};

@@ -94,6 +94,8 @@ NTT 的 s/curve 为主循环秒数除以本次执行的等效曲线数，ETA 按
 
 ## 队列、页面与宠物
 
+NTT Stage1 的批次进度条在百分比右侧显示当前批次 ETA，使用计算程序报告的剩余秒数。主表的 ETA 仍对应整条任务。
+
 Worker 表格将名称和设备/引擎合并为可点击的“设备”列，显示 `GPU 0: Alpha` 或 `CPU: Alpha`，点击后选中对应 worker 的日志。Stage1 按自己的 target 和设备设置显示；Stage2 优先采用 worker 的 device 覆盖项，未指定时沿用 `[stage2]` 配置。显式 `device="cpu"` 不显示 GPU 编号，运行时报告的实际设备可更新显示；Stage1、Stage2 分别沿用主题中的对应阶段色。
 
 Worker 表格在 `s/curve` 前显示 `iter/s/c`，读取计算程序输出的标量推进速度，不乘以并行曲线数。CUDA CGBN ladder 为 bit/s，NAF 为列/s；NTT 使用当前标量的 bits 或 NAF columns。没有有效数据时显示 `--`，Stage2 不使用该列。NTT 的 worker 摘要显示 `Stage1 Edwards | CUDA/NTT … bits | B1=… | iter=… | NTT: 长度 形状 NAF=窗口`；`iter` 是当前曲线标量所需的总推进次数。worker 摘要不显示 NTT 内存预估，日志仍保留原有内存、bpw 和完整执行详情。

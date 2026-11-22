@@ -11,12 +11,6 @@
 namespace ecmgui_v2::ui {
 struct WorkerProgress {float fraction=0;std::string label="--",speed="--",iterations="--",eta="--",eta_detail="--";};
 struct Stage2Batch {bool visible=false;float fraction=0;std::string label,remaining;};
-inline Stage2Batch stage1_ntt_batch(const ecmgui::Stage1NttStatus& s) {
-    Stage2Batch out;if(!s.valid||!s.curves)return out;
-    out.visible=true;out.fraction=static_cast<float>(s.batch_fraction());
-    char label[128];std::snprintf(label,sizeof(label),"curve %llu–%llu  %.1f%%",s.first+1,s.first+s.curves,100.*out.fraction);
-    out.label=label;return out;
-}
 inline Stage2Batch stage2_batch(const ecmgui::Stage2Curve& s,bool zh) {
     Stage2Batch out;if(!s.valid||!s.batches)return out;out.visible=true;
     out.fraction=static_cast<float>(std::clamp(double(s.batch)/double(s.batches),0.,1.));
@@ -37,6 +31,18 @@ inline std::string eta_text(double seconds,bool detail=false) {
         result+=text;
     }
     return result;
+}
+inline Stage2Batch stage1_ntt_batch(const ecmgui::Stage1NttStatus& s) {
+    Stage2Batch out;
+    if(!s.valid||!s.curves)return out;
+    out.visible=true;
+    out.fraction=static_cast<float>(s.batch_fraction());
+    char label[128];
+    std::snprintf(label,sizeof(label),"curve %llu–%llu  %.1f%%",s.first+1,s.first+s.curves,100.*out.fraction);
+    out.label=label;
+    if(std::isfinite(s.batch_eta_s)&&s.batch_eta_s>=0)
+        out.label+="  ETA "+eta_text(s.batch_eta_s);
+    return out;
 }
 inline WorkerProgress worker_progress(const ecmgui::WorkerView& worker,bool zh) {
     WorkerProgress out;const auto p=worker.stage2?worker.stage2_status.progress(false):worker.stage1_ntt.valid?worker.stage1_ntt.progress():worker.progress;

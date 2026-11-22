@@ -53,14 +53,14 @@ struct Stage1NttEvent {
     enum class Kind {None, Batch, Resume, Plan, Progress, Timing, BatchComplete};
     Kind kind = Kind::None;
     unsigned long long offset=0, total=0, curves=0, cursor=0, units=0, resume=0;
-    double seconds=-1, iter_per_s=0;
+    double seconds=-1, iter_per_s=0, batch_eta_s=-1;
     bool columns=false;
 };
 struct Stage1NttStatus {
     bool valid=false, batched=false, active=false;
     unsigned long long total=0, completed=0, first=0, curves=0, cursor=0, units=0, resume=0;
     double measured_seconds=0, measured_curves=0;
-    double elapsed=0, sample_clock=-1, iter_per_s=0;
+    double elapsed=0, sample_clock=-1, iter_per_s=0, batch_eta_s=-1;
     unsigned long long sample_cursor=0;
     void start(unsigned long long requested=0);
     void apply(const Stage1NttEvent& event, double now_seconds=-1);

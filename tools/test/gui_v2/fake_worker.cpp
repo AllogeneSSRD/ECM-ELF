@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
                 "ntt_memory_per_curve_bytes=41867520 ntt_memory_config_mib=6144 ntt_memory_device_bytes=8388608000 "
                 "ntt_naf_memory_mb=4096 max_curves_in_memory=98\n");
             out("stage1_ntt_plan: device=1 p=15919 curves=32 resume=250 bits=1000\n");
-            out("stage1_ntt_progress: columns=500/1000 (50.0%%) elapsed=8.000\n");
+            out("stage1_ntt_progress: columns=500/1000 (50.0%%) elapsed=8.000 iter_per_s=31.250 eta=16.000\n");
             out("stage1_handoff: bits=15890 worker=2\n");
             HANDLE stop=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(std::strtoull(arg_value("--stage1-stop-handle").c_str(),nullptr,10)));
             if(!stop||WaitForSingleObject(stop,60000)!=WAIT_OBJECT_0)return 5;

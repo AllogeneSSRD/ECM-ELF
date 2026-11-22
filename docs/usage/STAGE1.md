@@ -246,7 +246,7 @@ GPU Edwards 先输出 `GPU Edwards initialization` 和 `GPU Edwards dictionary` 
 
 Edwards 的初始化涵盖指数、曲线构造或恢复、标量编码及设备分配/上传，设备字典构建单独计时。NAF 在周期检查点、安全停止或完成时导出坐标，`GPU Edwards NAF snapshots` 记录导出次数。进度条 `elapsed` 从准备完成后开始，包含当前主循环的坐标导出、输出和检查点耗时。速度取最近最多 50 个切片的推进量/时间，排除进度回调中的周期检查点导出、写入及输出。续算以已保存位置为采样基准。完整计时边界见 [实现说明](../architecture/STAGE1.md#gpu-edwards)。
 
-普通进度中的 `s/curve` 是当前速度的每曲线摊销；部分运行的投影不是完成一条生产曲线的实测时间。文件日志的进度频率由 `progress_log_seconds` 控制，GUI 所用管道进度独立保留。
+普通进度中的 `s/curve` 是当前速度的每曲线摊销；部分运行的投影不是完成一条生产曲线的实测时间。CGBN 和 NTT 共用 `[stage1] progress_log_seconds` 控制文件日志中的中间进度行。正值为最短间隔（默认 60 秒），`0` 仅保留完成进度，负值记录每次更新。控制台输出和 GUI 的进度刷新频率独立保留。NTT 按当前批次的实际迭代游标判断完成。NTT 进度行中的 `eta` 是当前批次的预计剩余秒数，按剩余迭代数和实测速率估算，`-1` 表示尚无有效样本。
 
 Auto B2的可复用Stage1成本可用[tune_stage1_cost.py](../../tools/bench/tune_stage1_cost.py)测量完整批次并独立复核保存点。当前限CUDA ladder PARAM0、自动TPI、关闭指数缓存；可使用已知梅森素数目录，或通过`--target-n <N...>`测量指定余因子。所有测量曲线必须完成且通过无因子/独立末点校验，不接受部分运行速度投影。等级、参数、计时边界及使用方式统一见[完整Stage1成本预计算](../architecture/AUTO_B2.md#stage1-成本)。
 

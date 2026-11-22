@@ -401,7 +401,7 @@ static void stage1_ntt_progress(const fs::path& root,const fs::path& fixture) {
     const auto shown=ecmgui_v2::ui::worker_progress(worker,false);
     assert(shown.label=="14.4%"&&shown.speed=="1.00"&&shown.eta=="856 s");
     const auto batch=ecmgui_v2::ui::stage1_ntt_batch(worker.stage1_ntt);
-    assert(batch.visible&&batch.fraction==.5f&&batch.label=="curve 129–160  50.0%");
+    assert(batch.visible&&batch.fraction==.5f&&batch.label=="curve 129–160  50.0%  ETA 16 s");
     app.stop_worker(1);
     const auto stop_deadline=GetTickCount64()+5000;
     while(app.controller.busy()&&GetTickCount64()<stop_deadline){app.tick();Sleep(10);}
