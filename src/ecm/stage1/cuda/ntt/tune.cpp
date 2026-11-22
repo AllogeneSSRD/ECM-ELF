@@ -1782,7 +1782,6 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
     const auto weighted_cap = std::max(capacities[Weighted].max_curves, capacities[Mixed].max_curves);
     const auto cap = std::min(remaining, std::max({1u, linear_cap, weighted_cap}));
     std::map<unsigned, BatchRate> eligible;
-    std::map<unsigned, unsigned> observations;
     std::map<unsigned, bool> runtime_winner;
     using ecm_stage2::tune::uint;
     using ecm_stage2::tune::real;
@@ -1815,8 +1814,6 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
                 continue;
             auto& value = eligible[batch];
             const auto rate = real(row,"iter_per_s");
-            const unsigned count = unsigned(pt::optional_uint(row,"runtime_observations",runtime ? uint(row,"repeats") : 0));
-            observations[batch] = std::max(observations[batch],count);
             if (rate > value.rate) {
                 value = {rate,1};
                 runtime_winner[batch] = runtime;
@@ -1826,23 +1823,11 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
         ecm_ts_fprintf(stderr, "Stage1 NTT batch tune read: %s\n", e.what());
     }
     const unsigned tuned = recommended_batch(eligible,exec.ntt.batch_target_percent);
-    const unsigned seed = tuned ? tuned : std::min(cap, 64u);
-    unsigned selected = seed;
-    const char* source = tuned ? (runtime_winner[tuned] ? "production" : "tune") : "default";
-    // Try capacity first while there is enough work for a full batch and a tail.
-    if (exec.ntt.runtime_enabled && !exec.ntt.tune_file.empty() && remaining > cap) {
-        const std::array<unsigned, 4> candidates{cap, seed, std::max(1u, seed / 2),
-                                               std::min(cap, seed + seed / 2)};
-        for (unsigned repetitions : {0u, 1u}) {
-            for (const auto candidate : candidates) {
-                if (observations[candidate] == repetitions) {
-                    selected = candidate;
-                    source = "production_trial";
-                    break;
-                }
-            }
-            if (std::string_view(source) == "production_trial") break;
-        }
+    unsigned selected = tuned ? tuned : std::min(cap, 64u);
+    const char* source = tuned ? (runtime_winner.at(tuned) ? "production" : "tune") : "default";
+    if (!tuned && exec.ntt.runtime_enabled && !exec.ntt.tune_file.empty() && remaining > cap) {
+        selected = cap;
+        source = "production_trial";
     }
     ecm_ts_fprintf(stdout, "stage1_ntt_batch_selection: source=%s p=%u remaining=%u batch=%u capacity=%u "
                    "linear_capacity=%u weighted_capacity=%u\n",

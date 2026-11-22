@@ -284,16 +284,16 @@ def main():
     work, command, _ = fixture("trial_above_capacity", requested=200, pad=0, tune=small_tune)
     log, wall = run(work, command)
     selection = log_records(log, "stage1_ntt_batch_selection:")[0]
-    assert (selection["source"], selection["remaining"], selection["capacity"], selection["batch"]) == (
-        "production_trial", "200", "128", "128"), selection
+    assert (selection["remaining"], selection["capacity"]) == ("200", "128"), selection
+    assert selection["source"] in ("production", "tune") and int(selection["batch"]) <= 35, selection
     launches = batch_launches(log)
-    assert [row["curves"] for row in launches] == [128, 72], launches
-    assert [int(row["ntt_batch"]) for row in ntt_executions(log)] == [128, 72]
-    assert any(row["batch"] == 128 for row in tune_rows(small_tune, EXPONENT))
+    assert_schedule(launches, 200, expect_pad=False)
+    assert [int(row["ntt_batch"]) for row in ntt_executions(log)] == [row["curves"] for row in launches]
     assert_finished(work, 200)
-    passed("capacity_trial_128_of_200", selection=selection, launches=launches, seconds=wall)
+    passed("reuse_above_capacity", selection=selection, launches=launches, seconds=wall)
 
     work, command, _ = fixture("direct_split", pad=0)
+    run(work, [*command, "-tune", "exp=127,naf=6,batch=128,time=0.01", "64"], label="seed")
     save = work / "direct.save"
     log, wall = run(work, [*command, "-gpucurves", "129", "-sigma", str(SIGMA),
                            "-save", str(save), "64", "64"], input="2^127-1\n")

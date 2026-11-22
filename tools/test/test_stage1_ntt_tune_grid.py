@@ -313,8 +313,8 @@ def main():
     # A request larger than max_batch exercises the production scheduler.
     for percent, expected in ((1,1),(99,1),(100,2)):
         log = run(f"batch_target_{percent}", ["--param","e","-gpucurves","3","-sigma","26","32","32"],
-                  stdin="2^127-1\n", settings=limits + f"\nedwards_naf_window_bits = 6\nntt_batch_target_percent = {percent}")
-        assert re.search(rf"stage1_ntt_batch_selection: .*remaining=3 batch={expected} ", log), log
+                  stdin="2^127-1\n", runtime=True, settings=limits + f"\nedwards_naf_window_bits = 6\nntt_batch_target_percent = {percent}")
+        assert re.search(rf"stage1_ntt_batch_selection: source=tune .*remaining=3 batch={expected} ", log), log
     for percent in (0,101):
         log = run(f"invalid_target_{percent}", ["-tune","length=16"],
                   settings=f"ntt_batch_target_percent = {percent}", success=False)
