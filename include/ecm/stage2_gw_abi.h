@@ -87,7 +87,8 @@ typedef struct {
 /* ABI 5 lets runtime tuning execute the exact F-tree layout it tested. */
 typedef struct {
     ecm_gw_stage2_request base;
-    int32_t f_tree_splits; /* -1 auto, -2 segmented, 0 full, 1..62 fixed splits, 63 compact. */
+    int32_t f_tree_splits; /* -1 auto, -2 segmented, 0 full F tree, 1..61 fixed splits. */
+    /* 62 compact with full giant denominators, 63 compact with half a block. */
     uint32_t tune_candidates, dense_d;
 } ecm_gw_stage2_request_v5;
 

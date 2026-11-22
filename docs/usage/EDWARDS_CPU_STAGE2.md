@@ -38,7 +38,7 @@ Stage1 的 N 由标准输入提供；上例的 `--exponent 127` 仅适用于保�
 
 完整 F 树按层连续保存各首一多项式的低次系数，整棵树的根另存首项 1。分段下降只重建该段根以下的树行。同一父节点下，两个待重建段的根数相等时，右段复用左段的系数行并重新计算系数。Newton 倒数只计算每次扩展的新系数。缩放后的根余式直接作为最终叶数组。每个父节点用一次 polymult 调用共用父变换，两个孩子分别覆盖原行中自己的区间。下降预算计入这一个输出行，并另留两个系数行的 GW 分配余量。最后一对线性因子直接用乘加计算两个叶值。
 
-紧凑布局把 baby 根和 F 树顶端两层的低次系数存为内存中的定长二进制余数。主循环用原生 GW 格式的 F 根。下降时按需解包兄弟多项式，逐段还原 baby 根并重建子树。每个 G 块最多分两批生成 giant 点并归一化，至多保留半块分母，两个批次共用完整的 G 根行。算术目标和实际 B2 沿用任务规划。[宽位内存与性能对照](../performance/CPU_GWPOLY_STAGE2.md#m3033533-的-4-gib-紧凑-f-树)
+紧凑布局把 baby 根和 F 树顶端两层的低次系数存为内存中的定长二进制余数。主循环用原生 GW 格式的 F 根。下降时按需解包兄弟多项式，逐段还原 baby 根并重建子树。单线程自动选到紧凑布局时，优先尝试整块 giant 分母，在预算内用一次求逆完成整块归一化。预算不足或多线程自动选型时最多保留半块分母，依次生成两个批次，仍共用完整的 G 根行。`gwpoly-giant` 的 `denominator_batch` 报告分母容量。算术目标和实际 B2 沿用任务规划。[宽位内存与性能对照](../performance/CPU_GWPOLY_STAGE2.md#m3033533-的-4-gib-紧凑-f-树)
 
 在能减少至少一个 G 块时，CPU 只遍历原 giant 网格的高位后缀，保留原终点和小素数检查。日志 `gwpoly-range` 给出原起点、当前起点与终点。后缀发现因子或分母／GCD 饱和时，释放工作区，按完整区间重算后再交付因子或报告错误。中断和舍入错误直接上报。[覆盖与因子恢复](../reference/ECM_STAGE2_RELOCATION.md)
 
@@ -100,7 +100,7 @@ tune_runtime_sample_limit = 10
 
 路径默认位于 `ecm.toml` 旁，支持 worker 覆盖。CLI `--tune-profile FILE` 优先，相对路径以启动目录为准。CLI 的 `--tune-min-repeats` 和 `--tune-runtime-samples` 可覆盖重复数和每个候选的样本上限。达到上限后保留已有均值。`--tune-runtime 0` 只读复用合格记录。将 `tune_file` 或 `--tune-profile` 显式置空可以停用读写。指定非零 `--d`、`--dry-run` 或 `--gw-check` 时直接走相应执行路径。
 
-命令行可用 `--cpu-tune-candidates N` 和 `--cpu-tune-dense-d 0|1` 覆盖。固定 `--backend gwpoly --d D` 后，ABI 5 支持 `--f-tree-splits 0` 强制完整树、用 1…62 固定顶部分裂次数、用 `segmented` 在分段方案中选择、用 `compact` 强制紧凑布局。`auto` 按完整、普通分段、紧凑的顺序准入。实际 FFT、布局和内存须通过对应检查。紧凑布局在 ABI 和 tune 的 `f_tree_splits` 字段中记为 63。 [F 树预算与性能对照](../performance/STAGE2.md#cpu-stage2-的-f-树预算与-d-选型)
+命令行可用 `--cpu-tune-candidates N` 和 `--cpu-tune-dense-d 0|1` 覆盖。固定 `--backend gwpoly --d D` 后，ABI 5 支持 `--f-tree-splits 0` 强制完整树、用 1…61 固定顶部分裂次数、用 `segmented` 在分段方案中选择。紧凑布局可以显式指定 `compact`（半块分母）或 `compact-full`（整块分母）。`auto` 按完整、普通分段、紧凑的顺序准入。实际 FFT、布局和内存须通过对应检查。ABI 和 tune 用 `f_tree_splits=63` 标记半块，`62` 标记整块。[F 树预算与性能对照](../performance/STAGE2.md#cpu-stage2-的-f-树预算与-d-选型)
 
 CPU 与 CUDA 可以共用同一个 `tune.toml`。CPU 使用 `[cpu_stage2]` 的 `format = 3`，矩阵上方的 `cpu` 和 `supported` 分别记录型号和支持的指令集。不同的型号或指令集组合各占一张矩阵，附加表为 `[cpu_stage2.host.N]`。CPU 与 CUDA 矩阵共用列宽对齐方式。CPU 每行记录 GWNUM 版本、P/E 线程数、模数模式、`polymult_isa`、`fft_length`、B1/B2、D/P、F 树方案、`planned_mib`、重复次数、整曲线平均耗时、样本标准差、实测位宽区间、程序版本和 UTC 更新时间。计时包含 GW 初始化及清理，排除调优预检、读写文件和结果发布。完整 FFT 描述和分项耗时仍在运行日志中。
 

@@ -678,7 +678,8 @@ struct FTreePlan {
     bool rebuild;
     double bytes;
     unsigned splits;
-    bool compact() const {return splits==compact_tree;}
+    bool compact() const {return splits==compact_tree || splits==compact_full_tree;}
+    size_t giant_batch(size_t count) const {return splits==compact_tree?(count+1)/2:count;}
 };
 FTreePlan ftree_plan(size_t p,double bytes,double budget,unsigned threads,int requested=automatic_tree,
                      size_t packed_bytes=0){
@@ -693,18 +694,20 @@ FTreePlan ftree_plan(size_t p,double bytes,double budget,unsigned threads,int re
     const double full_rows=(levels+3.0)*p;
     const double limit=budget*1048576;
     FTreePlan best{false,estimate(full_rows+4.0*p+8),0};
-    FTreePlan compact{true,std::numeric_limits<double>::infinity(),compact_tree};
-    if(packed_bytes && p>=128){
+    const auto compact_plan=[&](unsigned layout){
+        FTreePlan compact{true,std::numeric_limits<double>::infinity(),layout};
+        if(!packed_bytes || p<128)return compact;
         const size_t chunk=(p+3)/4;
         // Build: full baby row, both sibling polynomials and their parent.
-        // Main: F, reciprocal, H, G and at most half a row of denominators.
+        // Main: F, reciprocal, H, G and the chosen batch of denominators.
         // Descent: in-place values and one rebuilt segment with its roots.
-        const double peak=std::max({3.0*p+8,4.0*p+(p+1)/2+8,
+        const double peak=std::max({3.0*p+8,4.0*p+compact.giant_batch(p)+8,
             p+chunk*(std::ceil(std::log2(double(chunk)))+1)+8});
         compact.bytes=(peak+128+48.0*threads)*bytes*1.06 +
                       (compact_depth+1.0)*p*packed_bytes + scratch;
-    }
-    if(requested==compact_tree)return compact;
+        return compact;
+    };
+    if(requested==compact_tree || requested==compact_full_tree)return compact_plan(requested);
     if(requested==0 || (requested==automatic_tree && best.bytes<=limit))return best;
     if(requested>=static_cast<int>(levels))return {true,std::numeric_limits<double>::infinity(),0};
     if(requested!=automatic_tree)best={true,std::numeric_limits<double>::infinity(),0};
@@ -722,7 +725,15 @@ FTreePlan ftree_plan(size_t p,double bytes,double budget,unsigned threads,int re
         const double peak=estimate(std::max({init,main,descent}));
         if(peak<=limit || (best.bytes>limit && peak<best.bytes))best={true,peak,splits};
     }
-    if(best.bytes>limit && requested<0 && compact.bytes<=limit)return compact;
+    if(best.bytes>limit && requested<0){
+        if(threads==1){
+            // One lane can avoid a second GMP inverse and a second ladder.
+            const auto compact_full=compact_plan(compact_full_tree);
+            if(compact_full.bytes<=limit)return compact_full;
+        }
+        const auto compact=compact_plan(compact_tree);
+        if(compact.bytes<=limit)return compact;
+    }
     return best;
 }
 const std::vector<uint64_t>& wheel_choices(){
@@ -969,6 +980,8 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
     std::printf("gwpoly-plan: ftree=%s bytes_per_value=%zu retained_splits=%u\n",
                 fplan.compact()?"compact":fplan.rebuild?"segmented":"full",
                 static_cast<size_t>(gwnum_size(&c.gw))+64,fplan.compact()?compact_depth:fplan.splits);
+    if(fplan.compact())
+        std::printf("gwpoly-giant: denominator_batch=%zu\n",fplan.giant_batch(p));
     bool main_started=false;auto main_begin=begin;
     try {
         progress(ECM_GW_BABY);
@@ -1183,7 +1196,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                     }
                 },giant_chunk);
             };
-            const auto first_wave=fplan.compact()?(count+1)/2:count;
+            const auto first_wave=fplan.giant_batch(count);
             generate(0,first_wave);
             if(first_wave<count)generate(first_wave,count-first_wave);
             stats.point_seconds+=seconds(part_begin);

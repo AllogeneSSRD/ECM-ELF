@@ -1,5 +1,20 @@
 # CPU GW 多项式 Stage2 性能
 
+## 紧凑 F 树的单线程整块归一化
+
+Ryzen AI 9 HX 370，单线程固定逻辑 CPU 1，规划预算与 Windows Job 的单进程提交量硬限均为 4096 MiB。按半块 M3033533、半块 M2813323、整块 M2813323、整块 M3033533 的顺序串行运行，编译位于两组之间。每格一次，计入曲线重构至引擎清理；主机另有 RTX 4070 Ti 在运行，未记录有效频率和功耗。两种布局使用相同存档、D/P=3570/384、GWNUM 31.6 和 AVX-512 系数 FFT 196608，关闭 B2 凑整和调优。半块 DLL 为 `9ac4070641228173`（0.72.18 计时构建），整块 DLL 为 `bd91318b4b441489`（0.72.19 开发构建）。[逐曲线命令、阶段耗时和硬限记录](../../data/experiments/cpu_stage2_compact_denominators/)
+
+| Edwards 余因子 | B1 | 实际 B2 | G 块 | Giant 点秒，半块 → 整块 | 整曲线秒，半块 → 整块 | 进程提交峰值 MiB，半块 → 整块 |
+|---|---:|---:|---:|---:|---:|---:|
+| M3033533（3033447 位） | 50000 | 19,602,870 | 14 | 34.563 → 27.086 | 110.540 → 101.443 | 3276.1 → 3582.8 |
+| M2813323（2813251 位） | 250000 | 8,000,000 | 6 | 13.970 → 11.549 | 56.976 → 54.663 | 3244.8 → 3551.5 |
+
+M3033533 沿用紧凑 F 树对照的存档，σ=85473165105590。M2813323 用生产存档第一条曲线，剥除已知因子 5256544478711003513911，σ=54255764574711。四次均返回 NF。Giant 阶段分别缩短 21.6% 和 17.3%，其中每个根数大于一的 G 块少用一次单线程批量求逆和一次种子梯形。整曲线分别缩短 8.2% 和 4.1%。[M3033533 整块](../../data/experiments/cpu_stage2_compact_denominators/m3033533_full/summary.json) · [M2813323 整块](../../data/experiments/cpu_stage2_compact_denominators/m2813323_full/summary.json)
+
+M3033533 在 4096 MiB 下自动选整块布局，规划估值为 3973.8 MiB。固定同一 D，3900 MiB 时自动回退到半块，强制整块会报预算不足。4T 在 4096 MiB 下继续选半块。两个布局以独立的 tune 标识保存计时。[准入复算](../../data/experiments/cpu_stage2_compact_denominators/plans.log)
+
+M3033533 用实际 B2=1,800,000 进行整块布局的正确性复核，覆盖一个满块及 108 根短尾。两块的 giant 链首尾和三个 GMP 叶值均通过，返回 NF。55 项 CPU Stage2 回归及 CPU runtime tune 回归均通过。[GMP 复核](../../data/experiments/cpu_stage2_compact_denominators/projection_full/summary.json) · [CPU Stage2 回归](../../data/experiments/cpu_stage2_compact_denominators/regression/summary.json) · [Tune 回归](../../data/experiments/cpu_stage2_compact_denominators/tune-regression/summary.json)
+
 ## M3033533 的 4 GiB 紧凑 F 树
 
 沿用下面的 M3033533 余因子存档，B1=50000、σ=85473165105590。完整样本固定实际 B2=19,602,870，关闭 B2 凑整和运行时 tune，由各构建按 4096 MiB 自动选择 D/P。另用 Windows Job 对单进程施加 4096 MiB 提交量硬限。1T 绑逻辑 CPU 1，4T 绑 1、3、5、7，避让编译并串行测量，每格一次。计时从曲线重构到引擎清理。设备为 Ryzen AI 9 HX 370，主机另有 RTX 4070 Ti 在运行，未记录 CPU 有效频率和功耗。对照为 0.72.11 计时构建 DLL `584e782b18848f56`，紧凑为基于 0.72.18 的 DLL `9ac4070641228173`。两者均使用 GWNUM 31.6 和 AVX-512 系数 FFT 196608。 [存档来源、命令与原始证据](../../data/experiments/cpu_stage2_compact_f_20261122/)

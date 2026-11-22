@@ -6,7 +6,7 @@
 
 namespace ecm_gwpoly {
 inline constexpr uint64_t max_b2=1000000000000000ull;
-inline constexpr int automatic_tree=-1, segmented_tree=-2, compact_tree=63;
+inline constexpr int automatic_tree=-1, segmented_tree=-2, compact_full_tree=62, compact_tree=63;
 inline constexpr unsigned max_tune_candidates=16;
 struct Options {
     uint64_t d=0,exponent=0,memory_mib=512;
