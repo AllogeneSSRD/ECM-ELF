@@ -32,12 +32,18 @@ static void generator_while_running(const fs::path& root,const fs::path& fixture
     app.gen_options.use_recommended=false;app.gen_options.curves_fixed=4;app.gen_worker=2;
     assert(app.preview_generator());assert(app.apply_generator());
     assert(app.controller.busy()&&read(queue).find("ECMSTAGE1=",read(queue).find("[Worker #2]"))!=std::string::npos);
-    // A running target can be previewed; its ownership lock still protects writes.
-    app.gen_worker=1;assert(app.preview_generator());const auto before=read(queue);
-    assert(!app.apply_generator());assert(app.status.find("already owned")!=app.status.npos&&read(queue)==before);
-    app.controller.request_stop(1);wait([&]{return !app.controller.busy();});
+    app.gen_worker=1;
+    assert(app.preview_generator());
     assert(app.apply_generator());
-    std::cout<<"{\"generator_while_running\":true,\"target_queue_lock_preserved\":true}\n";
+    assert(app.controller.busy());
+    const auto appended=read(queue);
+    const auto section2=appended.find("[Worker #2]");
+    assert(section2!=appended.npos);
+    assert(appended.substr(0,section2).find("ECMSTAGE1=1,2,127,-1,100,1")!=appended.npos);
+    assert(appended.substr(0,section2).find("ECMSTAGE1=1,2,137,-1,")!=appended.npos);
+    assert(appended.find("ECMSTAGE1=1,2,137,-1,",section2)!=appended.npos);
+    app.controller.request_stop(1);wait([&]{return !app.controller.busy();});
+    std::cout<<"{\"generator_while_running\":true,\"append_to_active_worker\":true}\n";
 }
 // Run with a locking worker whose protocol-query API is deliberately disabled.
 static void no_protocol_probe(const fs::path& root,const fs::path& fixture){
@@ -964,6 +970,40 @@ int main(int argc,char** argv){
      copy();assert(copied=="Group order #E(F_p): 996\n    = 2^2 × 3 × 83\nPoint order ord(P): 249\n    = 3 × 83");
      const auto original=copied;io.AddInputCharactersUTF8("overwrite");frame();copy();assert(copied==original);
      ImGui::DestroyContext(context);}
+    {
+        ecmgui_v2::UiState preferences;
+        auto generator=std::make_unique<ecmgui_v2::App>(preferences,stdout);
+        const std::string first="[Worker #1]";
+        const std::string preview=first+"\nECMSTAGE1=1,2,137,-1,100,1\n";
+        generator->gen_preview.text=preview;
+        auto* context=ImGui::CreateContext();
+        auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.DisplaySize={1200,850};io.DeltaTime=1.f/60;
+        // Generator buttons use dynamic font sizes, as in the DX11 renderer.
+        io.BackendFlags|=ImGuiBackendFlags_RendererHasTextures;
+        io.Fonts->AddFontDefault();
+        static std::string copied;
+        ImGui::GetPlatformIO().Platform_SetClipboardTextFn=[](ImGuiContext*,const char* value){copied=value;};
+        ImGui::GetPlatformIO().Platform_GetClipboardTextFn=[](ImGuiContext*){return copied.c_str();};
+        ImGui::GetPlatformIO().Platform_SetImeDataFn=nullptr;
+        ImVec2 lo,hi;
+        const auto frame=[&]{
+            ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize({1100,800});
+            ImGui::Begin("generator-text-contract",nullptr,ImGuiWindowFlags_NoSavedSettings);
+            generator->draw_page({}, {}, 2);
+            lo=ImGui::GetItemRectMin();hi=ImGui::GetItemRectMax();
+            ImGui::End();ImGui::EndFrame();
+        };
+        frame();frame();
+        const auto y=lo.y+ImGui::GetStyle().FramePadding.y+ImGui::GetFontSize()*.5f;
+        io.AddMousePosEvent(lo.x+ImGui::GetStyle().FramePadding.x+1,y);frame();
+        io.AddMouseButtonEvent(0,true);frame();
+        io.AddMousePosEvent(hi.x-30,y);frame();
+        io.AddMouseButtonEvent(0,false);frame();
+        io.AddInputCharactersUTF8("overwrite");frame();
+        copied.clear();io.AddKeyEvent(ImGuiMod_Ctrl,true);io.AddKeyEvent(ImGuiKey_C,true);frame();
+        assert(copied==first&&generator->gen_preview.text==preview);
+        ImGui::DestroyContext(context);
+    }
     result_table_contract(root);
     if(argc==3){
         const auto fixture=fs::absolute(argv[2]);

@@ -181,7 +181,7 @@
       <Item id="generator.preview_summary" name="%s | 读取 %d | 重复 %d" />
       <Item id="current_preview" name="当前预览" />
       <Item id="expired_preview" name="已失效预览" />
-      <Item id="copy_preview" name="复制预览" />
+      <Item id="copy_preview" name="复制" />
       <Item id="ecm_probability" name="ECM 概率" />
       <Item id="parameters" name="参数" />
       <Item id="charts_and_snapshot" name="图表与快照" />

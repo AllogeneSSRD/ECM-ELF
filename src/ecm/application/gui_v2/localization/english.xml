@@ -181,7 +181,7 @@
       <Item id="generator.preview_summary" name="%s | read %d | duplicates %d" />
       <Item id="current_preview" name="Current preview" />
       <Item id="expired_preview" name="Expired preview" />
-      <Item id="copy_preview" name="Copy preview" />
+      <Item id="copy_preview" name="Copy" />
       <Item id="ecm_probability" name="ECM probability" />
       <Item id="parameters" name="Parameters" />
       <Item id="charts_and_snapshot" name="Charts and snapshot" />

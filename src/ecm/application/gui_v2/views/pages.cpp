@@ -236,8 +236,7 @@ bool App::preview_generator() {
 bool App::apply_generator() {
     if(!ready || !gen_valid || generator_signature()!=gen_signature) {gen_valid=false;status="Preview expired; generate again.";return false;}
     try {
-        // Block a consumer during the short append, including an unchanged old GUI's updated worker.
-        ecm_queue::OwnerLease lease(gen_path,gen_worker);
+        // The worker owns task execution; apply_append serializes only file edits.
         std::string error;size_t bytes=0;
         if(!ecmgui::apply_append(gen_path,gen_preview.text,gen_stamp,error,&bytes)){status=error;gen_valid=false;return false;}
         gen_valid=false;status="Queue appended: "+std::to_string(bytes)+" bytes";trace("generator: "+status);return true;
@@ -273,13 +272,25 @@ void App::draw_generator(bool zh) {
         form.field("assignment","AID",[]{ImGui::TextUnformatted("N/A");},ui::text("set_assignment_n_a",zh),[&]{ecmgui_v2::ui::checkbox(ui::text("set_assignment_n_a",zh),&gen_options.set_has_na);});
     }
     if(gen_valid && generator_signature()!=gen_signature)gen_valid=false;
-    if(ui::button("generate-preview",ecmgui_v2::ui::text("generate_preview",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)&&!preview_generator())toast(status,true);ImGui::SameLine();
-    ImGui::BeginDisabled(!gen_valid);if(ui::button("apply-preview",ecmgui_v2::ui::text("append_to_queue",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)&&!apply_generator())toast(status,true);ImGui::EndDisabled();
+    const auto palette=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);
+    const float scale=ImGui::GetStyle().FontScaleDpi;
+    if(ui::button("generate-preview",ui::text("generate_preview",zh),ui::ButtonKind::Primary,palette,scale)&&!preview_generator())
+        toast(status,true);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!gen_valid);
+    if(ui::button("apply-preview",ui::text("append_to_queue",zh),ui::ButtonKind::Primary,palette,scale)&&!apply_generator())
+        toast(status,true);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(gen_preview.text.empty());
+    if(ui::button("copy-preview",ui::text("copy_preview",zh),ui::ButtonKind::Secondary,palette,scale))
+        ImGui::SetClipboardText(gen_preview.text.c_str());
+    ImGui::EndDisabled();
     if(!gen_preview.text.empty()) {
         ImGui::Text(ecmgui_v2::ui::text("generator.preview_summary",zh),gen_valid?ecmgui_v2::ui::text("current_preview",zh):ecmgui_v2::ui::text("expired_preview",zh),gen_preview.read,gen_preview.duplicates);
-        if(ImGui::Button(ecmgui_v2::ui::text("copy_preview",zh)))ImGui::SetClipboardText(gen_preview.text.c_str());
         for(const auto& e:gen_preview.parse_errors)ImGui::TextWrapped("%s",e.c_str());for(const auto& e:gen_preview.warnings)ImGui::TextWrapped("%s",e.c_str());
-        ImGui::BeginChild("preview",ImVec2(0,180),true,ImGuiWindowFlags_HorizontalScrollbar);ImGui::TextUnformatted(gen_preview.text.c_str());ImGui::EndChild();
+        ImGui::InputTextMultiline("##generator-output",gen_preview.text.data(),gen_preview.text.size()+1,
+                                  {-1,180},ImGuiInputTextFlags_ReadOnly);
     }
 }
 void App::draw_probability(bool zh) {
