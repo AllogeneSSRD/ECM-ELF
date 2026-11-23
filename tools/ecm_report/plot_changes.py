@@ -23,7 +23,7 @@ import numpy as np
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Patch
 
-from plot_ecm import (CURVES_TO_TEST, LEVELS, apply_xticks, draw_vgrid,
+from plot_ecm import (CURVES_TO_TEST, LEVEL_GAP, LEVELS, apply_xticks, draw_vgrid,
                       load_rows, parse_xtick_gap, progress_y)
 
 
@@ -234,6 +234,7 @@ def draw_progress_change(
     vgrid: bool = False,
     compress: int = 1,
     compress_agg: str = "avg",
+    ymin: float | None = None,
 ) -> None:
     if not rows:
         raise ValueError("No end-date exponents in the selected range")
@@ -252,17 +253,25 @@ def draw_progress_change(
     gain[first] = 0.0
     loss[first] = 0.0
 
+    low = min(float(new.min()), min(old[~first], default=math.inf),
+              min(first_y[first_mark], default=math.inf))
+    high = max(float(old.max()), float(new.max()), float(first_y.max()))
+    # Partial progress in the first level starts one level below its target.
+    floor = max((level for level in LEVELS if level <= low),
+                default=LEVELS[0] - LEVEL_GAP)
+    ceil = min((level for level in LEVELS if level >= high), default=LEVELS[-1])
+    y_bottom = floor - 0.5 if ymin is None else ymin
+    y_top = max(high, ceil) + 0.5
+    if not math.isfinite(y_bottom) or y_bottom >= y_top:
+        raise ValueError(f"--ymin must be finite and less than {y_top:g}")
+
     fig, ax = plt.subplots(figsize=(max(10, min(60, n / dpi)), 8), dpi=dpi)
     ax.bar(x, old, width=1, align="edge", color="#9ca3af", linewidth=0)
     ax.bar(x, gain, bottom=old, width=1, align="edge", color="#0d9488", linewidth=0)
     ax.bar(x, loss, bottom=new, width=1, align="edge", color="#dc2626", linewidth=0)
     if first.any():
         ax.bar(x[first], new[first], width=1, align="edge", color="#7c3aed", linewidth=0)
-    low = min(min(old[~first], default=float(new.min())), float(new.min()))
-    high = max(float(old.max()), float(new.max()), float(first_y.max()))
-    floor = max((level for level in LEVELS if level <= low), default=LEVELS[0])
-    ceil = min((level for level in LEVELS if level >= high), default=LEVELS[-1])
-    ax.set_ylim(floor - 0.5, max(high, ceil) + 0.5)
+    ax.set_ylim(y_bottom, y_top)
     ax.set_xlim(0, n)
     # The measured delta can be much thinner than one screen pixel. Mark its
     # location without changing the segment's actual height.
@@ -276,7 +285,7 @@ def draw_progress_change(
                        s=28, c=color, marker=marker,
                        edgecolors="white", linewidths=0.5, zorder=12)
     for level in LEVELS:
-        if floor <= level <= max(high, ceil):
+        if y_bottom <= level <= y_top:
             ax.axhline(level, color="gray", linestyle="--", linewidth=0.5, alpha=0.5)
     tick_pos = apply_xticks(ax, exponents, xtick_gap)
     if vgrid:
@@ -386,6 +395,8 @@ def main() -> None:
                         help="Change plot: merge N consecutive exponents per bar (default 1)")
     parser.add_argument("--compress-agg", choices=("avg", "max"), default="avg",
                         help="Change plot: aggregate compared progress within each bar")
+    parser.add_argument("--ymin", type=float,
+                        help="Change plot: lower Y-axis limit (default: automatic)")
     parser.add_argument("--last-days", type=int,
                         help="Use the last N calendar days ending at --to")
     parser.add_argument("--max-height-px", type=int, default=800,
@@ -408,6 +419,8 @@ def main() -> None:
         parser.error("require --lo <= --hi, width >= 500, and positive range, compress, day, height, and dpi values")
     if args.plot == "heatmap" and (args.compress != 1 or args.compress_agg != "avg"):
         parser.error("--compress applies to change; use --range-size for heatmap")
+    if args.plot == "heatmap" and args.ymin is not None:
+        parser.error("--ymin applies to the change plot")
     if args.hide_zero and args.plot not in {"heatmap", "both"}:
         parser.error("--hide-zero requires --plot heatmap or both")
     if args.start and args.end and args.start > args.end:
@@ -434,9 +447,12 @@ def main() -> None:
             out = args.out_dir / (
                 f"ecm_progress_change_{args.lo}-{args.hi}_{start}_{end}{suffix}.png"
             )
-            draw_progress_change(rows, args.lo, args.hi, start, end, out,
-                                 args.dpi, args.xtick_gap, args.vgrid,
-                                 args.compress, args.compress_agg)
+            try:
+                draw_progress_change(rows, args.lo, args.hi, start, end, out,
+                                     args.dpi, args.xtick_gap, args.vgrid,
+                                     args.compress, args.compress_agg, ymin=args.ymin)
+            except ValueError as exc:
+                parser.error(str(exc))
         if args.plot in {"heatmap", "both"}:
             selected = selected_heatmap_dates(dates, args.start, end, args.last_days)
             if not selected:

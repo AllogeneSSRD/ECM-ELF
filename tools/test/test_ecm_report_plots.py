@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import matplotlib.image as mpimg
 
@@ -142,6 +143,17 @@ class ReportPlotTests(unittest.TestCase):
             self.assertEqual(heatmap.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertEqual(mpimg.imread(heatmap).shape[0], 320)
             self.assertEqual(mpimg.imread(heatmap).shape[1], 800)
+
+    def test_change_ymin_includes_partial_first_level_in_mixed_bucket(self) -> None:
+        rows = [(2500001, 25.0, 26.0), (2500011, None, 21.0)]
+        for options, expected in (({}, 19.5), ({"ymin": 20.5}, 20.5)):
+            with self.subTest(options=options):
+                with patch("matplotlib.figure.Figure.savefig", autospec=True) as save:
+                    draw_progress_change(rows, 2500000, 2600000, "20261001",
+                                         "20261003", Path("unused.png"), 80,
+                                         compress=2, **options)
+                ax, = save.call_args.args[0].axes
+                self.assertEqual(ax.get_ylim(), (expected, 30.5))
 
     def test_dates_require_eight_real_digits(self) -> None:
         self.assertEqual(parse_date("20261018"), "20261018")
