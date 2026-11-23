@@ -61,7 +61,7 @@ bool real_run_words(
 int prepare_stage2_plan(ecm_stage2::ModulusContext &L,size_t nw,
     unsigned long long sigma,unsigned long long B1,unsigned long long B2,
     unsigned long long D_in,bool choose_d,int curves,bool d_plan_only,
-    ecm_stage2::Plan *plan_result,Stage2PlanRuntime &runtime)
+    ecm_stage2::Plan *plan_result,Stage2PlanRuntime &runtime,uint64_t b2_min)
 {
     CK(cudaSetDevice(g_device));
     cudaDeviceProp prop{};
@@ -126,7 +126,7 @@ int prepare_stage2_plan(ecm_stage2::ModulusContext &L,size_t nw,
         const double RLOOP = 265.756, RTREE = 50.537, RGIANT = 50.655, RGLUE = 30.339, RSETUP = 25.0;
         auto lg2 = [](double x) { return (x > 1.0) ? (std::log(x) / std::log(2.0)) : 1.0; };
         auto model = [&](DCand &c) {
-            c.imax = B2 / c.D + 2;
+            c.imax = ecm_stage2::giant_range(B2,c.D,false,b2_min).points;
             const unsigned long long bsz = (c.P < c.imax) ? c.P : c.imax;
             c.batches = bsz ? (c.imax + bsz - 1) / bsz : 1;
             c.units = (double)c.P * 2.0 / (double)c.D;      /* phi(D)/D: informational only */
@@ -136,7 +136,7 @@ int prepare_stage2_plan(ecm_stage2::ModulusContext &L,size_t nw,
             c.glue = (RGLUE / RB) * (double)c.batches;
             c.total = c.loop + c.tree + c.giant + c.glue + RSETUP;
 
-            const double span = (B2 > B1) ? (double)(B2 - B1) : 1.0;
+            const double span = double(B2 - (b2_min?b2_min:B1));
             c.rate = span / (c.total > 1e-9 ? c.total : 1e-9);
         };
         /* Automatic geometry comes from the same literal catalogue as ECM tune.
@@ -172,7 +172,7 @@ stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue 
                 // i>=1 and j<=D/2: the first giant covers from about D/2.
                 // This is a rough lower-bound diagnostic, not a coverage weight.
                 auto pi_est=[](double x){return x>2 ? x/std::log(x) : x>=2 ? 1.0 : 0.0;};
-                const double missed=std::max(0.0,pi_est((double)c.D/2)-pi_est((double)B1));
+                const double missed=std::max(0.0,pi_est((double)c.D/2)-pi_est(double(b2_min?b2_min:B1)));
                 stage2_log::print(stage2_log::debug, "d_scan_choice: D=%llu P=phi/2=%llu imax=%llu batches=%llu "
                             "units=%.4f below_first_giant~%.0f fit=%.0f MB | loop=%.1f tree=%.1f "
                             "giant=%.1f glue=%.1f total=%.1f rate=%.3g vals/s\n",
@@ -253,7 +253,7 @@ stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue 
                 table=8ull*fuse_planned_table_words(description);
                 base=8ull*fuse_planned_base_words(description);return true;
             },NttWorkspacePolicy{}.workspace_pool,p.tree_workspace))return 3;
-        p.d=D; p.b1=B1; p.b2=B2; p.giant_points=B2/D+2;
+        p.d=D; p.b1=B1; p.b2=B2; p.giant_points=ecm_stage2::giant_range(B2,D,false,b2_min).points;
         p.batches=p.giant_points/P_baby+(p.giant_points%P_baby!=0);
         p.requests=std::make_shared<ecm_stage2::RequestPlan>();
         if(!ecm_stage2::request_plan(P_baby,p.giant_points,(int)L.S,
@@ -343,7 +343,7 @@ stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue 
         // actual small-prime loop then ladders only primes dividing D. Without
         // reuse, count its bounded interval directly, never use a guessed cap.
         const bool reuse_small=small_prime_flag("NTT_SMALL_PRIME_REUSE");
-        const auto half=D/2,lo=std::min(B1,half),hi=std::min(B2,half);
+        const auto half=D/2,lo=std::min(b2_min?b2_min:B1,half),hi=std::min(B2,half);
         bool small_supported=true;
         if(reuse_small) {
             auto rest=D;
@@ -412,7 +412,7 @@ stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue 
 }
 
 int query_stage2_plan(const char *n_str,unsigned long long sigma,unsigned long long B1,
-    unsigned long long B2,unsigned long long D_in,ecm_stage2::Plan &result,unsigned carrier_exponent)
+    unsigned long long B2,unsigned long long D_in,ecm_stage2::Plan &result,unsigned carrier_exponent,uint64_t b2_min)
 {
     ecm_stage2::ModulusContext L;
     stage2_memory::Session memory_session;
@@ -422,7 +422,7 @@ int query_stage2_plan(const char *n_str,unsigned long long sigma,unsigned long l
         std::fprintf(stderr,"%s: %s\n",NTT_PROBE_NAME,modulus_error.c_str());return 2;
     }
     Stage2PlanRuntime planning;
-    return prepare_stage2_plan(L,L.W,sigma,B1,B2,D_in,D_in==0,1,true,&result,planning);
+    return prepare_stage2_plan(L,L.W,sigma,B1,B2,D_in,D_in==0,1,true,&result,planning,b2_min);
 }
 
 bool ecm_cuda_stage2_shape_query(uint64_t p,int bits,uint64_t *length,uint64_t *output_slots)
@@ -463,20 +463,20 @@ int ecm_cuda_stage2_plan(
     int device,
     void (*report)(const char*,void*),
     void *context,
-    unsigned carrier_exponent)
+    unsigned carrier_exponent,uint64_t b2_min)
 {
     stage2_log::PlanningScope planning_logs;
-    if(!report || !n_hex || device<0 || !b1 || b2<=b1 ||
+    if(!report || !n_hex || device<0 || !b1 || b2<=b1 || (b2_min && (b2_min<b1 || b2_min>=b2)) ||
        b2>(uint64_t)INT64_MAX-8192 || (d && (d<6 || d%2)))return 2;
     if(ecm_cuda_stage2_check_configuration())return 2;
     g_device=device;
     ecm_stage2::Plan p;
-    const int code=query_stage2_plan(n_hex,sigma,b1,b2,d,p,carrier_exponent);
+    const int code=query_stage2_plan(n_hex,sigma,b1,b2,d,p,carrier_exponent,b2_min);
     if(code)return code;
     const auto &g=p.geometry;
     const bool groot_balanced=ecm_stage2::select_groot_layout(g.words,p.giant_points,g.p,g.bits,
         [](ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::Word *slots){return ntt_shape_query(m,bits,n,nullptr,nullptr,nullptr,nullptr,slots);});
-    const auto relocation=ecm_stage2::giant_range(p.b2,p.d,g_relocation_enabled);
+    const auto relocation=ecm_stage2::giant_range(p.b2,p.d,g_relocation_enabled,b2_min);
     std::ostringstream json;json<<std::setprecision(17)
         <<"{\"type\":\"stage2_plan\",\"schema\":1,\"curves_executed\":0,\"bits\":"<<g.bits
         <<",\"target_bits\":"<<p.target_bits<<",\"carrier_exponent\":"<<p.carrier_exponent<<",\"groot_balanced\":"<<int(groot_balanced)

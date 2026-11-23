@@ -60,9 +60,9 @@ inline PointBackendChoice qualified_baby_backend(const Estimator &engine,const S
 inline Word giant_backend_bucket(const Shape &s) {
     GiantWork work;
     if(!cooperative_point_width(s.arithmetic_bits) || !s.d || !s.chain_block ||
-       !giant_work(s.b2/s.d+2,s.d,s.giant_chunk,s.chain_min,s.force_ladder,work,
+       !giant_work(s.giant_points(),s.d,s.giant_chunk,s.chain_min,s.force_ladder,work,
                    d_catalog::degree(s.d),s.tail_balance) || !work.chain_points)return 0;
-    return point_batch_bucket((std::min(s.b2/s.d+2,s.giant_chunk)+s.chain_block-1)/s.chain_block,1ull<<24);
+    return point_batch_bucket((std::min(s.giant_points(),s.giant_chunk)+s.chain_block-1)/s.chain_block,1ull<<24);
 }
 inline PointBackendChoice qualified_giant_backend(const Estimator &engine,const Shape &reference,Word minimum=2,
                                                 unsigned required=point_backend_unknown) {
@@ -275,7 +275,7 @@ inline std::vector<Shape> runtime_chain_trials(const std::vector<RuntimeCandidat
     std::map<unsigned,const RuntimeCandidate*> best;
     for(const auto &c:all)if(c.shape.chain_block==64 && c.statistics.count>=minimum && c.statistics.seconds>0) {
         GiantWork work;
-        if(!giant_work(c.shape.b2/c.shape.d+2,c.shape.d,c.shape.giant_chunk,c.shape.chain_min,
+        if(!giant_work(c.shape.giant_points(),c.shape.d,c.shape.giant_chunk,c.shape.chain_min,
             c.shape.force_ladder,work,d_catalog::degree(c.shape.d),c.shape.tail_balance) || !work.chain_points)continue;
         auto &at=best[c.shape.carrier];if(!at || c.statistics.seconds<at->statistics.seconds)at=&c;
     }
@@ -333,7 +333,7 @@ inline RuntimeSearchBudget runtime_family_budget(const std::vector<RuntimeCandid
         const Shape &reference,Word sample_limit,const RuntimeAllocation &allocation,Word minimum=2) {
     RuntimeSearchBudget out;out.minimum=minimum;Word trusted=0;unsigned outside=0;
     const bool legacy=legacy_groot_layout((reference.arithmetic_bits+63)/64,
-        reference.b2/reference.d+2,d_catalog::degree(reference.d));
+        reference.giant_points(),d_catalog::degree(reference.d));
     for(const auto &c:all)if(c.shape.carrier==reference.carrier && c.shape.chain_block==reference.chain_block && c.statistics.count>=minimum) {
         trusted=std::max(trusted,c.statistics.count);
         if(!out.reference || c.statistics.seconds<out.reference)out.reference=c.statistics.seconds;

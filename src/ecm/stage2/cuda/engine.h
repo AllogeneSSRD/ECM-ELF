@@ -88,4 +88,5 @@ int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     bool choose_d,
                     const char *saved_qx_hex = nullptr, Stage2Tail *saved_result = nullptr,
                     unsigned carrier_exponent = 0,
-                    const char *saved_a24_hex = nullptr,const EcmStage2GpuHandoff *handoff=nullptr);
+                    const char *saved_a24_hex = nullptr,const EcmStage2GpuHandoff *handoff=nullptr,
+                    uint64_t b2_min=0);

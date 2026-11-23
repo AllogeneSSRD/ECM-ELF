@@ -120,7 +120,9 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
         }
     }
     arg(L"--record-offset", r.offset); arg(L"--record-hash", r.hash); arg(L"--record-index", r.index);
-    arg(L"--b2", b2); arg(L"--d", d); arg(L"--device", device); arg(L"--worker", o.worker);
+    if(o.b2_min)cmd+=L" --b2 "+std::to_wstring(o.b2_min)+L"-"+std::to_wstring(b2);
+    else arg(L"--b2", b2);
+    arg(L"--d", d); arg(L"--device", device); arg(L"--worker", o.worker);
     if (!o.worker_cpu_affinity.empty())
         cmd += L" --queue-cpu-affinity " + quote(std::wstring(o.worker_cpu_affinity.begin(), o.worker_cpu_affinity.end()));
     if(o.has_carrier || o.carrier_exponent)arg(L"--carrier-exponent",o.carrier_exponent);

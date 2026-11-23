@@ -3,11 +3,14 @@
 #include "tune_components.h"
 #include "../point_backend.h"
 #include "../reduce_backend.h"
+#include "../relocation.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
 struct Shape {
     unsigned target_bits=0,arithmetic_bits=0,carrier=0;
     Word b1=0,b2=0,d=0,batch_bytes=64ull<<20,chunk_max=0;
+    Word b2_min=0;
+    Word giant_points()const {return giant_range(b2,d,false,b2_min).points;}
     unsigned buffers=3;bool physical=false,fold=true,frontier=true,mersenne=false;
     bool short_batch_tune=false;
     Word short_batch_hash=0;
@@ -22,13 +25,13 @@ struct Shape {
     void canonicalize_point_policy() {
         const Word p=d_catalog::degree(d);
         if(tail_balance && d && p && giant_chunk)
-            tail_balance=!force_ladder && giant_tail_borrow(b2/d+2,giant_chunk,p,chain_min,true)!=0;
+            tail_balance=!force_ladder && giant_tail_borrow(giant_points(),giant_chunk,p,chain_min,true)!=0;
     }
-    using Key=std::array<Word,27>;
+    using Key=std::array<Word,28>;
     Key key()const {
         return {target_bits,arithmetic_bits,carrier,b1,b2,d,batch_bytes,chunk_max,buffers,
             Word(physical),Word(fold),Word(frontier),Word(mersenne),Word(short_batch_tune),
-            short_batch_hash,giant_chunk,chain_min,Word(force_ladder),Word(groot_balanced),Word(tail_balance),chain_block,baby_coop,giant_coop,seed_coop,reduce_coop,reduce_threads,reduce_kernel};
+            short_batch_hash,giant_chunk,chain_min,Word(force_ladder),Word(groot_balanced),Word(tail_balance),chain_block,baby_coop,giant_coop,seed_coop,reduce_coop,reduce_threads,reduce_kernel,b2_min};
     }
 };
 struct Work {
@@ -47,7 +50,8 @@ template<class Query,class NttCost> bool work(const Shape &s,Query query,NttCost
     if((s.baby_coop || s.giant_coop || s.seed_coop) && !cooperative_point_width(s.arithmetic_bits))return false;
     if(s.target_bits<2 || s.arithmetic_bits<s.target_bits || s.arithmetic_bits>16384 ||
        s.b1<2 || s.b2<=s.b1 || s.d<6 || s.d%2 || !s.batch_bytes)return false;
-    out.p=d_catalog::degree(s.d);out.points=s.b2/s.d+2;
+    out.p=d_catalog::degree(s.d);out.points=s.giant_points();
+    if(!out.points)return false;
     RequestProgram program;if(!request_program(out.p,std::max(out.points,out.p+1),program,
         s.groot_balanced))return false;
     if(out.points<=out.p) {
@@ -200,6 +204,7 @@ public:
         const auto old=sample_shapes.find(&s);if(old!=sample_shapes.end())return old->second;
         Shape x;x.target_bits=unsigned(uint(s,"target_bits"));x.arithmetic_bits=unsigned(uint(s,"arithmetic_bits"));
         x.carrier=unsigned(uint(s,"carrier_exponent"));x.b1=uint(s,"b1");x.b2=uint(s,"b2");x.d=uint(s,"d");
+        x.b2_min=optional_uint(s,"b2_min");
         x.fold=uint(s,"fold_resident")!=0;x.frontier=uint(s,"frontier_resident")!=0;x.mersenne=text(s,"modulus_kind")=="mersenne";
         x.giant_chunk=optional_uint(s,"giant_chunk_points");x.chain_min=optional_uint(s,"giant_chain_min",32768);
         x.force_ladder=optional_uint(s,"giant_force_ladder")!=0;
@@ -223,6 +228,7 @@ public:
             ((x.arithmetic_bits+63)/64+1+31)/32:0;
     }
     bool eligible(const Fields &s,const Shape &x)const {
+        if(optional_uint(s,"b2_min")!=x.b2_min)return false;
         if(optional_uint(s,"baby_coop")!=x.baby_coop || optional_uint(s,"giant_coop")!=x.giant_coop || optional_uint(s,"seed_coop")!=x.seed_coop)return false;
         if(optional_uint(s,"giant_tail_balance")!=Word(x.tail_balance) || optional_uint(s,"giant_chain_block",64)!=x.chain_block)return false;
         if(!measured(s))return false;

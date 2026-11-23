@@ -2,6 +2,7 @@
 #include "input.h"
 #include "io/expression.h"
 #include "../../io/config_format.h"
+#include "../../io/stage2_bounds.h"
 #include "../../io/files.h"
 #ifndef _WIN32
 #include <cerrno>
@@ -175,7 +176,9 @@ QueueSelection queue_fields(std::string line,unsigned input_max_bits) {
         throw TaskInputError(error);
     if (input_max_bits && q.task.n > input_max_bits)
         throw TaskInputError("worktodo exponent exceeds supported input range");
-    q.b2 = u64(q.task.b2_text, "worktodo B2");
+    const auto bounds = ecm_stage2::parse_bounds(q.task.b2_text, "worktodo B2");
+    q.b2 = bounds.upper;
+    q.b2_min = bounds.lower;
     q.skip = q.task.skip_curves;
     q.count = q.task.curves_to_run;
     return q;

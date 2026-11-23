@@ -43,7 +43,7 @@ static CurveProcessRequest curve_request(Options &o,const fs::path &save,const R
     request.save=save;request.results=results;request.log=log;
     request.log_max_kb=o.log_max_kb;
     request.record={r.offset,r.hash,r.index};request.console_budget={ini_settings.arena,ini_settings.owner_mb};
-    request.b2=b2;request.d=d;request.device=device;request.batch=batch;
+    request.b2=b2;request.b2_min=o.b2_min;request.d=d;request.device=device;request.batch=batch;
     request.arena=o.arena;
     request.auto_b2=o.auto_b2;
     request.auto_carrier=o.auto_carrier;
@@ -237,7 +237,8 @@ int curve_worker(Options o) {
     ecm_stage2::GiantPolicyScope point_execution(o.giant_tail_balance?1:0,o.selected_chain);
     const double selection_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
     const double auto_seconds=auto_json.empty()?0:std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
-    if (o.b2 <= r.b1) throw std::runtime_error("B2 must be greater than saved B1");
+    if (o.b2 <= r.b1 || (o.b2_min && (o.b2_min<r.b1 || o.b2_min>=o.b2)))
+        throw std::runtime_error("Stage2 bounds require saved B1 <= B2min < B2");
     RuntimeTuneObservation observation;
     const auto observation_start=std::chrono::steady_clock::now();
     if(!o.relocation && !o.tune_child && o.tune_runtime && !o.tune_profile.empty() && mpz_cmp_ui(gcd.z,1)==0) {
@@ -270,7 +271,7 @@ int curve_worker(Options o) {
             [](const char *text, void *ctx) { *static_cast<std::string *>(ctx) = text; }, &result,o.carrier_exponent,
             &tune_metrics,
             r.a24.empty()?nullptr:r.a24.c_str(),
-            o.queue_gpu_done && !o.tune_runtime && o.factor_only && early_gpu_handoff_requested()?&handoff:nullptr);
+            o.queue_gpu_done && !o.tune_runtime && o.factor_only && early_gpu_handoff_requested()?&handoff:nullptr,o.b2_min);
     }
     if (code || result.empty()) return code ? code : 1;
     if(o.queue_gpu_done && !o.tune_runtime && !SetEvent(gpu_done.value))
@@ -316,6 +317,7 @@ int curve_worker(Options o) {
     submission.when=ecm_results::utc_timestamp();
     submission.known=o.submission_known;submission.aid=o.submission_aid;
     submission.sigma=r.sigma;submission.b1=r.b1;submission.b2=o.b2;
+    submission.b2_min=o.b2_min;
     submission.d=tune_metrics.d;submission.poly_size=tune_metrics.p;
     submission.user=o.result_user;submission.computer=o.result_computer;
     submission.factors=ecm_stage2::result_factors(result);
@@ -323,7 +325,7 @@ int curve_worker(Options o) {
     const auto external_path=fs::u8path(o.submission);
     if(submission.stage==1){submission.d=0;submission.poly_size=0;}
     if(o.checkpoint_outcome) {
-        std::cout<<"stage2_checkpoint_outcome: "<<checkpoint_outcome(r,o.b2,ecm_results::submission_json(submission,n.z))<<std::endl;
+        std::cout<<"stage2_checkpoint_outcome: "<<checkpoint_outcome(r,o.b2,ecm_results::submission_json(submission,n.z),o.b2_min)<<std::endl;
     }
     // The primary verified factor is durable before optional decomposition.
     // A failed diagnostic cannot turn a successful curve into a replay/failure.
@@ -357,6 +359,9 @@ int curve_worker(Options o) {
         (tuned_json.empty()?"":",\"tune_plan\":"+tuned_json)+
         (o.factorize_hits?",\"factorization_seconds\":"+std::to_string(factor_seconds):"")+
         (o.factor_only?",\"requested_factor_only\":true":"")+
+        (o.b2_min && !o.relocation?",\"giant_first\":"+std::to_string(tune_metrics.giant_first)+
+            ",\"giant_last\":"+std::to_string(tune_metrics.giant_last)+
+            ",\"giant_points\":"+std::to_string(tune_metrics.giant_points):"")+
         (auto_json.empty()?"":",\"auto_b2\":true,\"auto_planning_seconds\":"+std::to_string(auto_seconds)+",\"auto_plan\":"+auto_json)+
         (o.relocation?",\"relocation\":true,\"relocation_replayed\":"+std::string(tune_metrics.relocation_replayed?"true":"false")+
             ",\"giant_first\":"+std::to_string(tune_metrics.giant_first)+",\"giant_last\":"+std::to_string(tune_metrics.giant_last)+
@@ -427,7 +432,7 @@ bool checked_queue_curve(const std::string &payload,const ParallelRoute &route) 
     const std::pair<const char*,uint64_t> expected[]={
         {"checked_nf",1},{"d",s.d},{"p",ecm_stage2::d_catalog::degree(s.d)},
         {"b2",s.b2},{"carrier",s.carrier},{"layout",s.groot_balanced},{"fold",s.fold},
-        {"frontier",s.frontier},{"points",s.b2/s.d+2},{"baby",s.baby_coop},{"giant",s.giant_coop},
+        {"frontier",s.frontier},{"points",s.giant_points()},{"baby",s.baby_coop},{"giant",s.giant_coop},
         {"seed",s.seed_coop},{"reduce",s.reduce_coop},{"reduce_threads",s.reduce_threads},{"reduce_kernel",s.reduce_kernel}
     };
     for(const auto &item:expected)
@@ -913,8 +918,11 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
             calibration_range=portable_queue_range(paths.worktodo,o.worker,paths.tmp);
     };
     engine.prepare=[&](Options &task,const Record &record) {
-        if(task.parallel!=ParallelMode::paired && !task.relocation && !task.dry && !task.tune_profile.empty())
-            ensure_portable_calibration(task,record,defaults,calibration_range);
+        if(task.parallel!=ParallelMode::paired && !task.relocation && !task.dry && !task.tune_profile.empty()) {
+            auto calibration=task;
+            calibration.b2_min=0;
+            ensure_portable_calibration(calibration,record,defaults,calibration_range);
+        }
     };
     engine.plan=[](const Options &o,const Record &r,uint64_t b2,uint64_t d) {
         const auto device=o.device;
@@ -931,7 +939,7 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
         if(ecm_cuda_stage2_set_relocation(o.relocation))throw std::runtime_error("relocation requires the production Stage2 engine");
         ecm_stage2::GrootLayoutScope layout_scope(local.groot_layout);
         const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,local.b2,local.d,device,
-            [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&result,local.carrier_exponent);
+            [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&result,local.carrier_exponent,local.b2_min);
         if(code||result.empty())throw std::runtime_error("Stage2 planning failed");
         std::cout<<result<<std::endl;
     };

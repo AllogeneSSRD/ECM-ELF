@@ -15,6 +15,7 @@
 #endif
 #include "../cuda/api.h"
 #include "../modulus.h"
+#include "../relocation.h"
 #include "../planning/d_catalog.h"
 #include "ecm/platform/compute_log.h"
 #include <gmp.h>
@@ -88,7 +89,7 @@ Values normalize(const Values&x,const Values&z,mpz_srcptr n,std::set<std::string
 }
 std::string resources(){std::vector<wchar_t> p(32768);auto n=GetModuleFileNameW(nullptr,p.data(),DWORD(p.size()));if(!n||n==p.size())throw std::runtime_error("executable path");return (std::filesystem::path(std::wstring(p.data(),n)).parent_path()/"opencl_resources/ntt").string();}
 Word budget(const cln::DeviceInfo&d){const auto kb=setting("NTT_ARENA_CAP_KB",0);if(kb>std::numeric_limits<Word>::max()/1024)throw std::runtime_error("arena budget overflow");return kb?kb*1024:std::min(Word(1024)<<20,d.global_bytes/2);}
-struct Shape {Word d=0,p=0,giants=0,chunk=0,bytes=0;double score=0;};
+struct Shape {Word d=0,p=0,giants=0,chunk=0,bytes=0,first_giant=1;double score=0;};
 bool wide_point_chains(const Shape& shape,size_t words) {
     return words>=160 && words<=255 && shape.p>=144 && shape.p<=240 &&
         shape.d/2<2048 && shape.giants>=716 && shape.giants<=1127;
@@ -144,8 +145,9 @@ cls::PointTrial choose_points(const cln::DeviceInfo& device,const Shape& s,size_
     catch(const std::exception&e){std::cerr<<"opencl_point_tune: "<<e.what()<<'\n';}
     return trial;
 }
-Shape shape(Word d,Word b2,unsigned bits,Word limit){
-    Shape s;s.d=d;s.p=ecm_stage2::d_catalog::degree(d);s.giants=b2/d+2;
+Shape shape(Word d,Word b2,unsigned bits,Word limit,Word b2_min){
+    const auto giants=ecm_stage2::giant_range(b2,d,false,b2_min);
+    Shape s;s.d=d;s.p=ecm_stage2::d_catalog::degree(d);s.giants=giants.points;s.first_giant=giants.first;
     const auto batch_mb=setting("NTT_S4_BATCH_MB",64);
     if(!batch_mb||batch_mb>(Word(1)<<20))throw std::runtime_error("invalid OpenCL batch budget");
     s.chunk=std::min(s.p,std::max(Word(1),(batch_mb<<20)/(6*((bits+63)/64)*8)));
@@ -160,9 +162,9 @@ Shape shape(Word d,Word b2,unsigned bits,Word limit){
     s.score=double(s.p)*l*l+groups*(double(s.chunk)*std::pow(std::log2(double(s.chunk)+1),2)+double(s.p)*l);
     s.score+=double(s.p+s.giants)*std::log2(double(b2)+1);return s;
 }
-Shape choose(Word requested,Word b2,unsigned bits,Word limit){
-    if(requested){if(requested<6||requested%2||requested>200000000)throw std::runtime_error("D must be even, 6..200000000");auto s=shape(requested,b2,bits,limit);if(!s.d)throw std::runtime_error("OpenCL D exceeds conservative payload budget");return s;}
-    Shape best;for(const auto&e:ecm_stage2::d_catalog::entries()){try{const auto s=shape(e.d,b2,bits,limit);if(s.d&&(!best.d||s.score<best.score))best=s;}catch(const std::exception&){}}
+Shape choose(Word requested,Word b2,unsigned bits,Word limit,Word b2_min){
+    if(requested){if(requested<6||requested%2||requested>200000000)throw std::runtime_error("D must be even, 6..200000000");auto s=shape(requested,b2,bits,limit,b2_min);if(!s.d)throw std::runtime_error("OpenCL D exceeds conservative payload budget");return s;}
+    Shape best;for(const auto&e:ecm_stage2::d_catalog::entries()){try{const auto s=shape(e.d,b2,bits,limit,b2_min);if(s.d&&(!best.d||s.score<best.score))best=s;}catch(const std::exception&){}}
     if(!best.d)throw std::runtime_error("no OpenCL D fits the payload budget");return best;
 }
 bool counts_enabled=false;
@@ -190,7 +192,8 @@ struct PointGenerator {
     Word cpu_chain_babies=0,cpu_chain_giants=0,cpu_chain_recoveries=0;
     double chain_recovery_seconds=0,chain_kernel_seconds=0,chain_max_seconds=0,giant_kernel_seconds=0;
     Word giant_step=0;Point giant_base;bool use_giant_base=false;
-    PointGenerator(cln::Runtime&r,mpz_srcptr modulus,const Big&x,const Big&a,const Shape&shape,const std::string& point_plan):runtime(r),n(modulus),a24(a),base{x,Big(1)},w((mpz_sizeinbase(n,2)+63)/64){
+    const Word first_giant;
+    PointGenerator(cln::Runtime&r,mpz_srcptr modulus,const Big&x,const Big&a,const Shape&shape,const std::string& point_plan):runtime(r),n(modulus),a24(a),base{x,Big(1)},w((mpz_sizeinbase(n,2)+63)/64),first_giant(shape.first_giant){
         const auto&v=r.device().vendor;const bool amd=v.find("Advanced Micro Devices")!=v.npos||v=="AMD";
         const bool nvidia=v.find("NVIDIA")!=v.npos;
         const auto automatic=setting("ECM_OPENCL_POINT_AUTO",1);
@@ -378,7 +381,7 @@ struct PointGenerator {
                 samples.insert({lo,lo+count/2,lo+count-1});}
             if(regroup){
                 // Also check the actual polynomial blocks (including the final short one).
-                const Word first=scalars.front()/step-1,end=first+scalars.size();
+                const Word first=scalars.front()/step-first_giant,end=first+scalars.size();
                 for(Word lo=first-first%regroup;lo<end;){const Word count=std::min(regroup,total_giants-lo);
                     for(Word at:{lo,lo+count/2,lo+count-1})if(at>=first && at<end)samples.insert(size_t(at-first));
                     lo+=count;
@@ -408,20 +411,21 @@ int ecm_cuda_stage2_device_info(int index,EcmStage2DeviceInfo*info,const char*ex
     // identity token, not a hardware UUID and never a free-memory promise.
     Word a=14695981039346656037ull,b=1099511628211ull;for(unsigned char c:d.platform+d.vendor+d.name+d.driver+std::to_string(index)){a=(a^c)*1099511628211ull;b=(b^c)*1099511628211ull;}
     std::snprintf(info->uuid_hex,sizeof(info->uuid_hex),"%016llx%016llx",a,b);return expected&&std::string(expected)!=info->uuid_hex?2:0;}catch(...){return 2;}}
-int ecm_cuda_stage2_plan(const char*n, uint64_t sigma,uint64_t b1,uint64_t b2,uint64_t d,int device,void(*report)(const char*,void*),void*ctx,unsigned carrier){try{ecm_stage2::ModulusContext m;std::string error;if(!m.configure(n,16,carrier,error))throw std::runtime_error(error);auto ds=cln::devices();if(device<0||size_t(device)>=ds.size())throw std::runtime_error("OpenCL device index");const auto s=choose(d,b2,unsigned(m.S),budget(ds[device]));print_shape(s,b1,b2,unsigned(m.S),g_batch_size(s,ds[device],m.W,carrier));std::ostringstream text;text<<"{\"backend\":\"opencl-ntt\",\"D\":"<<s.d<<",\"P\":"<<s.p<<",\"estimated_payload_bytes\":"<<s.bytes<<",\"payload_budget_bytes\":"<<budget(ds[device])<<",\"live_free_memory_known\":false}";report(text.str().c_str(),ctx);return 0;}catch(const std::exception&e){std::cerr<<"OpenCL plan: "<<e.what()<<'\n';return 2;}}
+int ecm_cuda_stage2_plan(const char*n, uint64_t sigma,uint64_t b1,uint64_t b2,uint64_t d,int device,void(*report)(const char*,void*),void*ctx,unsigned carrier,uint64_t b2_min){try{ecm_stage2::ModulusContext m;std::string error;if(!m.configure(n,16,carrier,error))throw std::runtime_error(error);auto ds=cln::devices();if(device<0||size_t(device)>=ds.size())throw std::runtime_error("OpenCL device index");const auto s=choose(d,b2,unsigned(m.S),budget(ds[device]),b2_min);print_shape(s,b1,b2,unsigned(m.S),g_batch_size(s,ds[device],m.W,carrier));std::ostringstream text;text<<"{\"backend\":\"opencl-ntt\",\"D\":"<<s.d<<",\"P\":"<<s.p<<",\"giant_first\":"<<s.first_giant<<",\"giant_points\":"<<s.giants<<",\"estimated_payload_bytes\":"<<s.bytes<<",\"payload_budget_bytes\":"<<budget(ds[device])<<",\"live_free_memory_known\":false}";report(text.str().c_str(),ctx);return 0;}catch(const std::exception&e){std::cerr<<"OpenCL plan: "<<e.what()<<'\n';return 2;}}
 int ecm_cuda_stage2_tune_ntt(int,int,int,int,uint64_t,void(*)(const char*,void*),void*,bool){return 2;}
 int ecm_cuda_stage2_tune_ntt_batches(int,int,int,int,uint64_t,const uint64_t*,size_t,void(*)(const char*,void*),void*,bool){return 2;}
 
-int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uint64_t b2,uint64_t d,int index,void(*report)(const char*,void*),void*ctx,unsigned carrier,EcmStage2Metrics*metrics,const char*a24,const EcmStage2GpuHandoff*){
+int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uint64_t b2,uint64_t d,int index,void(*report)(const char*,void*),void*ctx,unsigned carrier,EcmStage2Metrics*metrics,const char*a24,const EcmStage2GpuHandoff*,uint64_t b2_min){
     try{
-        if(!n||!x||!report||b1<2||b2<=b1||b2>uint64_t(INT64_MAX)-8192)throw std::runtime_error("invalid Stage2 bounds");
+        if(!n||!x||!report||b1<2||b2<=b1||b2>uint64_t(INT64_MAX)-8192||
+           (b2_min && (b2_min<b1 || b2_min>=b2)))throw std::runtime_error("invalid Stage2 bounds");
         stage2_log::phase("Plan Stage2 bounds and OpenCL payload");
         const double begin=now();ecm_stage2::ModulusContext m;std::string error;if(!m.configure(n,16,carrier,error))throw std::runtime_error(error);
         Big saved;if(mpz_set_str(saved.v,x,16)||mpz_sgn(saved.v)<0||mpz_cmp(saved.v,m.target())>=0)throw std::runtime_error("invalid Stage1 X");
-        auto ds=cln::devices();if(index<0||size_t(index)>=ds.size()||!ds[index].supported)throw std::runtime_error("unsupported OpenCL device index");const auto s=choose(d,b2,unsigned(m.S),budget(ds[index]));
+        auto ds=cln::devices();if(index<0||size_t(index)>=ds.size()||!ds[index].supported)throw std::runtime_error("unsupported OpenCL device index");const auto s=choose(d,b2,unsigned(m.S),budget(ds[index]),b2_min);
         const auto requested_window=setting("ECM_OPENCL_POINT_WINDOW",0);
         if(requested_window>65536)throw std::runtime_error("ECM_OPENCL_POINT_WINDOW must be 0..65536");
-        EcmStage2Metrics result;result.d=s.d;result.p=s.p;result.giant_points=s.giants;result.giant_last=s.giants;result.phases.seconds[0]=now()-begin;
+        EcmStage2Metrics result;result.d=s.d;result.p=s.p;result.giant_points=s.giants;result.giant_first=s.first_giant;result.giant_last=s.first_giant+s.giants-1;result.phases.seconds[0]=now()-begin;
         stage2_log::phase("Initialize OpenCL arithmetic and validate");
         cln::Options options;options.device=index;options.budget_bytes=budget(ds[index]);options.resource_root=resources();
         const auto cache=setting("ECM_OPENCL_CACHE_PROGRAMS",1);if(cache>1)throw std::runtime_error("ECM_OPENCL_CACHE_PROGRAMS must be 0 or 1");options.cache_programs=cache!=0;cln::Runtime runtime(options);
@@ -483,6 +487,25 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
             if(metrics)*metrics=result;const auto json=result_json(factors);report(json.c_str(),ctx);return 0;};
         if(!factors.empty())return finish();
         stage2_log::phase("Generate and normalize baby points");double t=now();std::vector<Word> indices;indices.reserve(s.p);for(Word j=1;j<=s.d/2;++j)if(std::gcd(j,s.d)==1)indices.push_back(j);if(indices.size()!=s.p)throw std::runtime_error("D/phi baby count");auto babies=generator.generate(indices,factors,result.checked);result.phases.seconds[2]=now()-t;if(!factors.empty())return finish();
+        if(b2_min && b2_min<s.d/2){
+            // Baby points already prove the coprime residues. Check primes
+            // dividing the wheel, which have no baby representative.
+            const auto check_prime=[&](Word prime){
+                if(prime<=b2_min || prime>std::min<Word>(b2,s.d/2))return;
+                const auto point=ladder(generator.base,prime,a,m.target());
+                Big gcd;
+                mpz_gcd(gcd.v,point.z.v,m.target());
+                factor(factors,gcd.v,m.target());
+            };
+            auto rest=s.d;
+            for(Word prime=2;prime<=rest/prime;++prime)if(rest%prime==0){
+                check_prime(prime);
+                do {rest/=prime;} while(rest%prime==0);
+            }
+            if(rest>1)check_prime(rest);
+            result.phases.seconds[2]=now()-t;
+            if(!factors.empty())return finish();
+        }
         stage2_log::phase("Build baby-point F tree and polynomial inverse");t=now();cls::Resultant tree(field,field.upload(flatten(babies,m.W),babies.size()));result.phases.seconds[3]=now()-t;
         std::vector<std::size_t> sentinels;for(auto k:std::set<std::size_t>{0,std::size_t(s.p/2),std::size_t(s.p-1)})sentinels.push_back(k);Values expected(sentinels.size(),Big(1));
         // The point window may span several G batches. Keep G boundaries
@@ -494,7 +517,7 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
         const auto point_window=std::max(s.chunk,(admitted_window/s.chunk)*s.chunk);
         stage2_log::print(stage2_log::phases,"opencl_point_window: requested=%llu effective=%llu cap=%llu G_batch=%llu source=%s\n",requested_window,point_window,window_cap,g_batch,overridden("ECM_OPENCL_POINT_WINDOW")?"explicit":generator.chain_enabled?"chain":generator.plan.enabled?"adaptive":"default");
         stage2_log::phase("Giant points, G trees and fold");const double loop=now();Word batches=0,filled=0;cls::Polynomial roots;
-        for(Word first=1;first<=s.giants;){const auto amount=std::min(point_window,s.giants-first+1);indices.resize(amount);for(Word k=0;k<amount;++k)indices[k]=(first+k)*s.d;
+        for(Word first=1;first<=s.giants;){const auto amount=std::min(point_window,s.giants-first+1);indices.resize(amount);for(Word k=0;k<amount;++k)indices[k]=(s.first_giant+first-1+k)*s.d;
             t=now();auto window=generator.generate(indices,factors,result.checked,s.d,std::size_t(s.chunk),g_batch!=s.chunk?g_batch:0,s.giants);result.giant_seconds+=now()-t;
             if(!factors.empty()){result.phases.seconds[6]=now()-loop;return finish();}
             for(Word offset=0;offset<amount;){

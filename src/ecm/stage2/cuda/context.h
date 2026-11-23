@@ -33,7 +33,7 @@ static_assert(ecm_stage2_capacity_max==ecm_stage2::max_words,"Stage2 capacity bo
 enum { BC_FTREE = 0, BC_GTREE = 1, BC_FOLD = 2, BC_DESCENT = 3, BC_FINV = 4, BC_NCAT = 5 };
 
 struct Stage2Params {
-    unsigned long long D = 0, B1 = 0, B2 = 0;
+    unsigned long long D = 0, B1 = 0, B2 = 0, B2min = 0;
     std::vector<unsigned long long> baby_j;
 };
 

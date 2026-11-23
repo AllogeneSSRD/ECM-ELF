@@ -50,14 +50,15 @@ int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
                        uint64_t b1, uint64_t b2, uint64_t d, int device,
                        void (*report)(const char *, void *), void *context,
                        unsigned carrier_exponent=0,EcmStage2Metrics *metrics=nullptr,
-                       const char *a24_hex=nullptr,const EcmStage2GpuHandoff *handoff=nullptr);
+                       const char *a24_hex=nullptr,const EcmStage2GpuHandoff *handoff=nullptr,
+                       uint64_t b2_min=0);
 
 // Planning initializes the CUDA context and queries live memory, but performs
 // no curve arithmetic. All time/memory estimates are explicitly labelled.
 int ecm_cuda_stage2_plan(const char *n_hex, uint64_t sigma, uint64_t b1,
                         uint64_t b2, uint64_t d, int device,
                         void (*report)(const char *, void *), void *context,
-                        unsigned carrier_exponent=0);
+                        unsigned carrier_exponent=0,uint64_t b2_min=0);
 // One iteration is two forwards plus the fused product/scale/inverse.
 // This measures field convolution only, not packing/carry/ECM reduction.
 // Warmup is opt-in; formal repeats are always checked and reported separately.

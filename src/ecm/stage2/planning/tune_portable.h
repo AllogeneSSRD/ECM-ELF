@@ -400,6 +400,7 @@ inline std::string runtime_group(const Fields &s) {
     for(const char *field:{"condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind",
                           "b1","b2","d","fold_resident","frontier_resident","execution_path"})
         key+=std::string(field)+'='+required(s,field)+';';
+    if(s.count("b2_min"))key+="b2_min="+std::to_string(optional_uint(s,"b2_min"))+';';
     for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder"}) {
         const auto at=s.find(field);key+=std::string(field)+'='+(at==s.end()?"absent":at->second)+';';
     }
@@ -412,6 +413,7 @@ inline std::string scope(const Fields &s) {
     // Formal calibration and production timing remain distinct populations.
     if(runtime_observation(s))return "runtime;"+runtime_group(s);
     std::string key="formal;";
+    if(s.count("b2_min"))key+="b2_min="+std::to_string(optional_uint(s,"b2_min"))+';';
     for(const char *field:{"condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind",
                           "b1","b2","d","fold_resident","frontier_resident","execution_path"}) {
         const auto &value=required(s,field);key+=std::to_string(value.size())+":"+value;
@@ -441,8 +443,10 @@ inline void validate(const Fields &s) {
     if(s.count("point_check_seconds") && !(real(s,"point_check_seconds")>=0))
         throw std::runtime_error("invalid point startup check time");
     const auto b1=uint(s,"b1"),b2=uint(s,"b2"),d=uint(s,"d");
+    const auto b2_min=optional_uint(s,"b2_min");
     if(bits<2 || bits>16384 || arithmetic<bits || arithmetic>16384 || (carrier && carrier!=arithmetic) ||
        (!carrier && bits!=arithmetic) || b1<2 || b2<=b1 || b2>Word(INT64_MAX)-8192 ||
+       (b2_min && (b2_min<b1 || b2_min>=b2)) ||
        d<6 || d%2 || d>200000000 || uint(s,"p")!=cost::phi(d)/2 ||
        uint(s,"fold_resident")>1 || uint(s,"frontier_resident")>1 ||
        !(real(s,"mean_seconds")>0) || uint(s,"repeats")>1000000000)
@@ -572,7 +576,7 @@ inline Fields compact_sample(Fields s) {
         if(!optional_uint(s,"runtime_probe",1))s["preferred_order"]=std::to_string(optional_uint(s,"runtime_completed_ns"));
     }
     static const std::set<std::string> keep={
-        "condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","d","p",
+        "condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","b2_min","d","p",
         "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder","groot_balanced","giant_tail_balance","giant_chain_block","baby_coop","giant_coop","seed_coop","reduce_coop","reduce_threads","reduce_kernel",
         "source","benchmark_kind","program_version","updated_at","verified","repeats","mean_seconds","stddev_seconds",
         "required_free_bytes","preferred_order","validation_count","validation_max_relative_error",

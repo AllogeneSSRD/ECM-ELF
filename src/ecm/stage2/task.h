@@ -24,7 +24,7 @@ struct CurveQueue {
     void commit(uint64_t position,const std::string &outcome) const;
 };
 
-std::string checkpoint_outcome(const Record &,uint64_t b2,const std::string &report);
+std::string checkpoint_outcome(const Record &,uint64_t b2,const std::string &report,uint64_t b2_min=0);
 struct TaskEngine {
     const char *name;
     unsigned input_max_bits = ecm_stage2::max_input_bits; // Zero leaves size admission to the engine.

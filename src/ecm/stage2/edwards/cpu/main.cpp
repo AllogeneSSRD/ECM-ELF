@@ -1,4 +1,5 @@
 #include "../../../../io/files.h"
+#include "../../../../io/stage2_bounds.h"
 // Standalone CPU Edwards continuation. This target's <ecm.h> is libecm's API.
 #include <ecm.h>
 #include "ecm/io/save.h"
@@ -50,6 +51,7 @@ struct Options {
     std::string save,results="results_cpu_stage2.jsonl",submission,ini,backend="auto",user,computer,aid;
     std::optional<uint64_t> dispatch_row;
     std::vector<std::string> known;uint64_t b2=0,skip=0,count=UINT64_MAX,exponent=0,memory=512,threads=1;
+    uint64_t b2_min=0;
     std::string worktodo,log,cpu_affinity;
     fs::path tune_profile;
     std::optional<ecm_cpu_tune::ThreadLayout> thread_layout;
@@ -119,7 +121,7 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
             std::exit(0);
         }
         if(key=="--help" || key=="-h") {
-            std::cout<<"CPU Edwards Stage2\n[--config FILE] [--worker N] [--worktodo FILE] [--once] [--stage2-stop-handle HANDLE]\n--save FILE --b2 DECIMAL [--backend auto|ntt|plain|gwpoly] [--memory-mib 512]\n"
+            std::cout<<"CPU Edwards Stage2\n[--config FILE] [--worker N] [--worktodo FILE] [--once] [--stage2-stop-handle HANDLE]\n--save FILE --b2 [B2min-]B2 [--backend auto|ntt|plain|gwpoly] [--memory-mib 512]\n"
                 "[--threads 1] [--b2-round-chain 0|1] [--results INTERNAL.jsonl] [--submission results.json.txt] [--config FILE] [--worker N]\n"
                 "[--skip N] [--curves N] [--dry-run] [--d D (gwpoly only)] [--gw-check] [--selftest-gwpoly]\n"
                 "[--f-tree-splits auto|segmented|compact|compact-full|0..63 (with --d)] [--cpu-tune-candidates 1..16] [--cpu-tune-dense-d 0|1]\n"
@@ -142,7 +144,11 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
         else if(key=="--log-level")o.log_level=stage2_log::parse(value);
         else if(key=="--submission")o.submission=value;
         else if(key=="--config" || key=="--worker")continue;
-        else if(key=="--backend")o.backend=value;else if(key=="--b2")o.b2=decimal(value);
+        else if(key=="--backend")o.backend=value;
+        else if(key=="--b2"){
+            const auto bounds=ecm_stage2::parse_bounds(value,"--b2");
+            o.b2=bounds.upper;o.b2_min=bounds.lower;
+        }
         else if(key=="--memory-mib")o.memory=decimal(value);else if(key=="--threads")o.threads=decimal(value);
         else if(key=="--skip" || key=="--skip-curves")o.skip=decimal(value);else if(key=="--curves")o.count=decimal(value);
         else if(key=="--stage2-dispatch-row")o.dispatch_row=decimal(value);
@@ -239,6 +245,7 @@ struct Params {ecm_params p;Params(){ecm_init(p);}~Params(){ecm_clear(p);}};
 struct Details {uint64_t d=0,poly_size=0,fft_length=0,checked_values=0;std::string fft_description,polymult_isa;double init=0,main=0,maxerr=0;};
 std::string result(const Options &o,const SavedCurve &r,const mpz_t n,const mpz_t f,int stage,double seconds,const Details &details,uint64_t requested_b2) {
     ecm_results::Submission common;common.exponent=o.exponent;common.sigma=r.sigma;common.b1=r.b1;common.b2=o.b2;
+    common.b2_min=o.b2_min;
     common.stage=stage;common.known=o.known;common.user=o.user;common.computer=o.computer;common.aid=o.aid;
     if(stage)common.factors.push_back(number(f));
     if(stage!=1){common.d=details.d;common.poly_size=details.poly_size;}
@@ -271,17 +278,18 @@ struct TunePlans {
     std::vector<ecm_cpu_tune::Candidate> candidates;
     const std::vector<ecm_cpu_tune::Candidate>& get(const SavedCurve &r,mpz_srcptr n,uint64_t bound,
                                                    const ecm_gwpoly::Options &gw,const Options &options) {
-        if(modulus!=r.n || b1!=r.b1 || b2!=bound || exponent!=gw.exponent) {
-            const auto plans=ecm_gwpoly::tune_candidates(n,r.b1,bound,gw);
+        const auto lower=options.b2_min?options.b2_min:r.b1;
+        if(modulus!=r.n || b1!=lower || b2!=bound || exponent!=gw.exponent) {
+            const auto plans=ecm_gwpoly::tune_candidates(n,lower,bound,gw);
             std::vector<ecm_cpu_tune::Candidate> next;
             for(const auto &p:plans) {
-                const auto actual=options.round_b2?ecm_gwpoly::full_block_b2(r.b1,bound,p.d,p.poly_size,options.round_limit):bound;
+                const auto actual=options.round_b2?ecm_gwpoly::full_block_b2(lower,bound,p.d,p.poly_size,options.round_limit):bound;
                 if(actual)next.push_back({p.d,p.poly_size,p.fft_length,p.fft_exponent,
                     p.max_exponent,p.f_tree_splits,p.planned_mib,p.fft_layout,p.polymult_isa,actual});
             }
             modulus=r.n;
             candidates=std::move(next);
-            b1=r.b1;b2=bound;exponent=gw.exponent;
+            b1=lower;b2=bound;exponent=gw.exponent;
         }
         return candidates;
     }
@@ -370,6 +378,7 @@ bool calculate(const Options &o,const SavedCurve &r,bool queued,
         std::cout<<std::endl;
     }
     int stage=0;Details details;const auto begin=std::chrono::steady_clock::now();
+    const auto lower=o.b2_min?o.b2_min:r.b1;
     if(r.factor){mpz_set(f.v,x.v);stage=1;}
     else {
         const auto bits=mpz_sizeinbase(n.v,2);
@@ -423,7 +432,7 @@ bool calculate(const Options &o,const SavedCurve &r,bool queued,
                         const auto &plans=tune.get(r,n.v,o.b2,gw,o);
                         if(!plans.empty()) {
                             ecm_cpu_tune::Key key{ecm_cpu_tune::cpu_identity(ecm_gwpoly::cpu()),ecm_gwpoly::version(),*o.thread_layout,
-                                gw.exponent != 0,gw.exponent ? gw.exponent : mpz_sizeinbase(n.v,2),r.b1,o.b2};
+                                gw.exponent != 0,gw.exponent ? gw.exponent : mpz_sizeinbase(n.v,2),lower,o.b2};
                             const auto index=ecm_cpu_tune::select(o.tune_profile,key,plans,o.tune_min_repeats,o.tune_runtime);
                             if(index) {
                                 const auto &plan=plans[*index];
@@ -444,7 +453,7 @@ bool calculate(const Options &o,const SavedCurve &r,bool queued,
                 if(o.round_b2 && !observation)apply_plan(tune.candidates.front());
                 const auto trial_start=std::chrono::steady_clock::now();
                 try {
-                    if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,selected.b2,gw,stats))stage=2;
+                    if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,lower,selected.b2,gw,stats))stage=2;
                 } catch(const std::exception &error) {
                     if(cancel())return false;
                     if(!observation)throw;
@@ -456,7 +465,7 @@ bool calculate(const Options &o,const SavedCurve &r,bool queued,
                         apply_plan(tune.candidates.front());
                     }else {gw.d=0;gw.f_tree_splits=ecm_gwpoly::automatic_tree;}
                     stats={};
-                    try {if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,selected.b2,gw,stats))stage=2;}
+                    try {if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,lower,selected.b2,gw,stats))stage=2;}
                     catch(...){if(cancel())return false;throw;}
                 }
                 if(progress.error)std::rethrow_exception(progress.error);
@@ -487,6 +496,7 @@ bool calculate(const Options &o,const SavedCurve &r,bool queued,
                 Params params;auto p=params.p;p->sigma_is_A=1;
                 mpz_mul_ui(p->sigma,a24.v,4);mpz_sub_ui(p->sigma,p->sigma,2);mpz_mod(p->sigma,p->sigma,n.v);
                 mpz_set(p->x,x.v);p->B1done=static_cast<double>(r.b1);set64(p->B2,o.b2);
+                if(o.b2_min)set64(p->B2min,o.b2_min);
                 p->maxmem=static_cast<double>(o.memory)*1048576.0;p->use_ntt=selected.backend=="ntt";p->S=1;p->verbose=verbose?2:0;p->stop_asap=cancel;
                 const int rc=ecm_factor(f.v,n.v,static_cast<double>(r.b1),p);
                 if(cancel())return false; // libecm may return NF on interruption.
@@ -502,6 +512,7 @@ bool calculate(const Options &o,const SavedCurve &r,bool queued,
     elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
     json=result(selected,r,n.v,f.v,stage,elapsed,details,o.b2);
     report.exponent=o.exponent;report.sigma=r.sigma;report.b1=r.b1;report.b2=selected.b2;
+    report.b2_min=selected.b2_min;
     report.stage=stage;report.known=o.known;report.user=o.user;report.computer=o.computer;report.aid=o.aid;
     report.d=details.d;report.poly_size=details.poly_size;report.stage2_fft_length=details.fft_length;
     if(stage)report.factors.push_back(number(f.v));
@@ -512,6 +523,7 @@ int run_tasks(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
     s2prod::Options o;
     const bool queued=cpu.save.empty();
     o.worker=cpu.worker;o.worktodo=cpu.worktodo;o.b2=cpu.b2;o.d=cpu.d;
+    o.b2_min=cpu.b2_min;
     o.save=cpu.save;o.skip=cpu.skip;o.curves=cpu.count==UINT64_MAX?0:cpu.count;
     o.results=cpu.explicit_results||!queued?cpu.results:"";o.submission=cpu.submission;o.log=cpu.log;
     o.tune_profile=cpu.tune_profile.u8string();
@@ -546,7 +558,7 @@ int run_tasks(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
     engine.run=[&](const s2prod::CurveQueue &queue,s2prod::Options &task,uint64_t b2,uint64_t) {
         check_tune_path(cpu,{queue.save,queue.progress,queue.results,queue.log});
         auto selected=cpu;
-        selected.save=queue.save.string();selected.b2=b2;selected.exponent=task.submission_exponent;
+        selected.save=queue.save.string();selected.b2=b2;selected.b2_min=task.b2_min;selected.exponent=task.submission_exponent;
         selected.known=task.submission_known;selected.aid=task.submission_aid;
         const bool events=task.gui_events || stage2_log::enabled(stage2_log::curve);
         auto &state=queue.state;
@@ -569,7 +581,7 @@ int run_tasks(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
             std::string json;ecm_results::Submission report;double elapsed=0;
             std::optional<TuneObservation> pending;
             if(!calculate(selected,row,queued,report,json,elapsed,tune,pending,queue.report))return false;
-            const auto outcome=s2prod::checkpoint_outcome(record,report.b2,ecm_results::submission_json(report,n.v));
+            const auto outcome=s2prod::checkpoint_outcome(record,report.b2,ecm_results::submission_json(report,n.v),report.b2_min);
             if(state.reserved.empty())state.reserved.push_back({position});
             queue.commit(position,outcome);
             ++queue.completed;

@@ -156,8 +156,9 @@ void CurveQueue::commit(uint64_t position,const std::string &outcome) const {
     publish_outcomes(state,progress);
 }
 
-std::string checkpoint_outcome(const Record &record,uint64_t b2,const std::string &report) {
-    return "{\"key\":"+json_string(checkpoint_nf_key(record,std::to_string(b2)))+
+std::string checkpoint_outcome(const Record &record,uint64_t b2,const std::string &report,uint64_t b2_min) {
+    const auto bound=(b2_min?std::to_string(b2_min)+"-":std::string{})+std::to_string(b2);
+    return "{\"key\":"+json_string(checkpoint_nf_key(record,bound))+
            ",\"report\":"+ecm_results::json::parse(report).dump()+"}";
 }
 
@@ -245,6 +246,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                 skip=fields.skip;count=fields.count;
                 if(!o.b2&&fields.b2) {
                     b2=fields.b2;
+                    o.b2_min=fields.b2_min;
                     b2_source="worktodo";
                 }
                 if(!fields.task.modulus_from_save)expected_n=queue_modulus(fields.task,nullptr);
@@ -281,6 +283,11 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                 if(queue&&r.b1!=plan.front().b1)throw TaskInputError("queue saves must have the same B1");
                 if(r.skip_stage2)continue;
                 if(engine.validate)engine.validate(r,b2);
+                if(o.b2_min && (o.b2_min<r.b1 || b2<=o.b2_min)) {
+                    const std::string message="Stage2 interval requires saved B1 <= B2min < B2";
+                    if(b2_source=="worktodo")throw TaskInputError(message);
+                    throw std::runtime_error(message);
+                }
                 if(r.edwards && o.auto_b2 && !b2)throw std::runtime_error("Edwards Stage2 currently requires an explicit B2");
                 if((!(o.auto_b2&&!b2)&&b2<=r.b1)||b2>static_cast<uint64_t>(INT64_MAX)-8192) {
                     auto message=std::string("B2 must exceed every saved B1 and fit the engine's signed index range")+
@@ -324,7 +331,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             task.aid=fields.task.aid;task.n=expected_n;
             task.save_sha256=ecm_stage2::sha256_file(save);task.skip=skip;task.total=selected_records;
             task.b1=saved_b1;
-            task.b2=b2;task.auto_b2=o.auto_b2&&!b2;
+            task.b2=b2;task.b2_min=o.b2_min;task.auto_b2=o.auto_b2&&!b2;
             Big target;mpz_set_str(target.z,expected_n.c_str(),16);
             const auto bits=mpz_sizeinbase(target.z,2);
             // Serialize filename allocation, then keep only the selected task lease.
@@ -420,6 +427,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             task.skip=skip;
             task.total=plan.size();
             task.b2=b2;
+            task.b2_min=o.b2_min;
             task.auto_b2=o.auto_b2&&!b2;
             auto identity=ecm_stage2::sha256_file(save)+"|"+std::to_string(selected_records)+"|"+
                 std::to_string(b2)+"|"+std::to_string(task.auto_b2)+"|"+
@@ -464,6 +472,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                     << " available=" << plan.size() << " completed=" << state.done << " remaining=" << (state.done<plan.size()?plan.size()-state.done:0)
                     << " B2=" << b2 << " D=" << d << " device=" << device << " worker=" << o.worker
                     << " B2_source=" << b2_source << " log=" << log.string() << " results=" << curve_results.string();
+            if(o.b2_min)message<<" B2min="<<o.b2_min;
             if(persist)message<<" checkpoint="<<progress.string();
             report(message.str());
         }

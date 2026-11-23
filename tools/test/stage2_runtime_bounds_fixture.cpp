@@ -39,6 +39,14 @@ int main(int argc,char **argv) {
         auto large=original;require(!p::runtime_bounds(large,ecm_stage2::Word(INT64_MAX)-1,true),"bound limit bypassed");
         auto off=original;require(p::runtime_bounds(off,original.b2,false) && off.key()==original.key(),"default identity changed");
         auto coop=a;coop.baby_coop=32;require(p::runtime_bounds(coop,original.b2,true) && coop.key()!=a.key(),"backend identity erased");
+        auto interval=original;interval.b2_min=25000000;
+        const auto start=ecm_stage2::giant_first(interval.b2_min,interval.d);
+        require(start>1 && interval.giant_points()<original.giant_points(),"explicit lower bound did not shorten grid");
+        require(p::runtime_bounds(interval,original.b2,true),"cannot round requested interval");
+        require(interval.giant_points()==8640 && interval.b2_min==25000000 &&
+                interval.b1==original.b1 && interval.b2>original.b2 && interval.key()!=a.key(),
+                "rounding did not retain separate saved and Stage2 bounds");
+        require(p::runtime_bound_matches(interval,original.b2,true),"rounded interval not reusable");
         std::cout<<"{\"complete\":true,\"per_D_bounds\":true,\"exact_observation_identity\":true,\"coverage_plateau\":true,"
             "\"default_unchanged\":true,\"caps_and_failures\":true,\"CUDA_calls\":0}\n";
     } catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}

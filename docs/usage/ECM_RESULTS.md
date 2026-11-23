@@ -45,6 +45,8 @@ AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA 
 
 每个因子均验证 `1<f<N` 且 `f|N`。失败或未完成的当前曲线不生成 NF。提交 NF 的 B2 只声明已完成的 Stage2 请求界限，不把 libecm 内部可能超出的尾部覆盖算作额外工作。没有执行的 Prime95 D、poly-size 或 Stage2 FFT 参数不补造。Stage1 NF 的 B2=B1 同时用于内部和提交记录，仅表示 Stage1 覆盖。
 
+Stage2 区间结果在内部和提交 JSON 里写入 `b2-min` 作为搜索下界，`b1` 始终取自存档。`b2` 是执行上界，凑整时可高于请求值。Stage1 命中记录省略 Stage2 两个端点。`b2-min` 是 ECM-ELF 扩展字段，现有 CRC32 槽位沿用原格式。
+
 参考 FFT 来自 Prime95 31.6 `gwnum/mult.asm` 的循环 AVX-512 `zjmptable`，生成器 [generate_p95_fft_reference.py](../../tools/gen/generate_p95_fft_reference.py) 固化其中 241 个 `(max_exp, fftlen)` 容量对。选择满足 `max_exp≥P` 的第一项；例如 M127/M347 为 128，M2203 为 128，M11057 为 512。它是按原始梅森指数生成的报告参考值，不代表 CPU/GPU 实际执行了该长度 FFT，也不保证等于任意机器上 GWNUM 的运行时选择。
 
 完整梅森数仅在 `N+1` 恰为 2 的幂时自动识别指数。余因子必须提供原始 `--exponent P` 与可重复的 `--known-factor F`，严格验证 `(2^P−1)/∏F=N`。CUDA 标准梅森队列自动携带这些字段。一般 N 没有原始梅森指数时仍使用 N 字段，FFT 参考按 `2·bitlength(N)+128` 的保守零填充容量选择；它不等同于 PrimeNet 梅森任务。梅森数与 k·b^n+c 提交行要求少于 2000 字节，过长的可选字段会报错；一般 N 的完整本地导出可以超过此长度，不代表服务器接受该扩展。
@@ -96,7 +98,7 @@ curves、d、poly-size、stage2-fft-length、status、stage、user、computer、
 
 CPU、CUDA 和 OpenCL 的 worktodo 与 `--save` 使用同一发布流程。任务 ckpt 保存已完成曲线、NF 去重键、完整因子行、最终 NF 和待确认的追加状态。逐曲线 JSONL 可用于诊断，恢复使用原始 Stage1 save 和 ckpt。
 
-验证通过的因子先写入 ckpt，随后单独发布一行 F，固定 `curves=1` 并保留 σ。任务完成后，所有唯一 NF 曲线汇总成一行，B2、D、P 取计划顺序中最后计入的曲线。队列更新 finished 和 worktodo 后清理 ckpt。`--save` 保留完成 ckpt，使相同命令重试可直接确认成功。要有意重算，指定新的 `--submission` 路径或移走该直接任务的完成 ckpt。 [Stage2 恢复与发布](../architecture/CHECKPOINT.md#73-恢复与发布)
+验证通过的因子先写入 ckpt，随后单独发布一行 F，固定 `curves=1` 并保留 σ。任务完成后，所有唯一 NF 曲线汇总成一行。标量 B2 任务使用最后计入的曲线的 B2、D、P。区间任务使用最小实际 B2 对应的曲线，汇总只声明所有已计入曲线共同覆盖的区间。队列更新 finished 和 worktodo 后清理 ckpt。`--save` 保留完成 ckpt，使相同命令重试可直接确认成功。要有意重算，指定新的 `--submission` 路径或移走该直接任务的完成 ckpt。 [Stage2 恢复与发布](../architecture/CHECKPOINT.md#73-恢复与发布)
 
 ### Stage1 整批发布
 

@@ -13,6 +13,7 @@
 #include "../modulus.h"
 #include "../../../io/config.h"
 #include "../../../io/worktodo.h"
+#include "../../../io/stage2_bounds.h"
 #include "ecm/platform/program_version.h"
 #include "ecm/platform/fingerprint.h"
 #include "../planning/planning.h"
@@ -114,7 +115,10 @@ Options arguments(int argc, char **argv) {
         else if (a == "--stage2-stop-handle") o.stop_handle=num();
         else if (a == "--stage2-dispatch-row") o.dispatch_row=num();
         else if (a == "--gui-events") o.gui_events=true;
-        else if (a == "--b2") o.b2 = num();
+        else if (a == "--b2") {
+            const auto bounds=ecm_stage2::parse_bounds(value(),"--b2");
+            o.b2=bounds.upper;o.b2_min=bounds.lower;
+        }
         else if (a == "--giant-chain") {o.giant_chain=value();o.portable_cli.insert(a);}
         else if (a == "--baby-backend") {o.baby_backend=value();o.portable_cli.insert(a);}
         else if (a == "--seed-backend") {o.seed_backend=value();o.portable_cli.insert(a);}
@@ -311,7 +315,7 @@ void help() {
 #ifdef ECM_STAGE2_OPENCL
     std::cout<<"ecm_opencl_stage2 - native OpenCL Stage2 using the production save/queue driver\n"
         "  --list-devices (OpenCL indices; not CUDA indices or UUIDs)\n"
-        "  --save FILE --b2 B2 [--d D] [--curves N] [--skip-curves N]\n"
+        "  --save FILE --b2 [B2min-]B2 [--d D] [--curves N] [--skip-curves N]\n"
         "  --config ecm.toml [--worktodo FILE] [--worker N] [--once]\n"
         "  --device N --arena-mb MB --batch-mb MB --carrier-exponent P\n"
         "  --plan-only --dry-run --results FILE --submission FILE --ntt-counts 0|1\n"

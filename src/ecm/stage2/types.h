@@ -47,6 +47,7 @@ struct Options {
     bool debug_log = false;
     bool low_cpu_wait=ecm_config::defaults::stage2_stage2_low_cpu_wait;
     uint64_t b2 = 0, d = 0, skip = 0, curves = 0, batch = 0, arena = 0;
+    uint64_t b2_min = 0; // Explicit Stage2 lower bound, separate from saved B1.
     unsigned carrier_exponent=0;
     bool has_carrier=false;
     bool auto_carrier=ecm_config::defaults::stage2_stage2_auto_carrier;
@@ -137,7 +138,7 @@ struct Options {
 };
 struct QueueSelection {
     EcmStage2Task task;
-    uint64_t b2 = 0, skip = 0, count = 0;
+    uint64_t b2 = 0, b2_min = 0, skip = 0, count = 0;
 };
 
 struct RuntimeTuneObservation {

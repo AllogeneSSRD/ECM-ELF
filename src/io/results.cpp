@@ -273,6 +273,8 @@ std::string submission_json(const Submission& r, const mpz_t n) {
         out << ']';
     }
     out << ",\"b1\":" << r.b1;
+    if (r.stage != 1 && r.b2_min)
+        out << ",\"b2-min\":" << r.b2_min;
     if (r.stage != 1)
         out << ",\"b2\":" << r.b2;
     if (r.d)
@@ -349,6 +351,8 @@ std::string internal_json(Submission r, const mpz_t n, uint64_t actual_fft,
         out << ",\"N\":" << (value.size() > 2000 ? quoted(value) : value);
     }
     out << ",\"worktype\":\"ECM\",\"b1\":" << r.b1;
+    if (r.stage != 1 && r.b2_min)
+        out << ",\"b2-min\":" << r.b2_min;
     if (r.stage != 1)
         out << ",\"b2\":" << r.b2;
     if (r.d)

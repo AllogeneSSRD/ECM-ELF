@@ -21,8 +21,8 @@ BatchedRun run_batched(
     const EcmStage2GpuHandoff *handoff)
 {
     const size_t W = L.W;
-    const unsigned long long D = SP.D, B1 = SP.B1, B2 = SP.B2;
-    const auto range=requested_range?*requested_range:ecm_stage2::giant_range(B2,D,false);
+    const unsigned long long D = SP.D, B1 = SP.B2min?SP.B2min:SP.B1, B2 = SP.B2;
+    const auto range=requested_range?*requested_range:ecm_stage2::giant_range(B2,D,false,SP.B2min);
     const unsigned long long imax = range.points;
     const double t_entry = now_s();
     const size_t P = Fdeg[1];                            /* deg F = the baby count = poly_size */
@@ -1060,7 +1060,7 @@ BatchedRun run_batched(
                     const long long nmax = name_max();
                     if (name_here && (nmax == 0 || R.hit_leaves <= (unsigned long long)nmax)) {
                         const unsigned long long jj = SP.baby_j[j];
-                        for (unsigned long long i = 1; i <= imax; ++i) {
+                        for (auto i=range.first; i<=range.last; ++i) {
                             const unsigned long long off = i * D;
                             for (int sgn = 0; sgn < 2; ++sgn) {
                                 if (sgn == 0 && off < jj) continue;

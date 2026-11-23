@@ -1,5 +1,6 @@
 #include "io/worktodo.h"
 #include "io/files.h"
+#include "stage2_bounds.h"
 
 #include <algorithm>
 #include <cctype>
@@ -304,7 +305,10 @@ static bool parse_save_line(const std::string& line, std::string_view prefix, Ec
         if (tail < end && !cols[tail].empty()) {
             task.b2_text = cols[tail];
             task.has_b2 = true;
-            (void)ecm_config::unsigned_integer(task.b2_text, "B2");
+            if (stage1)
+                (void)ecm_config::unsigned_integer(task.b2_text, "B2");
+            else
+                (void)ecm_stage2::parse_bounds(task.b2_text, "B2");
         }
         if (tail + 1 < end && !cols[tail + 1].empty()) {
             task.has_skip = true;

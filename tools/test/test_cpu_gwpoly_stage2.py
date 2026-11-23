@@ -153,6 +153,16 @@ def main():
         _,rz=oracle.mont.ladder(prime,x,z,a24,hit_n);product=product*rz%hit_n
     expected=math.gcd(product,hit_n);assert 1<expected<hit_n
     r=run('stage2_factor',hit,hit_n)[0];assert r['stage']==2 and int(r['factors'][0])%expected==0
+    inside=run('interval_factor',hit,hit_n,b2='100-134',extra=['--d',30],threads=1)[0]
+    assert (inside['b1'],inside['b2-min'],inside['b2'],inside['factors'])==(20,100,134,r['factors'])
+    skipped=run('interval_skips_earlier_factor',hit,hit_n,b2='320-370',extra=['--d',30],threads=1)[0]
+    assert (skipped['b1'],skipped['b2-min'],skipped['b2'],skipped['status'])==(20,320,370,'NF')
+    interval=run('interval_rounded',cpu,n,b2='5e3-8e3',
+                 extra=['--d',210,'--curves',1,'--b2-round-chain',1],threads=1)[0]
+    assert (interval['b1'],interval['b2-min'],interval['stage2-engine']['requested-B2'])==(1000,5000,8000)
+    assert interval['b2']>=8000 and interval['stage2-engine']['checked-values']==3
+    run('interval_reject_before_saved_b1',cpu,n,b2='500-8000',good=False)
+    run('interval_reject_reversed',cpu,n,b2='8000-5000',good=False)
     # D=6*521 gives 520 roots, and the order 127 divides the denominator
     # of a retained baby point. Recover that proper divisor before F descent.
     lane_hit=run('baby_wheel_factor',hit,hit_n,extra=['--d',3126],threads=1)[0]

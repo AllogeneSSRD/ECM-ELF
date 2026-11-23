@@ -11,5 +11,5 @@ struct Stage2PlanRuntime {
 int prepare_stage2_plan(ecm_stage2::ModulusContext &L,size_t nw,
     unsigned long long sigma,unsigned long long B1,unsigned long long B2,
     unsigned long long D_in,bool choose_d,int curves,bool d_plan_only,
-    ecm_stage2::Plan *plan_result,Stage2PlanRuntime &runtime)
+    ecm_stage2::Plan *plan_result,Stage2PlanRuntime &runtime,uint64_t b2_min=0)
 ;

@@ -46,6 +46,7 @@ struct Task {
     uint64_t skip = 0, total = 0, b2 = 0;
     bool auto_b2 = false;
     uint64_t b1 = 0;
+    uint64_t b2_min = 0;
     std::string id() const;
     std::string legacy_id() const;
     fs::path path(const fs::path& directory, size_t bits, unsigned suffix = 0) const;

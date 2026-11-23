@@ -3,6 +3,11 @@
 #include <vector>
 
 namespace ecm_stage2 {
+// A wheel covers primes in consecutive D-wide cells centred on multiples of D.
+inline Word giant_first(Word lower,Word d) {
+    return std::max(Word(1),lower/d + Word(lower%d>=d/2));
+}
+
 // A compact schedule has at most three runs, even for very large B2. A run
 // repeats equal point chunks; only the final two can borrow whole G batches.
 struct GiantChunkRun {Word points=0,repeat=0;};
@@ -52,10 +57,12 @@ inline Word giant_chunk_take(Word remaining,Word capacity,Word p,Word minimum,bo
 // Smallest upward bound covering an integer number of P-point G batches,
 // with no sub-threshold point chunk. mode=1 enables rounding; 0 preserves B2.
 // Failure preserves the input bound; callers report why rounding was skipped.
-inline bool giant_round_b2(Word b2,Word d,Word p,Word capacity,Word minimum,unsigned mode,Word &actual) {
+inline bool giant_round_b2(Word b2,Word d,Word p,Word capacity,Word minimum,unsigned mode,Word &actual,
+                           Word first=1) {
     actual=b2;if(!mode)return true;
     if(mode>1 || !d || !p || !capacity || capacity%p || capacity<minimum)return false;
-    Word points=0;if(!add(b2/d,2,points))return false;
+    Word last=0;if(!add(b2/d,2,last) || !first || first>last)return false;
+    const Word points=last-first+1;
     const Word unit=p;
     Word rounded=0;if(!multiply(points/unit+(points%unit!=0),unit,rounded))return false;
     const Word tail=rounded%capacity;
@@ -63,7 +70,8 @@ inline bool giant_round_b2(Word b2,Word d,Word p,Word capacity,Word minimum,unsi
         Word extra=0;
         if(!multiply((minimum-tail)/unit+((minimum-tail)%unit!=0),unit,extra) || !add(rounded,extra,rounded))return false;
     }
-    Word bound=0;if(rounded<2 || !multiply(rounded-2,d,bound))return false;
+    if(!add(rounded,first-1,last) || last<2)return false;
+    Word bound=0;if(!multiply(last-2,d,bound))return false;
     actual=std::max(b2,bound);return true;
 }
 } // namespace ecm_stage2

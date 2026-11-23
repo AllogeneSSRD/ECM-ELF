@@ -22,6 +22,8 @@ struct LegacyIdentity {
 bool import_legacy(const fs::path& path, const Task& task,
                    const std::function<bool(const std::string&)>& match, State& out,
                    const std::function<std::vector<uint64_t>()>& legacy_bounds) {
+    if (task.b2_min)
+        return false;
     State old;
     if (!old.load(path))
         return false;
@@ -237,6 +239,8 @@ std::string Task::id() const {
     std::ostringstream out;
     out << "stage2-curves-v3 " << std::quoted(aid) << ' ' << std::quoted(n) << ' ' << save_sha256
         << ' ' << skip;
+    if (b2_min)
+        out << " interval " << b2_min << ' ' << b2;
     return ecm_stage2::sha256_text(out.str());
 }
 
@@ -385,7 +389,18 @@ void State::record_outcome(uint64_t position, const std::string& report, std::st
     } else {
         if (key.size() != 64 || key.find_first_not_of("0123456789abcdef") != key.npos)
             throw std::runtime_error("invalid Stage2 checkpoint outcome key");
-        if (nf_keys.insert(std::move(key)).second && position + 1 > latest_nf_position) {
+        const bool unique = nf_keys.insert(std::move(key)).second;
+        if (!unique)
+            return;
+        bool replace = position + 1 > latest_nf_position;
+        if (row.has("b2-min") && !latest_nf.empty()) {
+            // The aggregate may claim only the common coverage after rounding.
+            const auto current = std::stoull(row.get("b2").text());
+            const auto previous = std::stoull(ecm_results::json::parse(latest_nf).get("b2").text());
+            if (current != previous)
+                replace = current < previous;
+        }
+        if (replace) {
             latest_nf_position = position + 1;
             latest_nf = report;
         }

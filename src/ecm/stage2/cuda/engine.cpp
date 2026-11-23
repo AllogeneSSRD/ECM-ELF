@@ -25,7 +25,7 @@ int run_real(
     Stage2Tail *saved_result,
     unsigned carrier_exponent,
     const char *saved_a24_hex,
-    const EcmStage2GpuHandoff *handoff)
+    const EcmStage2GpuHandoff *handoff,uint64_t b2_min)
 {
     stage2_schedule::WorkspaceLease workspace;
     PolyLayer L;
@@ -43,7 +43,7 @@ int run_real(
     const size_t nw = L.W;
 
     Stage2PlanRuntime planning;
-    const int plan_code=prepare_stage2_plan(L,nw,sigma,B1,B2,D_in,choose_d,1,false,nullptr,planning);
+    const int plan_code=prepare_stage2_plan(L,nw,sigma,B1,B2,D_in,choose_d,1,false,nullptr,planning,b2_min);
     if(plan_code)return plan_code;
     const auto freeb=planning.freeb,totalb=planning.totalb,reserve=planning.reserve,cap=planning.cap;
     const auto D=planning.D,P_baby=planning.P_baby;
@@ -62,7 +62,8 @@ int run_real(
         return 3;
     }
     const double stage2_shape_seconds=now_s()-stage2_shape_begin;
-    const unsigned long long imax = B2 / D + 2;
+    const auto original_range=ecm_stage2::giant_range(B2,D,false,b2_min);
+    const auto imax=original_range.points;
     /* B1 and B2 are printed RAW, not as a derived count: --b2 used to be read with strtoull
        base 10, so "1e11" silently became 1 and the run quietly computed a B2=1 shape
        (giant_points=2) while every other line looked normal -- caught only because
@@ -361,7 +362,7 @@ int run_real(
     SmallPrimeBabyCache small_cache;
     unsigned actual_baby_coop=0;
     const bool reuse_small=small_prime_flag("NTT_SMALL_PRIME_REUSE");
-    if(reuse_small)small_cache.begin(C,D,B1,B2,baby_j);
+    if(reuse_small)small_cache.begin(C,D,b2_min?b2_min:B1,B2,baby_j);
     {
         const double t0 = now_s();
         std::vector<unsigned long long> bx, bz;
@@ -539,7 +540,7 @@ int run_real(
     const double stage2_init_seconds=stage2_shape_seconds+(phase_boundaries.init_end-stage2_init_begin);
     /* ---- the tails ---- */
     Stage2Params SP;
-    SP.D = D; SP.B1 = B1; SP.B2 = B2; SP.baby_j = baby_j;
+    SP.D = D; SP.B1 = B1; SP.B2 = B2; SP.B2min = b2_min; SP.baby_j = baby_j;
     {
         g_gfinv={};g_giant_seed={};
 
@@ -556,7 +557,7 @@ int run_real(
         const unsigned long long rw0 = L.s4 ? L.s4->raw_words : 0ull;
         const unsigned long long pl0 = L.s4 ? L.s4->pack_launches : 0ull;
         const double t0 = now_s();
-        const auto relocation=ecm_stage2::giant_range(B2,D,g_relocation_enabled);
+        const auto relocation=ecm_stage2::giant_range(B2,D,g_relocation_enabled,b2_min);
         const bool baby_nonunit=baby_nonunit_seen || baby_noninv!=0 || !baby_deg.empty();
         const bool point_requested=ecm_stage2::giant_tail_balance_requested() || ecm_stage2::giant_chain_points()!=64;
         double probe_seconds=0,replay_seconds=0,final_begin=t0;
@@ -581,8 +582,8 @@ int run_real(
                 probe_phases=ecm_stage2::timing::partition(bounds);
                 if(!probe_phases.complete){std::fprintf(stderr,"FATAL: incomplete relocation probe timing\n");std::exit(3);}
                 final_begin=end;
-                stage2_log::print(stage2_log::phases,"%s: reason=hit_or_nonunit first=1 last=%llu\n",
-                    g_relocation_enabled?"stage2_relocation_replay":"stage2_point_replay",relocation.last);
+                stage2_log::print(stage2_log::phases,"%s: reason=hit_or_nonunit first=%llu last=%llu\n",
+                    g_relocation_enabled?"stage2_relocation_replay":"stage2_point_replay",original_range.first,relocation.last);
                 ecm_stage2::GiantPolicyScope legacy_points(0,64);
                 BatchedRun original=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr,nullptr,nullptr);
                 s4_oracle_drain(red);replay_seconds=now_s()-end;
@@ -983,9 +984,9 @@ int ecm_cuda_stage2_run(
     unsigned carrier_exponent,
     EcmStage2Metrics *metrics,
     const char *a24_hex,
-    const EcmStage2GpuHandoff *handoff)
+    const EcmStage2GpuHandoff *handoff,uint64_t b2_min)
 {
-    if(!n_hex || !x_hex || !report || device<0 || b1<2 || b2<=b1 ||
+    if(!n_hex || !x_hex || !report || device<0 || b1<2 || b2<=b1 || (b2_min && (b2_min<b1 || b2_min>=b2)) ||
        b2>(uint64_t)INT64_MAX-8192 || (d && (d<6 || d%2)))return 2;
     if(ecm_cuda_stage2_check_configuration())return 2;
     s2g_install_crash_handler();
@@ -1003,7 +1004,7 @@ int ecm_cuda_stage2_run(
     } readback_hook;
     Stage2Tail tail;
     const int code = run_real(n_hex, true, sigma, b1, b2, d, d == 0,
-                              x_hex, &tail,carrier_exponent,a24_hex,handoff);
+                              x_hex, &tail,carrier_exponent,a24_hex,handoff,b2_min);
     stage2_wait::report();
     if (code || tail.bad_factors) return code ? code : 1;
     if(metrics)*metrics=tail.metrics;
