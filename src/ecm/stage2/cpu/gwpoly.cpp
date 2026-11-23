@@ -816,8 +816,9 @@ FTreePlan ftree_plan(size_t p,double bytes,double budget,unsigned threads,int re
         if(peak<=limit || (best.bytes>limit && peak<best.bytes))best={true,peak,splits};
     }
     if(best.bytes>limit && requested<0){
-        if(threads==1){
-            // One lane can avoid a second GMP inverse and a second ladder.
+        if(threads==1 || (threads==2 && bytes>=512*1024)){
+            // Wide two-thread batches share one GMP inverse. A full batch
+            // avoids restarting both lanes and inverting again at the midpoint.
             const auto compact_full=compact_plan(compact_full_tree);
             if(compact_full.bytes<=limit)return compact_full;
         }
@@ -1067,6 +1068,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
     auto owner=prepare_plan(n,factor,b1,b2,o,stats,fplan);
     auto &c=*owner;
     const auto d=stats.d,p=stats.poly_size;
+    const bool wide_two_threads=o.threads==2 && stats.fft_length>=65536;
     // A compact half-block repeats one seed ladder per lane. Three lanes
     // avoid extra ladders and cache pressure when four threads are available.
     const auto giant_lane_limit=fplan.splits==compact_tree && o.threads==4?3u:o.threads;
@@ -1084,6 +1086,9 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         Array roots(c.gw,p);
         {
             const auto t=Clock::now();Array z(c.gw,p);
+            // Wide point arithmetic amortizes the second worker's ladder at
+            // smaller slice sizes. Keep the larger threshold for narrow FFTs.
+            const size_t baby_chunk=wide_two_threads?128:256;
             // A stride dividing D needs only classes coprime to that stride.
             // Leave short slices on the two-step chain to avoid extra ladders.
             const auto stride=p/o.threads>=512 ? std::gcd(d,uint64_t{30}) : uint64_t{2};
@@ -1176,7 +1181,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                         }
                     }
                 }
-            });
+            },baby_chunk);
             stats.point_seconds+=seconds(t);
         }
         const double baby_seconds=stats.point_seconds;
@@ -1232,8 +1237,9 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         Array h;
         auto reciprocal=reverse(inv);
         // Wide AVX-512 coefficients benefit from avoiding a normalization
-        // pass. Shorter FFTs and threaded folds keep the fused library path.
-        const bool defer_low=o.threads==1 && (c.pm.cpu_flags & CPU_AVX512F) &&
+        // pass, including compact plans on two threads.
+        const bool defer_low=(o.threads==1 || (wide_two_threads && fplan.compact())) &&
+                             (c.pm.cpu_flags & CPU_AVX512F) &&
                              stats.fft_length>=15360 && c.use_deferred_h_fold(p);
         progress(ECM_GW_GIANT);
         const uint64_t batches=first<=last?1+(last-first)/p:0;
