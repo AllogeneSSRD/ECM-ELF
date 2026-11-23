@@ -35,3 +35,11 @@
 - 应用在折叠区由关闭变为展开、完成文件和诊断布局后调用 Dear ImGui 公开接口 `SetScrollHereY(1.0f)`，下一帧定位到底部。只请求一次，不随刷新或绘制持续定位；未修改第三方 UI 库。
 - 同一独立测试 GUI 的 12 个来源验证：修复前展开后文件不可见；修复后一次点击即显示最后一个来源 `results.json_12.txt`；手动向上滚动后保持位置。GUI 编译及 33 项自检通过，构建日志为 `data/experiments/gui_result_sources_scroll_build_20261021.log`。现有测试未提供控件级自动断言入口，本项在实际 GUI 中回归验证，未将纯滚动 API 测试视为完整覆盖。
 - 完整重读仍由 GUI 主线程同步执行，影响 GUI 帧响应；独立计算 worker 不等待该操作。正式限制补充在 `docs/usage/GUI.md`。
+
+## GUI v2 结果与群阶分解联动
+
+- 结果页增加「群阶分解」按钮。单条 F 记录含多个可分析的因子时先选因子。表格中的有效因子可直接点击，与行勾选状态独立。
+- 结果入口和群阶页文件导入共用 `group_order_job.cpp` 中的解析器。结果页仅解析选中行或可见因子列，按当前结果索引缓存解析数据。打开工作流或结果刷新时清除索引缓存。
+- 群阶分解保留后端与 GP 路径，复用现有计算和 Toast。右侧停靠状态保留，联动时激活对应标签。正式用法见 [GUI v2](../usage/GUI_V2.md)。
+- App 回归验证多行选择时不能发起分析，单条 Edwards 结果可通过按钮带入参数，未勾选时可直接点击多因子记录中的第二个因子并导航到右侧。内置 PARI 的小输入、历史输入及 192 bit 输入三组用例通过。证据见 `data/experiments/gui_result_group_order_app_20261123/` 与 `data/experiments/gui_result_group_order_embedded_20261123/`。
+- 在 DX11 窗口直接点击因子 1013 后，GUI 自动带入 Montgomery param 0 和 sigma 26，用内置 PARI 得到群阶 1008、点阶 63。证据见 `data/experiments/gui_result_group_order_click_final_20261123/`。

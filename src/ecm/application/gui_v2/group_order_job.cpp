@@ -36,6 +36,30 @@ bool valid_order_input(const OrderInput&i,std::string&error){
     if(i.profile!=0&&i.profile!=1&&i.profile!=3&&i.profile!=4&&i.profile!=5){error="Unsupported curve construction";return false;}
     if(i.backend<0||i.backend>3){error="Unknown backend";return false;}return true;
 }
+std::vector<OrderRecord> read_order_result(const std::string& raw,const std::string& source,size_t line,size_t& skipped){
+    std::vector<OrderRecord> rows;
+    try{
+        const auto v=go_json::parse(raw);
+        if(v.get("status").text()!="F"||v.get("worktype").text()!="ECM")return rows;
+        const bool ed=v.has("Edwards"),m3=v.has("GMP-ECM-param3");
+        if((ed&&m3)||(ed&&v.has("param")&&v.get("param").text()!="-1")||(m3&&v.has("param")&&v.get("param").text()!="3"))
+            throw std::runtime_error("Ambiguous curve identity");
+        const auto sigma=ed?v.get("Edwards").get("sigma").text():m3?v.get("GMP-ECM-param3").get("sigma").text():v.get("sigma").text();
+        const auto param=v.has("param")?v.get("param").text():std::string("0");
+        const int profile=ed?1:m3?4:param=="0"?0:param=="1"?3:param=="2"?5:param=="3"?4:-1;
+        const auto& factors=v.get("factors");
+        if(factors.type!='a')throw std::runtime_error("Missing factors");
+        const auto target=v.has("exponent")?"M"+v.get("exponent").text():"ECM";
+        for(const auto& factor:factors.items){
+            OrderInput input{factor.text(),sigma,"",profile,0};
+            std::string invalid;
+            if(!valid_order_input(input,invalid)){++skipped;continue;}
+            const auto label=target+" | "+input.factor+" | sigma="+sigma+" | #"+std::to_string(line);
+            rows.push_back({std::move(input),label,source,line});
+        }
+    }catch(const std::runtime_error&){++skipped;}
+    return rows;
+}
 std::vector<OrderRecord> read_order_records(const std::string&path,std::string&error){
     std::vector<OrderRecord> rows;error.clear();size_t skipped=0,line=0;
     try{
@@ -43,19 +67,9 @@ std::vector<OrderRecord> read_order_records(const std::string&path,std::string&e
         std::ifstream input(fs::u8path(path),std::ios::binary);if(!input)throw std::runtime_error("Cannot open result file");std::string raw;
         while(std::getline(input,raw)){
             ++line;if(line==1&&raw.compare(0,3,"\xef\xbb\xbf")==0)raw.erase(0,3);if(raw.empty())continue;
-            try{
-                auto v=go_json::parse(raw);if(v.get("status").text()!="F"||v.get("worktype").text()!="ECM")continue;
-                const bool ed=v.has("Edwards"),m3=v.has("GMP-ECM-param3");
-                if((ed&&m3)||(ed&&v.has("param")&&v.get("param").text()!="-1")||(m3&&v.has("param")&&v.get("param").text()!="3"))throw std::runtime_error("Ambiguous curve identity");
-                const auto sigma=ed?v.get("Edwards").get("sigma").text():m3?v.get("GMP-ECM-param3").get("sigma").text():v.get("sigma").text();
-                const auto param=v.has("param")?v.get("param").text():std::string("0");int profile=ed?1:m3?4:param=="0"?0:param=="1"?3:param=="2"?5:param=="3"?4:-1;
-                const auto&factors=v.get("factors");if(factors.type!='a')throw std::runtime_error("Missing factors");
-                for(const auto&factor:factors.items){OrderRecord record;record.input={factor.text(),sigma,"",profile,0};std::string invalid;
-                    if(!valid_order_input(record.input,invalid)){++skipped;continue;}
-                    record.source=path;record.line=line;record.label=(v.has("exponent")?"M"+v.get("exponent").text():"ECM")+" | "+record.input.factor+" | sigma="+sigma+" | #"+std::to_string(line);rows.push_back(std::move(record));
-                    if(rows.size()>20000)throw std::length_error("Too many result factors");
-                }
-            }catch(const std::length_error&){throw;}catch(...){++skipped;}
+            auto matches=read_order_result(raw,path,line,skipped);
+            if(rows.size()+matches.size()>20000)throw std::length_error("Too many result factors");
+            for(auto& record:matches)rows.push_back(std::move(record));
         }
         if(input.bad())throw std::runtime_error("Cannot finish reading result file");
         if(skipped)error=std::to_string(skipped)+" malformed or unsupported entries skipped";

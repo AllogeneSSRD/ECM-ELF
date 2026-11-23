@@ -768,7 +768,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     right_close_controls.clear();right_docks.clear();right_container_present=false;
     const auto right_order=state.ui_nav_order;std::vector<int> closed_pages;
     for(char id:right_order){const int page=id-'0';if(!ui::pinned(state.ui_right_pages,page))continue;
-        if(focus_right_&&state.ui_right_page==page)ImGui::SetNextWindowFocus();
+        if((focus_right_&&state.ui_right_page==page)||(page==7&&pending_group_order_result_))ImGui::SetNextWindowFocus();
         bool open=true;const auto name=ui::right_window(page,zh);
         const bool visible=begin_window(name.c_str(),&open,active);
         if(visible&&open){

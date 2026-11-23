@@ -23,6 +23,7 @@
 #include <memory>
 #include <deque>
 #include <set>
+#include <optional>
 
 namespace ecmgui_v2 {
 class App {
@@ -119,6 +120,7 @@ public:
     std::vector<std::string> result_copy_keys;
     size_t result_uncopied_count=0;
     ImVec2 result_copy_controls[2]{};
+    ImVec2 result_order_control{};
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
     ImVec2 nav_items[8]{},right_items[8]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
     ImVec2 nav_toggle{};
@@ -275,6 +277,10 @@ private:
     float log_height_ratio_=.28f;
     int log_last_worker_=-1;
     int drawn_center_page_=-1;
+    std::string result_order_selection_;
+    std::optional<size_t> result_order_index_;
+    std::map<size_t,std::vector<OrderRecord>> result_order_records_;
+    std::optional<OrderInput> pending_group_order_result_;
     std::map<std::string,float> window_dpi_;
     bool begin_window(const char* name, bool* open, const ui::Settings& active,ImGuiWindowFlags flags=0);
     void end_window();

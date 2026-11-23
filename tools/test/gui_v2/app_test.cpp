@@ -569,7 +569,7 @@ static void result_table_contract(const fs::path& root){
             ",\"worktype\":\"ECM\",\"b1\":"+std::to_string(b1)+",\"b2\":"+std::to_string(b1)+
             ",\"curves\":1,\"timestamp\":\"2026-11-0"+std::to_string(day)+" 00:00:00\","
             "\"program\":{\"name\":\"ECM-ELF\",\"version\":\"fixture\"},\"checksum\":{\"version\":1,\"checksum\":\"1234ABCD\"}"+
-            (factored?",\"stage\":1,\"factors\":[\"233\"]":"")+"}\n";
+            (factored?",\"stage\":1,\"Edwards\":{\"sigma\":26},\"factors\":[\"233\"]":"")+"}\n";
     };
     const auto a=root/"sort-first.txt",b=root/"sort-second.txt";
     const auto first=row(100,100,2)+row(10,10,3,true)+row(2,2,1);
@@ -577,7 +577,8 @@ static void result_table_contract(const fs::path& root){
     write(a,first);write(b,second);
     ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);
     const auto workflow=root/"result-workflow.toml";
-    write(workflow,"config_version = 4\n[shared]\nworktodo_file = \"worktodo.txt\"\nworker_count = 1\n");
+    write(workflow,"config_version = 4\n[shared]\nworktodo_file = \"worktodo.txt\"\nworker_count = 1\n"
+        "[gui]\ngroup_order_gp = \"./missing-order-fixture.exe\"\n");
     assert(app.load_config(workflow.u8string()));
     app.results.set_paths({a.u8string(),b.u8string()});assert(app.results.refresh());
     auto* context=ImGui::CreateContext();auto& io=ImGui::GetIO();
@@ -590,10 +591,10 @@ static void result_table_contract(const fs::path& root){
     platform.Platform_GetClipboardTextFn=[](ImGuiContext*){return clipboard.c_str();};
     ecmgui_v2::ui::Fonts fonts;ecmgui_v2::ui::Settings style;
     ImGuiID table_id=0;
-    const auto draw_frame=[&](ecmgui_v2::App& view){
+    const auto draw_frame=[&](ecmgui_v2::App& view,int page=1){
         ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize({1500,800});
         ImGui::Begin("result-sort-contract",nullptr,ImGuiWindowFlags_NoSavedSettings);
-        table_id=ImGui::GetID("results");view.draw_page(style,fonts,1);
+        table_id=ImGui::GetID("results");view.draw_page(style,fonts,page);
         ImGui::End();ImGui::Render();
     };
     const auto frame=[&]{draw_frame(app);};
@@ -654,8 +655,40 @@ static void result_table_contract(const fs::path& root){
     assert(restarted.results.refresh());
     draw_frame(restarted);
     assert(restarted.result_uncopied_count==1);
+
+    app.group_order_input.backend=1;
+    app.selected_results.insert(app.results.rows()[0].id);
+    click_at(app.result_order_control);
+    assert(state.ui_page!=7&&app.group_order_completions==0);
+    app.selected_results.erase(app.results.rows()[0].id);
+    click_at(app.result_order_control);
+    assert(state.ui_page==7);
+    draw_frame(app,7);
+    assert(app.group_order_completions==1&&app.group_order_job.snapshot.factor=="233");
+    assert(app.group_order_job.snapshot.sigma=="26"&&app.group_order_job.snapshot.profile==1);
+    assert(app.group_order_job.snapshot.backend==1&&app.group_order_input.gp=="./missing-order-fixture.exe");
+
+    auto multiple=row(77,77,7);
+    multiple.insert(multiple.size()-2,",\"stage\":2,\"sigma\":27,\"param\":2,\"factors\":[\"65537\",\"1013\"]");
+    multiple.replace(multiple.find("\"NF\""),4,"\"F\"");
+    write(b,read(b)+multiple);
+    assert(app.results.refresh());
+    app.result_view_dirty=true;
+    app.selected_results.clear();
+    state.ui_page=1;
+    state.ui_right_pages=1<<7;
+    frame();
+    const auto* table=ImGui::TableFindByID(table_id);
+    assert(table&&app.results.rows()[app.result_indices.front()].target=="M77");
+    const float row_height=ImGui::GetFontSize()+2*table->RowCellPaddingY;
+    const float second_factor_x=table->Columns[8].WorkMinX+ImGui::CalcTextSize("65537,").x+ImGui::GetStyle().ItemInnerSpacing.x+5;
+    click_at({second_factor_x,table->OuterRect.Min.y+1.5f*row_height});
+    assert(state.ui_page==1&&state.ui_right_page==7&&app.selected_results.empty());
+    draw_frame(app,7);
+    assert(app.group_order_completions==2&&app.group_order_job.snapshot.factor=="1013");
+    assert(app.group_order_job.snapshot.sigma=="27"&&app.group_order_job.snapshot.profile==5);
     ImGui::DestroyContext(context);
-    std::cout<<"{\"result_sort_cycle\":true,\"sort_survives_refresh\":true,\"factored_row_both_themes\":true,\"copy_selected_then_new\":true,\"copy_history_restored\":true}\n";
+    std::cout<<"{\"result_sort_cycle\":true,\"sort_survives_refresh\":true,\"factored_row_both_themes\":true,\"copy_selected_then_new\":true,\"copy_history_restored\":true,\"result_group_order_link\":true}\n";
 }
 static void stage2_main_config(const fs::path& root,const fs::path& combined) {
     assert(!fs::exists(root));

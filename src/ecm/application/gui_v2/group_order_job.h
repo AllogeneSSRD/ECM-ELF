@@ -11,6 +11,7 @@ bool valid_order_input(const OrderInput&,std::string& error);
 std::string find_order_gp();
 std::string order_executable();
 struct OrderRecord {OrderInput input;std::string label,source;size_t line=0;};
+std::vector<OrderRecord> read_order_result(const std::string& raw,const std::string& source,size_t line,size_t& skipped);
 std::vector<OrderRecord> read_order_records(const std::string& path,std::string& error);
 std::vector<std::string> discover_order_files(const std::string& directory,const std::vector<std::string>& configured={});
 class GroupOrderJob {

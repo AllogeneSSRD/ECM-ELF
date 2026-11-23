@@ -105,6 +105,7 @@ void App::draw_results(bool zh) {
     }
     const auto signature=result_filter.status+'\n'+std::to_string(result_filter.stage)+'\n'+std::to_string(result_filter.source)+'\n'+result_filter.search;
     const bool rebuild=result_view_dirty||signature!=result_view_signature;
+    if(result_view_dirty)result_order_records_.clear();
     if(rebuild){
         result_indices=results.filtered(result_filter);visible_result_ids.clear();
         result_copy_keys.assign(results.rows().size(),{});result_uncopied_count=0;
@@ -117,6 +118,27 @@ void App::draw_results(bool zh) {
         result_view_dirty=false;result_view_signature=signature;
     }
     const auto& indices=result_indices;const auto& visible=visible_result_ids;
+    const auto order_records=[&](size_t i)->const std::vector<OrderRecord>& {
+        auto [it,inserted]=result_order_records_.try_emplace(i);
+        if(inserted){
+            const auto& row=results.rows()[i];
+            size_t skipped=0;
+            it->second=read_order_result(row.raw,results.files()[row.source].path,row.line,skipped);
+        }
+        return it->second;
+    };
+    const auto open_order=[&](const OrderInput& input){
+        constexpr int page=7;
+        pending_group_order_result_=input;
+        if(ui::pinned(state.ui_right_pages,page))state.ui_right_page=page;
+        else state.ui_page=page;
+    };
+    const bool order_busy=group_order_job.busy()||pending_group_order_result_.has_value();
+    const auto same_line_if_fits=[](const char* label){
+        const auto& style=ImGui::GetStyle();
+        if(ImGui::GetItemRectMax().x+ImGui::CalcTextSize(label).x+style.FramePadding.x*2+
+           style.ItemSpacing.x<ImGui::GetCursorScreenPos().x+ImGui::GetContentRegionAvail().x)ImGui::SameLine();
+    };
     if(ImGui::Button(ecmgui_v2::ui::text("select_visible",zh))) selected_results=visible;
     ImGui::SameLine(); if(ImGui::Button(ecmgui_v2::ui::text("clear_selection",zh)))selected_results.clear();
     const auto center=[](){const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();return ImVec2{(a.x+b.x)*.5f,(a.y+b.y)*.5f};};
@@ -126,14 +148,50 @@ void App::draw_results(bool zh) {
     const auto uncopied=[&](size_t i){return !result_copies.contains(result_copy_keys[i]);};
     const auto new_count=result_uncopied_count;
     const auto* new_label=ui::text("results.copy_new",zh);
-    if(ImGui::GetItemRectMax().x+ImGui::CalcTextSize(new_label).x+ImGui::GetStyle().FramePadding.x*2+
-       ImGui::GetStyle().ItemSpacing.x<ImGui::GetCursorScreenPos().x+ImGui::GetContentRegionAvail().x)ImGui::SameLine();
+    same_line_if_fits(new_label);
     ImGui::BeginDisabled(!new_count);const bool copy_new=ImGui::Button(new_label);
     result_copy_controls[1]=center();ImGui::EndDisabled();
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)){
         ImGui::BeginTooltip();ImGui::TextUnformatted(ui::text("results.copy_new_hint",zh));
         if(!result_copies.last_copy().empty())ImGui::Text(ui::text("results.last_copy",zh),result_copies.last_copy().c_str());
         ImGui::EndTooltip();
+    }
+    const std::string selection=selected_results.size()==1?*selected_results.begin():std::string{};
+    if(rebuild||selection!=result_order_selection_){
+        result_order_selection_=selection;
+        result_order_index_.reset();
+        if(!selection.empty()){
+            const auto match=std::find_if(indices.begin(),indices.end(),[&](size_t i){return results.rows()[i].id==selection;});
+            if(match!=indices.end()&&results.rows()[*match].status=="F")result_order_index_=*match;
+        }
+    }
+    const auto* options=result_order_index_?&order_records(*result_order_index_):nullptr;
+    const auto* order_label=ui::text("results.group_order",zh);
+    same_line_if_fits(order_label);
+    ImGui::BeginDisabled(order_busy||!options||options->empty());
+    if(ImGui::Button(order_label)){
+        if(options->size()==1)open_order(options->front().input);
+        else ImGui::OpenPopup("##result-factor-choice");
+    }
+    result_order_control=center();
+    ImGui::EndDisabled();
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)){
+        const char* hint=order_busy?"go.running":!options?"results.group_order_select":
+            options->empty()?"results.group_order_unavailable":"results.group_order_hint";
+        ImGui::SetTooltip("%s",ui::text(hint,zh));
+    }
+    if(ImGui::BeginPopup("##result-factor-choice")){
+        if(order_busy||!options||options->size()<2)ImGui::CloseCurrentPopup();
+        else{
+            ImGui::TextDisabled("%s",ui::text("results.group_order_choose_factor",zh));
+            for(size_t i=0;i<options->size();++i){
+                const auto& input=(*options)[i].input;
+                ImGui::PushID(static_cast<int>(i));
+                if(ImGui::Selectable(input.factor.c_str()))open_order(input);
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndPopup();
     }
     ImGui::Text(ui::text("results.selection_summary",zh),indices.size(),results.rows().size(),selected_results.size());
     ImGui::SameLine();ImGui::TextDisabled(ui::text("results.uncopied_count",zh),new_count);
@@ -166,7 +224,34 @@ void App::draw_results(bool zh) {
             else if(uncopied(i))ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,unread_bg);
             ImGui::TableNextColumn();
             bool chosen=selected_results.count(row.id)!=0;if(ecmgui_v2::ui::checkbox("##select",&chosen)){if(chosen)selected_results.insert(row.id);else selected_results.erase(row.id);}
-            for(const auto* value:{&row.status,&row.target,&row.b1,&row.b2,&row.curves,&row.model,&row.timestamp,&row.factors}){ImGui::TableNextColumn();ImGui::TextUnformatted(value->c_str());}
+            for(const auto* value:{&row.status,&row.target,&row.b1,&row.b2,&row.curves,&row.model,&row.timestamp}){ImGui::TableNextColumn();ImGui::TextUnformatted(value->c_str());}
+            if(ImGui::TableNextColumn()){
+                const auto* links=row.status=="F"?&order_records(i):nullptr;
+                if(!links||links->empty())ImGui::TextUnformatted(row.factors.c_str());
+                else{
+                    std::string_view factors=row.factors;
+                    size_t linked=0;
+                    for(int n=0;!factors.empty();++n){
+                        const auto separator=factors.find(',');
+                        const auto factor=factors.substr(0,separator);
+                        const bool more=separator!=std::string_view::npos;
+                        const auto label=std::string(factors.substr(0,factor.size()+more));
+                        if(n)ImGui::SameLine(0,ImGui::GetStyle().ItemInnerSpacing.x);
+                        if(linked<links->size()&&factor==(*links)[linked].input.factor){
+                            ImGui::PushID(n);
+                            ImGui::BeginDisabled(order_busy);
+                            if(ImGui::TextLink(label.c_str()))open_order((*links)[linked].input);
+                            ImGui::EndDisabled();
+                            if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                ImGui::SetTooltip("%s",ui::text(order_busy?"go.running":"results.group_order_hint",zh));
+                            ImGui::PopID();
+                            ++linked;
+                        }else ImGui::TextUnformatted(label.c_str());
+                        if(!more)break;
+                        factors.remove_prefix(separator+1);
+                    }
+                }
+            }
             ImGui::TableNextColumn();ImGui::Text("%d",row.stage);ImGui::TableNextColumn();ImGui::Text("%zu:%zu",row.source+1,row.line);ImGui::PopID();
         } ImGui::EndTable();
     }else if(rebuild)sort_results(result_indices,results.rows(),result_sort_column,result_sort_descending);

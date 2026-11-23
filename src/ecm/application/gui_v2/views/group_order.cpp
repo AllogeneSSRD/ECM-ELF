@@ -37,6 +37,23 @@ void App::draw_group_order(bool zh){
         if(group_order_file>=0)group_order_records=read_order_records(group_order_files[group_order_file],group_order_file_error);
     };
     if(!group_order_loaded){group_order_input.gp=ready?config.get("gui","group_order_gp"):"";if(group_order_input.gp.empty())group_order_input.gp=find_order_gp();group_order_loaded=true;group_order_base=base;group_order_records.clear();group_order_file=-1;refresh();}
+    const auto calculate=[&](){
+        auto request=group_order_input;
+        if(!request.gp.empty()&&fs::u8path(request.gp).is_relative()){
+            const auto path=fs::u8path(base)/fs::u8path(request.gp);if(request.gp.find_first_of("/\\")!=std::string::npos||fs::exists(path))request.gp=path.lexically_normal().u8string();}
+        const bool started=group_order_job.start(request,order_executable());
+        if(started&&request.gp==group_order_input.gp&&!group_order_job.snapshot.gp.empty())group_order_input.gp=group_order_job.snapshot.gp;
+        // GP-only refusal can finish synchronously; poll() has no process to observe.
+        if(!group_order_job.busy())notify_group_order();
+    };
+    if(pending_group_order_result_){
+        auto input=std::move(*pending_group_order_result_);
+        pending_group_order_result_.reset();
+        group_order_input.factor=std::move(input.factor);
+        group_order_input.sigma=std::move(input.sigma);
+        group_order_input.profile=input.profile;
+        calculate();
+    }
     group_order_controls.clear();
     ImGui::TextUnformatted(ui::text("go.title",zh));ui::secondary_text(ui::text("go.description",zh));
     ui::curve_buttons("go-curves",group_order_input.profile,false,zh,group_order_curve_controls,true);
@@ -65,15 +82,6 @@ void App::draw_group_order(bool zh){
         if(open){for(int i=0;i<4;++i){if(ImGui::Selectable(backends[i],group_order_input.backend==i))group_order_input.backend=i;group_order_controls["backend"+std::to_string(i)]=center();}ImGui::EndCombo();}
         ImGui::EndTable();
     }ImGui::PopStyleVar();
-    const auto calculate=[&](){
-        auto request=group_order_input;
-        if(!request.gp.empty()&&fs::u8path(request.gp).is_relative()){
-            const auto path=fs::u8path(base)/fs::u8path(request.gp);if(request.gp.find_first_of("/\\")!=std::string::npos||fs::exists(path))request.gp=path.lexically_normal().u8string();}
-        const bool started=group_order_job.start(request,order_executable());
-        if(started&&request.gp==group_order_input.gp&&!group_order_job.snapshot.gp.empty())group_order_input.gp=group_order_job.snapshot.gp;
-        // GP-only refusal can finish synchronously; poll() has no process to observe.
-        if(!group_order_job.busy())notify_group_order();
-    };
     if(ui::button("go-calculate",ui::text("go.calculate",zh),ui::ButtonKind::Primary,p,scale,group_order_job.busy(),nullptr,true,0,0,ui::Icon::Calculate))calculate();
     group_order_calculate=center();ImGui::SameLine();
     if(ui::button("go-cancel",ui::text("go.cancel",zh),ui::ButtonKind::Secondary,p,scale,!group_order_job.busy(),nullptr,true)){group_order_job.cancel();toast(ui::text("go.cancelled",zh),false,true);}group_order_cancel=center();
