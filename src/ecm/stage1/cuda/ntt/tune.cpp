@@ -117,6 +117,7 @@ Stage1NttOptions fixed_plan(Stage1NttOptions o, const Plan& plan) {
         using Layout = Stage1NttOptions::MixedLayout;
         o.mixed_layout = plan.dataflow & CoalescedRadix5 ? Layout::Coalesced :
                          plan.dataflow & PfaRadix5 ? Layout::Pfa : Layout::Twiddle;
+        o.fused_radix5_inverse = (plan.dataflow & Radix5InverseLimbSums) != 0;
     }
     o.automatic = false;
     o.weighted = plan.weighted;
@@ -474,7 +475,7 @@ std::optional<Candidate> candidate(unsigned p, Stage1NttOptions options, bool pr
 }
 
 std::optional<Cached> decode(const Fields& row, const Packing& shape, const Device& device,
-                             unsigned batch, const Stage1NttOptions& base, bool length_hint = false) {
+                             unsigned p, unsigned batch, const Stage1NttOptions& base, bool length_hint = false) {
     using ecm_stage2::tune::uint;
     if (uint(row,"batch") != batch || uint(row,"length") != shape.length || (!length_hint && uint(row,"bpw") != shape.bpw)) return {};
     const unsigned tile = unsigned(uint(row,"tile")), outer = unsigned(uint(row,"max_radix_bits"));
@@ -499,6 +500,8 @@ std::optional<Cached> decode(const Fields& row, const Packing& shape, const Devi
         using Layout = Stage1NttOptions::MixedLayout;
         const auto flow = uint(row, "dataflow");
         o.mixed_layout = flow & CoalescedRadix5 ? Layout::Coalesced : flow & PfaRadix5 ? Layout::Pfa : Layout::Twiddle;
+        o.fused_radix5_inverse = (flow & Radix5InverseLimbSums) != 0;
+        if (o.fused_radix5_inverse && p / shape.length < radix5_limb_min_digit_bits) return {};
     }
     return Cached{std::move(o), ecm_stage2::tune::real(row,"iter_per_s")};
 }
@@ -966,7 +969,7 @@ public:
         std::optional<Cached> best;
         for (const auto& row : legacy_) {
             if ((pt::text(row,"ntt_type")==pt::weighted_ntt_type) != plan.weighted) continue;
-            auto hint = decode(row,{plan.length,plan.bpw,plan.digits},device_,batch,options);
+            auto hint = decode(row,{plan.length,plan.bpw,plan.digits},device_,p_,batch,options);
             if (hint && (!best || hint->rate>best->rate)) best=std::move(hint);
         }
         return best ? std::optional<Stage1NttOptions>(best->options) : std::nullopt;
@@ -1003,7 +1006,7 @@ public:
             if (batch < grid_.batch.first || batch > cap || uint(row,"length") != base.length ||
                 (pt::text(row,"ntt_type")==pt::weighted_ntt_type) != base.weighted ||
                 pt::tested_ms(row,2,grid_.fine_repeats) < grid_.group_ms) continue;
-            auto hit = decode(row,shape->shape,device_,batch,base);
+            auto hit = decode(row,shape->shape,device_,p_,batch,base);
             if (!hit || (base.mixed_layout != Stage1NttOptions::MixedLayout::Automatic &&
                          hit->options.mixed_layout != base.mixed_layout)) continue;
             try {
@@ -1046,7 +1049,7 @@ public:
             auto options = request_.options.execution.ntt;
             options.weighted = pt::text(row,"ntt_type") == pt::weighted_ntt_type;
             const Packing shape{unsigned(uint(row,"length")),unsigned(uint(row,"bpw"))};
-            const auto decoded = decode(row,shape,device_,batch,options);
+            const auto decoded = decode(row,shape,device_,p_,batch,options);
             if (!decoded) return false;
             try {
                 const auto plan = describe(device_,p_,batch,decoded->options,window_);
@@ -1385,6 +1388,12 @@ struct WindowSearch {
                 const auto score = matrix.sample(options,winner.batch,SamplePhase::Fine);
                 if (score.rate > winner.rate) winner = score;
             }
+            if (p / winner.plan.length >= radix5_limb_min_digit_bits) {
+                options = fixed_plan(families.front().options, winner.plan);
+                options.fused_radix5_inverse = !options.fused_radix5_inverse;
+                const auto score = matrix.sample(options,winner.batch,SamplePhase::Fine);
+                if (score.rate > winner.rate) winner = score;
+            }
         }
         if (scan_graph) {
             auto options = fixed_plan(families.front().options,winner.plan);
@@ -1628,7 +1637,7 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
         for (unsigned mode=0; mode<CandidateCount; ++mode) {
             const auto& plan = candidates[mode];
             if (!plan || plan->options.weighted!=weighted) continue;
-            auto sample = decode(row,plan->shape,device,batch,plan->options,current);
+            auto sample = decode(row,plan->shape,device,p,batch,plan->options,current);
             if (!sample) continue;
             const unsigned q = current ? production_quality(row,device,p,batch,sample->options,window,true) : 0;
             if (current && !q) continue;
@@ -1715,7 +1724,7 @@ unsigned production_window(const ecm_stage1::Stage1Request& request, unsigned p,
                 if (!candidate || batch > capacities.at(w)[mode].max_curves ||
                     candidate->options.weighted != (pt::text(row,"ntt_type") == pt::weighted_ntt_type)) continue;
                 const bool hint=true;
-                auto decoded = decode(row,candidate->shape,device,batch,candidate->options,hint);
+                auto decoded = decode(row,candidate->shape,device,p,batch,candidate->options,hint);
                 if (!decoded) continue;
                 const unsigned quality=production_quality(row,device,p,batch,decoded->options,w,hint);
                 const auto score=std::make_pair(quality,ecm_stage2::tune::real(row,"iter_per_s"));
@@ -1803,7 +1812,7 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
                 const auto& shape = shapes[mode];
                 if (!shape || batch>capacities[mode].max_curves || shape->options.weighted!=weighted) continue;
                 const bool hint = modern || pt::is_runtime_stage1_ntt(row);
-                auto decoded = decode(row,shape->shape,device,batch,shape->options,hint);
+                auto decoded = decode(row,shape->shape,device,p,batch,shape->options,hint);
                 if (decoded) quality = std::max(quality, modern ?
                     production_quality(row,device,p,batch,decoded->options,window,hint) : 3u);
             }

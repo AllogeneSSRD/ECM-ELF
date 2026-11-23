@@ -2,6 +2,7 @@
 
 #include "ecm/stage1/ntt_length.h"
 #include "stage1_ntt_layout.cuh"
+#include "stage1_ntt_radix5.cuh"
 #include "../../src/ecm/stage1/cuda/ntt/weighted.cuh"
 
 namespace ecm_mersenne_ntt::stage1_layout {
@@ -226,6 +227,56 @@ __device__ __forceinline__ WeightedWord gather_carry_limb(const WeightedLimbSour
         }
     }
     return sum;
+}
+
+constexpr unsigned radix5_limb_columns = 128;
+constexpr unsigned radix5_limb_threads = 5 * 32;
+constexpr unsigned radix5_limb_halo = 8;
+constexpr unsigned radix5_limb_stride = radix5_limb_columns + 32;
+
+// The block owns the limbs whose last contributing digit belongs to one of
+// its five column intervals. The cyclic left halo covers a limb crossing
+// a column block, a plane boundary, or the residue's p-bit wrap.
+template<bool Pfa>
+__global__ __launch_bounds__(radix5_limb_threads)
+void radix5_inverse_limb_sums(WeightedWord* sums, WeightedLimbSource source, Shape s,
+                             unsigned log_width, const WeightedWord* twiddles,
+                             Radix5Constants constants, unsigned rotation_step) {
+    const unsigned width = 1u << log_width;
+    const unsigned column_mask = width - 1;
+    const unsigned begin = blockIdx.x * radix5_limb_columns;
+    const unsigned lane = threadIdx.x;
+    const auto* input = source.coefficients + size_t(blockIdx.y) * s.length;
+    __shared__ WeightedWord local[5][radix5_limb_stride];
+    const auto load = [&](unsigned column, unsigned offset) {
+        WeightedWord x[5];
+        radix5_inverse_column<Pfa>(x, input, width, column, twiddles, constants);
+        const unsigned rotation = Pfa ? (column * rotation_step) % 5 : 0;
+#pragma unroll
+        for (unsigned i = 0; i < 5; ++i) {
+            const unsigned plane = radix5_plane(i, rotation);
+            local[plane][offset] = gl_mul(x[i], source.inverse_weights[plane * width + column]);
+        }
+    };
+    if (lane < radix5_limb_columns)
+        load(begin + lane, radix5_limb_halo + lane);
+    if (lane < radix5_limb_halo)
+        load((begin + lane - radix5_limb_halo) & column_mask, lane);
+    __syncthreads();
+
+    auto* output = sums + size_t(blockIdx.y) * s.words;
+    const auto coefficient = [&](unsigned digit) {
+        const unsigned offset = (digit - begin + radix5_limb_halo) & column_mask;
+        return local[digit >> log_width][offset];
+    };
+    // Give each plane a warp so a partial plane interval only masks lanes
+    // in the final iteration of the gather.
+    const unsigned first_digit = (lane / 32) * width + begin;
+    const unsigned end_digit = first_digit + radix5_limb_columns;
+    const unsigned first_word = source.digits[first_digit].bit / 32;
+    const unsigned end_word = end_digit == s.length ? s.words : source.digits[end_digit].bit / 32;
+    for (unsigned word = first_word + lane % 32; word < end_word; word += 32)
+        output[word] = gather_carry_limb(source, s.p, word, coefficient);
 }
 
 // One warp owns a complete short residue, including the carry back from bit p.

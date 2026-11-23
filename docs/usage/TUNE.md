@@ -29,7 +29,7 @@
 1. 粗测每个 NAF 窗口和卷积族在最小批量、内部批量、最大批量的吞吐。容量受 NTT 工作区、NAF 字典、主机内存和请求曲线数限制；实际分配失败时，用二分查找缩小上限。混合长度在粗测和精调主循环中固定使用 pfa-coalesced。
 2. 自动选窗先汇总 6、8、10、12 的粗测结果。按每个窗口**实际测通的最大批量**分档，每档选在该上限聚合 `iter/s` 最高的窗口，吞吐相同取较小窗口。例如 w12 上限 35、w10 上限 128 时，两者可分别进入精调，搜索范围各自截至 35、128。同一上限的其他窗口保留粗测结果。日志 `stage1_ntt_naf_screen` 给出上限、上限吞吐和是否进入精调。显式 `naf=W`、`naf=A-B` 或 `--tune-exhaustive` 时，精调所有指定且可运行的窗口。
 3. 入选窗口精调 tile、outer 和 batch。默认比较倍增批量和峰值邻档。`--tune-exhaustive` 比较区间内每个可行批量。粗测和这一步统一临时用 16 步/Graph，显式 Graph 或 profile 沿用其设定。
-4. 若主循环 Best 使用 radix-5，`stage1_ntt_pfa_scan` 固定其 batch、tile、outer 和 Graph，比较 twiddle、pfa-direct、pfa-coalesced 三种布局。已测的基线可直接参加比较；二次幂长度跳过此步。
+4. 若主循环 Best 使用 radix-5，`stage1_ntt_pfa_scan` 固定其 batch、tile、outer 和 Graph，比较 twiddle、pfa-direct、pfa-coalesced 三种布局。若最短 digit 至少为 12 位，再对胜出布局比较五点逆变换与去权汇集的融合路径。已测的基线可直接参加比较。二次幂长度跳过此步。对已有完整记录的长度，使用 `force` 重新扫描。
 5. 对胜出布局和批量扫描 Graph，比较 4、8、16、32、64 步，复用已经测过的 16 步。日志 `stage1_ntt_graph_scan` 标出该批量。随后按更新后的峰值计算 95% 批量。显式 Graph 或固定 profile 直接使用指定步数。
 6. 指定 `find=N` 时，先按精测条件重新运行单曲线和 Best 批量，缓存命中时也实测；Best 为 1 时只测一次。然后从请求范围的最小批量向上检查，首个严格超过本次峰值 N% 的批量即为结果。中间批量可复用匹配的精测记录，遇到更高吞吐即更新峰值。显式范围从 2 或更大值开始时，单曲线只作参照。按批量递增检查也能覆盖吞吐非单调的情况。日志 `phase=find_anchors` 标记端点复测，`stage1_ntt_find` 标记搜索开始。
 
@@ -65,7 +65,7 @@ Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，�
 
 ### Stage1 CUDA NTT 的 `dataflow` 默认值与启用条件
 
-`[ntt].matrix` 的 `dataflow` 记录执行计划最终选用的标志，整列参与决策键比较。控制台的 `22112bit` 表示十进制掩码 22112，用 `(dataflow & 掩码) != 0` 判断某一位。常规 `-tune` 比较完整计划；对于 radix-5 布局会显式比较三个候选，其余许多位随长度、批量和 tile 自动选择。因此，记录中某位置 1 只能说明该计划选用了这条路径，单独开关它的性能差异需要另行对照测量。[标志定义](../../src/ecm/stage1/cuda/ntt/ladder.h) · [调优与布局选择](../../src/ecm/stage1/cuda/ntt/tune.cpp) · [决策键](../../src/ecm/stage2/planning/tune_rows.def)
+`[ntt].matrix` 的 `dataflow` 记录执行计划最终选用的标志，整列参与决策键比较。控制台的 `22112bit` 表示十进制掩码 22112，用 `(dataflow & 掩码) != 0` 判断某一位。常规 `-tune` 比较完整计划，混合长度还显式比较 radix-5 布局与逆向融合。其他各位随长度、批量和 tile 等条件选择。单独开关某一位的性能差异需要另行对照测量。[标志定义](../../src/ecm/stage1/cuda/ntt/ladder.h) · [调优与布局选择](../../src/ecm/stage1/cuda/ntt/tune.cpp) · [决策键](../../src/ecm/stage2/planning/tune_rows.def)
 
 以下默认值对应常规生产和调优计划。`p` 是算术指数，`N` 是 NTT 点数，`batch` 是物理曲线数，tile 大小均以点计。“默认请求”表示先将该位加入候选掩码，最终置位还须满足本条的条件。内部实验掩码可替换默认请求；显式 radix-5 布局随后覆盖位 7、8，原生 Edwards NAF 随后清除位 0–2。底层调用未传控制对象时，初始请求掩码为 0。[默认请求与最终分派](../../src/ecm/stage1/cuda/ntt/ladder.cu)
 
@@ -87,6 +87,7 @@ Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，�
 - **位 18 · `FixedWideInverse`（262144）**　原生 Edwards NAF 默认请求。加权变换在位 9 开启、tile 为 4096 点、N ≥ 8192 且 batch ≥ 24 时，使用固定大小的逆乘积 tile 内核。
 - **位 19 · `FixedWideForward`（524288）**　原生 Edwards NAF 默认请求。加权变换在位 3 关闭、位 10 和 warp 尾层开启、tile 为 1024 点、N ≥ 5120 且 batch ≥ 24 时，使用固定大小的正向 tile 内核。
 - **位 21 · `PackedWeightedOuter`（2097152）**　默认请求。加权二次幂变换可将输入打包与首个 radix-2、4 或 8 外层 pass 融合。要求位 10 开启，且满足其一：① N 为 4096、8192 或 32768，恰有一个外层 pass 且位 6 关闭；② N 为 262144，进位段数 > 128 且至少有一个外层 pass。某次输入有待处理段进位时，该次打包走常规路径。
+- **位 24 · `Radix5InverseLimbSums`（16777216）**　默认走分离路径。混合长度的最短 digit 至少为 12 位时，精调在 PFA 扫描中试测融合五点逆变换、去权和 limb 汇集。生产可按已有的融合测量选用该路径。融合直接产出 limb 和，后续由现有的进位路径处理，因此替代位 12、14 和 22 所描述的归约。
 
 #### 归约与进位
 

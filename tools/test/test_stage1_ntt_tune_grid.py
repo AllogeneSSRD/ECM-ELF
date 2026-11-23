@@ -252,6 +252,9 @@ def main():
         measured = re.findall(r" (\d+)c [^\n]+ (twiddle|pfa-direct|pfa-coalesced)$", scan, re.M)
         assert {(b,layout) for b,layout in measured} >= {(batch,"twiddle"),(batch,"pfa-direct")}
         assert all(b == batch for b,_ in measured)
+        inverse_fusion = 1 << 24
+        flows = [int(flow) for flow in re.findall(r" iter/s (\d+)bit ", scan)]
+        assert sum(bool(flow & inverse_fusion) for flow in flows) == 1, scan
         assert f"batch={batch} " in log[offsets[3]:offsets[4]]
         assert re.search(r"measured=[1-9]\d* reused=0 ", log)
 

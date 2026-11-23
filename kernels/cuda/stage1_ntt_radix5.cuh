@@ -47,17 +47,28 @@ __device__ __forceinline__ unsigned radix5_plane(unsigned plane, unsigned rotati
     return sum < 5 ? sum : sum - 5;
 }
 
+template<bool Pfa>
+__device__ __forceinline__ void radix5_inverse_column(Radix5Word (&x)[5], const Radix5Word* row,
+                                                     unsigned width, unsigned column,
+                                                     const Radix5Word* twiddles, Radix5Constants c) {
+    x[0] = row[column];
+#pragma unroll
+    for (unsigned i = 1; i < 5; ++i) {
+        const auto value = row[i * width + column];
+        x[i] = Pfa ? value : gl_mul(value, twiddles[(i - 1) * width + column]);
+    }
+    radix5_dft(x, c);
+}
+
 template<bool Pfa, bool Coalesced = false>
 __global__ void radix5_inverse(Radix5Word* data, unsigned width, const Radix5Word* twiddles,
                                Radix5Constants c, unsigned rotation_step) {
     const unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
     if (j >= width) return;
-    auto* row = data + size_t(blockIdx.y) * 5 * width + j;
-    Radix5Word x[5] = {row[0]};
-#pragma unroll
-    for (unsigned i = 1; i < 5; ++i)
-        x[i] = Pfa ? row[i * width] : gl_mul(row[i * width], twiddles[(i - 1) * width + j]);
-    radix5_dft(x, c);
+    auto* row = data + size_t(blockIdx.y) * 5 * width;
+    Radix5Word x[5];
+    radix5_inverse_column<Pfa>(x, row, width, j, twiddles, c);
+    row += j;
     const unsigned rotation = Pfa ? (j * rotation_step) % 5 : 0;
     if constexpr (Coalesced) {
         // Each thread owns one column. The shared permutation keeps the

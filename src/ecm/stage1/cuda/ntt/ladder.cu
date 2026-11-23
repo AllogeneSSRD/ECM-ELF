@@ -713,13 +713,19 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     }
     const auto weights = options.weighted ? weighted_tables(p, s.length, inverse_scale, coefficient_bits)
                                           : WeightedTables{};
-    const unsigned carry_cache_smem = options.weighted && segmented && (requested & CachedFusedWeightedCarry)
+    static_assert(radix5_limb_halo * radix5_limb_min_digit_bits >= 64 + 32);
+    const bool radix5_limb_sums = mixed && (options.fused_radix5_inverse || (requested & Radix5InverseLimbSums)) &&
+        p / s.length >= radix5_limb_min_digit_bits;
+    if (radix5_limb_sums) result.dataflow |= Radix5InverseLimbSums;
+    const unsigned carry_cache_smem = !radix5_limb_sums && options.weighted && segmented &&
+        (requested & CachedFusedWeightedCarry)
         ? weighted_segment_cache_bytes(weights.limbs) : 0;
     // Keep the shared coefficient tile small enough to allow several CTAs per SM.
     const bool cached_fused = carry_cache_smem && carry_cache_smem <= 16 * 1024;
     const bool fixed_carry_offsets = (requested & FixedCarryOffsets) && s.length == 5120 && cached_fused;
     if (fixed_carry_offsets) result.dataflow |= FixedCarryOffsets;
-    const bool fused_weighted = options.weighted && segmented && (cached_fused || (requested & FusedWeightedCarry));
+    const bool fused_weighted = !radix5_limb_sums && options.weighted && segmented &&
+        (cached_fused || (requested & FusedWeightedCarry));
     if (fused_weighted) result.dataflow |= FusedWeightedCarry;
     if (cached_fused) result.dataflow |= CachedFusedWeightedCarry;
     if (control && control->describe) {
@@ -835,7 +841,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         radix5_fwd = radix5_constants(gl_pow_host(omega, width));
         radix5_inv = radix5_constants(gl_pow_host(inv, width));
     }
-    const unsigned limb_smem = fused_weighted || warp_reduce ? 0 : weighted_limb_smem(weights.limbs);
+    const unsigned limb_smem = fused_weighted || warp_reduce || radix5_limb_sums
+        ? 0 : weighted_limb_smem(weights.limbs);
     Buffer<WeightedDigit> digit_table(weights.digits.size());
     Buffer<U> inverse_weights(weights.inverse.size());
     Buffer<WeightedLimb> limb_table(weights.limbs.size());
@@ -1034,12 +1041,12 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         else invert(std::false_type{},std::false_type{});
         CK(cudaGetLastError());
         ntt_inverse_outer_fused(inverse,ctx,inv2,outputs*curves*planes,q);
-        if (coalesced)
+        if (!radix5_limb_sums && coalesced)
             radix5_inverse<true,true><<<mixed_grid(outputs),threads,radix5_smem,q>>>(
                 inverse,width,nullptr,radix5_inv,rotation_step);
-        else if (pfa)
+        else if (!radix5_limb_sums && pfa)
             radix5_inverse<true><<<mixed_grid(outputs),threads,0,q>>>(inverse,width,nullptr,radix5_inv,rotation_step);
-        else if (mixed)
+        else if (!radix5_limb_sums && mixed)
             radix5_inverse<false><<<mixed_grid(outputs),threads,0,q>>>(inverse,width,mixed_inv.data,radix5_inv,0);
         const unsigned batch = outputs * curves;
         const bool route_output = routed && cursor.bits;
@@ -1080,9 +1087,16 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 if (route_output) launch(yes);
                 else launch(no);
             } else {
-                const dim3 limb_grid((s.words + weighted_limb_threads - 1) / weighted_limb_threads, batch);
-                weighted_limb_sums<<<limb_grid,weighted_limb_threads,limb_smem,q>>>(
-                    freq,inverse,inverse_weights.data,digit_table.data,limb_table.data,p,s.words,s.length);
+                if (radix5_limb_sums) {
+                    const dim3 columns(width / radix5_limb_columns, batch);
+                    const auto kernel = pfa ? radix5_inverse_limb_sums<true> : radix5_inverse_limb_sums<false>;
+                    kernel<<<columns,radix5_limb_threads,0,q>>>(
+                        freq,source,s,log,mixed_inv.data,radix5_inv,rotation_step);
+                } else {
+                    const dim3 limb_grid((s.words + weighted_limb_threads - 1) / weighted_limb_threads, batch);
+                    weighted_limb_sums<<<limb_grid,weighted_limb_threads,limb_smem,q>>>(
+                        freq,inverse,inverse_weights.data,digit_table.data,limb_table.data,p,s.words,s.length);
+                }
                 if (segmented) summarize(std::integral_constant<SegmentInput,SegmentInput::LimbSums>{});
                 else if (route_output && cached) reduce(yes,yes,yes);
                 else if (route_output) reduce(yes,yes,no);
