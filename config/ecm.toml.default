@@ -147,10 +147,10 @@ target = "gpu"  # string: [cpu|gpu]
 
 [stage2]
 # b2_ratio = 0  # u64: [0|1..1000000]
-# In GPU Stage2, a nonzero ratio sets B2 to the saved B1 times this value for queue and direct save
-# runs. Zero leaves B2 selection to the other settings. Overflow is rejected.
-# GPU Stage2 在队列及直接读档时将 B2 设为存档 B1 与非零比例的乘积。设为 0 时由其他设置选择 B2。乘积
-# 超出范围会报错。
+# Stage2 fallback when the CLI, task line and b2 setting supply no nonzero B2. A nonzero ratio uses
+# the saved B1 times this value. Applies to queues and GPU direct save runs. Overflow is rejected.
+# 命令行、任务行和 b2 配置均未提供非零 B2 时，非零比例使用存档 B1 × ratio 作为上界。适用于队列及 GPU
+# 直接读档。乘积超出范围会报错。
 
 # stage2_submission_file = "results.json.txt"  # string: <path>
 # Submission-only ECM JSON lines, separate from the internal results JSONL. Uses a reference FFT

@@ -207,7 +207,7 @@ Stage1 与 Stage2 共用 `ecm.toml` 和 `worktodo.txt`。新版 TOML 在首个�
 
 `ECM=`、`ECM2=` 和 `ECMSTAGE1=` 交给 Stage1，`ECMSTAGE2=` 和 `ECMSTAGE2N=` 交给 Stage2。队列的 Stage1 默认 Edwards，`curve` 或 `param` 可覆盖，`ECMSTAGE1` 的存档类型前缀优先。GUI 根据下一个可运行任务启动对应程序，CLI 只领取本阶段任务。`[shared]` 的 `queue_order` 可选 `"file_order"`、`"stage1_first"` 或 `"stage2_first"`。优先阶段无任务时运行另一阶段。`queue_skip` 可选 `"none"`、`"stage1"` 或 `"stage2"`。不同 worker 可以共用队列文件，每个 worker 同时由一个程序处理。
 
-当前程序无符合阶段、优先级和跳过条件的任务时正常结束；队列不存在或读取失败时报错。Stage2 执行时，`[stage2] b2_ratio` 为 1…1000000 则以 save 中的 B1 × ratio 覆盖 B2，且仍须满足 B2 > B1；0 或省略此键保留原 B2 选择。
+当前程序无符合阶段、优先级和跳过条件的任务时正常结束；队列不存在或读取失败时报错。Stage2 从命令行、任务和配置均未取得非零 B2 时，可用 `[stage2] b2_ratio` 按存档 B1 × ratio 计算上界。结果须满足 B2 > B1。[Stage2 B2 优先级](STAGE2.md#队列语法)
 
 ## 自动交接到 Stage2
 

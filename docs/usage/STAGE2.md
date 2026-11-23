@@ -145,7 +145,7 @@ save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队
 
 Stage2 继续使用 save 中的曲线终点和真实 B1。B2min 只用于确定巨步起点及小素数搜索下界。多项式按整个轮格处理，边缘格点、倍点和归一化仍可能发现区间外的有效因子。支持 B2 凑整的后端以区间内的巨步数量计算对齐，只提高 B2 上界。原有后端选项的适用条件继续生效。
 
-非零 `b2_ratio` 按已有规则用存档 B1 × ratio 覆盖上界，区间下界继续参与校验。其余情况下依次采用非零的 CLI 值、任务值、`b2`。CUDA 在有效 B2 为 0、`b2_ratio` 为 0 且启用 Auto B2 时才自动选择。`stage2_plan` 的 `B2_source` 记录本次选择的来源。不同请求区间各自持有检查点，两端相同的任务可继续使用整曲线级检查点。
+依次采用非零的 CLI 值、任务值和 `b2`。三者均为零或未设置时，非零 `b2_ratio` 才用存档 B1 × ratio 计算上界。CUDA 在有效 B2 为 0、`b2_ratio` 为 0 且启用 Auto B2 时才自动选择。`stage2_plan` 的 `B2_source` 记录本次选择的来源。不同请求区间各自持有检查点，两端相同的任务可继续使用整曲线级检查点。
 
 ## 数量不足与错误
 
@@ -170,7 +170,7 @@ Stage2 schema 6 ckpt 保存进度、待发布结果和发布确认。直接 `--s
 
 默认读取 exe 同目录的 `ecm.toml`；隐式文件缺失采用内置默认值，显式 `--config FILE` 缺失或格式错误时报错。配置分区、优先级和逐键覆盖资格见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md)。
 
-Stage2 与 Stage1 共用 `[shared]` 的 `worktodo_file`、`finished_file` 和 `log_file`。Stage2 的结果、提交、检查点和调试日志在 `[stage2]` 单独设置。队列领取 `ECMSTAGE2=` 和 `ECMSTAGE2N=`。`[stage2] b2_ratio` 在直接读档和队列模式下按存档 B1 × ratio 覆盖有效 B2，worker 使用 `b2_ratio`。
+Stage2 与 Stage1 共用 `[shared]` 的 `worktodo_file`、`finished_file` 和 `log_file`。Stage2 的结果、提交、检查点和调试日志在 `[stage2]` 单独设置。队列领取 `ECMSTAGE2=` 和 `ECMSTAGE2N=`。`[stage2] b2_ratio` 可由 worker 覆盖，供队列和 GPU 直接读档在缺少非零 B2 时使用。
 
 共用 `worktodo` 及 Stage2 相对路径基于 TOML 目录，其他 Stage1 相对路径基于其程序目录；CLI 相对路径基于当前工作目录。进度目录空值使用队列目录；显式旧进度路径仍可作为导入来源。`stage2_save_dir` 为空时继承 `stage1_save_dir`，`stage2_gpu_device = -1` 继承 `stage1_gpu_device`。推荐将两个程序与共用 TOML 放在同一目录。
 

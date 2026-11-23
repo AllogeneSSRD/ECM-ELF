@@ -270,7 +270,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             }
             if(queue && fields.task.modulus_from_save)
                 expected_n=queue_modulus(fields.task,plan.empty()?nullptr:&plan.front());
-            if(cfg.b2_ratio && !plan.empty()) {
+            if(!b2 && cfg.b2_ratio && !plan.empty()) {
                 if(plan.front().b1 > (static_cast<uint64_t>(INT64_MAX)-8192)/cfg.b2_ratio)
                     throw std::runtime_error("b2_ratio multiplication exceeds Stage2 B2 range");
                 b2=plan.front().b1*cfg.b2_ratio;

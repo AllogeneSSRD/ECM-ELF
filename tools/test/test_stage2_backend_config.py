@@ -53,12 +53,19 @@ def main():
     run("automatic_parallel_flag", "", ["--parallel", "auto"], 0, "invalid_tasks=0")
     run("serial_parallel_flag", "", ["--parallel", "1"], 0, "invalid_tasks=0")
     run("auto_b2", "auto_b2 = true\n", [], 2, "OpenCL Stage2 requires a nonzero B2", task_b2=0)
-    run("ratio_invalid", "b2_ratio = 1\n", [], 2, "source=b2_ratio", task_b2=200)
+    run("ratio_invalid", "b2_ratio = 1\n", [], 2, "source=b2_ratio", task_b2=0)
     run("config_b2_invalid", "b2 = 99\n", [], 2, "source=config", task_b2=0)
     run("cli_b2_invalid", "", ["--b2", "99"], 2, "source=cli", task_b2=200)
     run("task_b2_invalid", "", [], 1, "source=worktodo", task_b2=99, marked=True)
-    run("ratio_precedence", "b2_ratio = 3\n", ["--b2", "400", "--dry-run"], 0,
-        "B2=300 D=0 device=0 worker=1 B2_source=b2_ratio", task_b2=200)
+    ratio = "b2_ratio = 3\n"
+    run("cli_before_ratio", ratio, ["--b2", "400", "--dry-run"], 0,
+        "B2=400 D=0 device=0 worker=1 B2_source=cli", task_b2=200)
+    run("task_interval_before_ratio", ratio, ["--dry-run"], 0,
+        "B2=220 D=0 device=0 worker=1 B2_source=worktodo", task_b2="150-220")
+    run("config_before_ratio", ratio + "b2 = 250\n", ["--dry-run"], 0,
+        "B2=250 D=0 device=0 worker=1 B2_source=config", task_b2=0)
+    run("ratio_fallback", ratio, ["--dry-run"], 0,
+        "B2=300 D=0 device=0 worker=1 B2_source=b2_ratio", task_b2=0)
     inactive = '[worker.2]\nweighted_ntt = "invalid"\n'
     run("worker_skips_unrelated_value", inactive, [], 0, "invalid_tasks=0")
     run("worker_validates_selected_value", inactive, [], 2, "weighted_ntt", worker=2)

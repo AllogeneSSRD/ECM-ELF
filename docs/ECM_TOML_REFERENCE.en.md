@@ -983,7 +983,7 @@ b2_ratio = 0
 
 Type `u64` · Range `[0|1..1000000]` · Worker override `[worker.N] b2_ratio` · Level `core`.
 
-In GPU Stage2, a nonzero ratio sets B2 to the saved B1 times this value for queue and direct save runs. Zero leaves B2 selection to the other settings. Overflow is rejected.
+Stage2 fallback when the CLI, task line and b2 setting supply no nonzero B2. A nonzero ratio uses the saved B1 times this value. Applies to queues and GPU direct save runs. Overflow is rejected.
 
 <a id="stage2_b2_round_chain"></a>
 
