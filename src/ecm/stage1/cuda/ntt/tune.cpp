@@ -1,4 +1,5 @@
 #include "tune.h"
+#include "batch_timing.h"
 #include "ecm/stage1/ntt_target.h"
 #include "ladder.h"
 #include "ecm/stage1/scalar.h"
@@ -1639,6 +1640,9 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
             if (!plan || plan->options.weighted!=weighted) continue;
             auto sample = decode(row,plan->shape,device,p,batch,plan->options,current);
             if (!sample) continue;
+            const unsigned possible_quality = current ? 3 : 0;
+            if (choices[mode] && (quality[mode] > possible_quality ||
+                (quality[mode] == possible_quality && choices[mode]->rate >= sample->rate))) continue;
             const unsigned q = current ? production_quality(row,device,p,batch,sample->options,window,true) : 0;
             if (current && !q) continue;
             if (!choices[mode] || q>quality[mode] || (q==quality[mode] && sample->rate>choices[mode]->rate)) {
@@ -1688,6 +1692,17 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
     ecm_ts_fprintf(stdout, "stage1_ntt_selection: source=%s p=%u batch=%u convolution=%s length=%u\n",
                    source, p, batch, modes[winner.options.weighted], winner.options.length);
     return winner.options;
+}
+
+bool reuse_tuned_plan(const ecm_stage1::Stage1Request& request, unsigned p, unsigned batch, unsigned window,
+                      const Stage1NttOptions& options, BatchMemory& memory) {
+    const auto device = device_info(request.options.execution.device_index, options.memory_mib);
+    // The fixed packing was already checked at this exponent. Only recheck
+    // the live budgets of its one transform before entering the allocator.
+    Candidates shapes;
+    shapes[0] = Candidate{options,Packing{options.length}};
+    memory = production_capacity(request,device,p,window,shapes)[0];
+    return memory.max_curves >= batch;
 }
 
 unsigned production_window(const ecm_stage1::Stage1Request& request, unsigned p, bool fixed_batch) {
@@ -1778,6 +1793,8 @@ bool production_batch_fits(const ecm_stage1::Stage1Request& request, unsigned p,
 }
 
 unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsigned remaining) {
+    const auto span_started = std::chrono::steady_clock::now();
+    const double started = now_s();
     if (!remaining) return 0;
     const auto& exec = request.options.execution;
     const auto device = device_info(exec.device_index, exec.ntt.memory_mib);
@@ -1807,6 +1824,13 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
             const bool modern = row.count("sample_target_ms") != 0;
             if (modern && !compatible_workload(row,request,window)) continue;
             if (!modern && window && !pt::is_runtime_stage1_ntt(row)) continue;
+            const bool runtime = pt::is_runtime_stage1_ntt(row);
+            if (runtime && (uint(row,"naf_window") != window ||
+                            pt::text(row,"curve") != curve_name(request)))
+                continue;
+            const auto rate = real(row,"iter_per_s");
+            const auto incumbent = eligible.find(batch);
+            if (incumbent != eligible.end() && rate <= incumbent->second.rate) continue;
             unsigned quality = 0;
             for (unsigned mode = 0; mode < CandidateCount; ++mode) {
                 const auto& shape = shapes[mode];
@@ -1817,12 +1841,7 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
                     production_quality(row,device,p,batch,decoded->options,window,hint) : 3u);
             }
             if (!quality) continue;
-            const bool runtime = pt::is_runtime_stage1_ntt(row);
-            if (runtime && (uint(row,"naf_window") != window ||
-                            pt::text(row,"curve") != curve_name(request)))
-                continue;
             auto& value = eligible[batch];
-            const auto rate = real(row,"iter_per_s");
             if (rate > value.rate) {
                 value = {rate,1};
                 runtime_winner[batch] = runtime;
@@ -1839,8 +1858,9 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
         source = "production_trial";
     }
     ecm_ts_fprintf(stdout, "stage1_ntt_batch_selection: source=%s p=%u remaining=%u batch=%u capacity=%u "
-                   "linear_capacity=%u weighted_capacity=%u\n",
-                   source, p, remaining, selected, cap, linear_cap, weighted_cap);
+                   "linear_capacity=%u weighted_capacity=%u ms=%.3f\n",
+                   source, p, remaining, selected, cap, linear_cap, weighted_cap, 1000 * (now_s() - started));
+    log_batch_span("select_batch",span_started);
     return selected;
 }
 
@@ -1866,9 +1886,13 @@ void record_production_sample(const ecm_stage1::Stage1Request& request, const Pl
         row["iter_per_s"] = pt::numeric(rate);
         row["curves_per_s"] = pt::numeric(compute_rate);
         row["dataflow"] = std::to_string(plan.dataflow);
+        const auto store_span = std::chrono::steady_clock::now();
+        const double store_started = now_s();
         persist(exec.ntt.tune_file, device, {std::move(row)}, {}, false, true);
+        log_batch_span("tune_write",store_span);
         ecm_ts_fprintf(stdout, "stage1_ntt_production_sample: batch=%u valid_curves=%u iter_per_s=%.3f "
-            "curves_per_s=%.6f compute_seconds=%.6f\n", batch, valid, rate, compute_rate, compute_seconds);
+            "curves_per_s=%.6f compute_seconds=%.6f persist_ms=%.3f\n", batch, valid, rate, compute_rate, compute_seconds,
+            1000 * (now_s() - store_started));
     } catch (const std::exception& e) {
         ecm_ts_fprintf(stderr, "Stage1 NTT production tune write: %s\n", e.what());
     }

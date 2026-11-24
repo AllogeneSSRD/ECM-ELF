@@ -20,6 +20,8 @@ int tune_command(const ecm_stage1::Stage1Options&, double b1, const ecm_stage1::
 ecm_stage1::Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request&, unsigned p,
                                              unsigned curves, const ecm_stage1::Stage1NttOptions&,
                                              unsigned naf_window, bool require_capacity, BatchMemory&);
+bool reuse_tuned_plan(const ecm_stage1::Stage1Request&, unsigned p, unsigned batch, unsigned window,
+                      const ecm_stage1::Stage1NttOptions&, BatchMemory&);
 unsigned production_window(const ecm_stage1::Stage1Request&, unsigned p, bool fixed_batch);
 bool production_batch_fits(const ecm_stage1::Stage1Request&, unsigned p, unsigned window);
 unsigned select_production_batch(const ecm_stage1::Stage1Request&, unsigned remaining);

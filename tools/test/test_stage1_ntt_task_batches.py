@@ -290,6 +290,9 @@ def main():
     assert_schedule(launches, 200, expect_pad=False)
     assert [int(row["ntt_batch"]) for row in ntt_executions(log)] == [row["curves"] for row in launches]
     assert_finished(work, 200)
+    assert len(log_records(log, "stage1_ntt_batch_selection:")) == 1
+    timing = log_records(log, "stage1_ntt_plan_timing:")
+    assert timing[0]["reused"] == "0" and any(row["reused"] == "1" for row in timing[1:])
     passed("reuse_above_capacity", selection=selection, launches=launches, seconds=wall)
 
     work, command, _ = fixture("direct_split", pad=0)

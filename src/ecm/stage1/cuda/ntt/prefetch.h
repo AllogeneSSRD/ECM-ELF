@@ -13,6 +13,13 @@ struct PreparedCurves {
     std::vector<uint32_t> initial, seeds;
 };
 
+// Scoped to one immutable queue task. Never persisted in a checkpoint.
+struct BatchPlanCache {
+    unsigned p = 0, batch = 0, window = 0;
+    ecm_stage1::Stage1NttOptions options;
+    bool reused = false;
+};
+
 // Owned by one task. No speculative data is serialized or published.
 struct CurvePrefetch {
     std::vector<uint64_t> predicted, next;

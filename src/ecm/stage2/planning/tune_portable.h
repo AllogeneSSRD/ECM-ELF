@@ -739,7 +739,14 @@ struct Profile {
         }
         ntt.push_back(std::move(sample));++revision;return true;
     }
-    void update_stage1_ntt(Fields sample,bool observation=false) {
+    struct Stage1DecisionLess {
+        bool operator()(const Fields& a,const Fields& b) const {
+            return matrix_row_less(a,b,ntt_row_order);
+        }
+    };
+    using Stage1RowIndex = std::map<Fields,std::vector<size_t>,Stage1DecisionLess>;
+
+    void update_stage1_ntt(Fields sample,bool observation=false,Stage1RowIndex* index=nullptr) {
         if (!sample.count("ntt_memory_bytes") && sample.count("owned_bytes"))
             sample["ntt_memory_bytes"] = sample.at("owned_bytes");
         sample.erase("owned_bytes");
@@ -771,6 +778,27 @@ struct Profile {
             optional_uint(sample,"reference_bits")<=old_cap;
         if(limit!=bound && limit!=conservative && !historical)
             throw std::runtime_error("invalid Stage1 NTT max_exp");
+        // During bulk load, look only at rows sharing this decision. Empty
+        // slots are removed after loading so surviving rows keep input order.
+        if(index) {
+            auto& positions=(*index)[sample];
+            for(auto i:positions) {
+                auto& old=stage1_ntt[i];
+                if(!stage1_dominates(old,sample))continue;
+                merge_stage1_history(old,sample,observation);
+                return;
+            }
+            positions.erase(std::remove_if(positions.begin(),positions.end(),[&](size_t i){
+                auto& old=stage1_ntt[i];
+                if(!stage1_dominates(sample,old))return false;
+                merge_stage1_history(sample,old,observation);
+                old.clear();
+                return true;
+            }),positions.end());
+            positions.push_back(stage1_ntt.size());
+            stage1_ntt.push_back(std::move(sample));
+            return;
+        }
         const auto same=[&](const Fields& old) {
             return !matrix_row_less(old,sample,ntt_row_order) && !matrix_row_less(sample,old,ntt_row_order);
         };
@@ -972,12 +1000,16 @@ struct Profile {
             }
         }
         for(auto s:out.ntt){s["condition"]=std::to_string(remap.at(uint(s,"condition")));normalized.update_ntt(std::move(s),false);}
+        Stage1RowIndex stage1_index;
         for(auto& s:out.stage1_ntt) {
             s["condition"]=std::to_string(remap.at(uint(s,"condition")));
             if(uint(out.metadata,"format")<17 && s.count("sample_target_ms") && !s.count("batch_scope"))
                 s["explicit_batch"]="1";
-            normalized.update_stage1_ntt(std::move(s));
+            normalized.update_stage1_ntt(std::move(s),false,&stage1_index);
         }
+        auto& stage1_rows=normalized.stage1_ntt;
+        stage1_rows.erase(std::remove_if(stage1_rows.begin(),stage1_rows.end(),
+            [](const Fields& row){return row.empty();}),stage1_rows.end());
         for(auto s:out.parallel){s["condition"]=std::to_string(remap.at(uint(s,"condition")));normalized.update_parallel(std::move(s),false);}
         normalized.revision=out.revision;return normalized;
     }

@@ -1,4 +1,5 @@
 #include "batches.h"
+#include "batch_timing.h"
 #include "prefetch.h"
 #include "tune.h"
 #include "ecm/curve/edwards.h"
@@ -9,6 +10,7 @@
 #include "../../../../io/stage1_checkpoint.h"
 #include "ecm/platform/logging.h"
 #include <algorithm>
+#include <chrono>
 #include <iterator>
 
 namespace ecm_cuda_stage1 {
@@ -190,9 +192,14 @@ ecm_stage1::ComputationResult run_ntt_batches(
         return session.path().empty() ||
             session.write_blob(ecm_stage1_curve_record(0), state.snapshot());
     };
-    const auto save_progress = [&]() {
+    const auto save_progress = [&](const char* reason) {
+        if (session.path().empty()) return;
+        const auto started = std::chrono::steady_clock::now();
         if (!persist())
             throw Error(RestoreState::IoFailure, "cannot commit NTT Stage1 task progress");
+        ecm_mersenne_ntt::log_batch_span(reason,started);
+        const auto ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+        ecm_ts_fprintf(stdout,"stage1_ntt_batch_checkpoint: reason=%s ms=%.3f\n",reason,ms);
     };
     const auto publish_factors = [&](uint32_t first) {
         try {
@@ -219,6 +226,8 @@ ecm_stage1::ComputationResult run_ntt_batches(
     state.completed.curves.reserve(request.curves);
     std::string scratch((mpz_sizeinbase(request.modulus, 2) + 7) / 8, '\0');
     CurvePrefetch prefetch;
+    BatchPlanCache plan_cache;
+    bool batch_selected = false;
     while (offset < request.curves || state.curves) {
         if (ecm_stage1_stop_requested()) {
             failure.stop();
@@ -226,8 +235,10 @@ ecm_stage1::ComputationResult run_ntt_batches(
         }
         if (!state.curves) {
             const unsigned left = request.curves - offset;
-            if (left >= state.preferred || state.preferred > request.options.execution.ntt.max_batch)
+            if (!batch_selected) {
                 state.preferred = ecm_mersenne_ntt::select_production_batch(request, left);
+                batch_selected = true;
+            }
             if (!state.preferred || state.preferred > stage1_ntt_max_curves)
                 throw std::logic_error("invalid NTT Stage1 scheduler batch size");
             state.curves = std::min(state.preferred, left);
@@ -236,7 +247,7 @@ ecm_stage1::ComputationResult run_ntt_batches(
                 rounded <= UINT32_MAX && sigma_batch_fits(state.first, uint32_t(rounded), 1, sigma_limit) &&
                 batch_host_bytes(uint32_t(rounded), bits) <= budget)
                 state.curves = state.preferred;
-            save_progress();
+            save_progress("reserve");
         }
         ecm_ts_fprintf(stdout, "stage1_ntt_batch: offset=%u total=%u curves=%u capacity=%u resumed=%u\n",
                        offset, request.curves, state.curves, state.curves, unsigned(resumed));
@@ -249,6 +260,8 @@ ecm_stage1::ComputationResult run_ntt_batches(
         const Stage1Request batch{request.modulus, request.b1, request.b2, state.curves, request.save_file,
                                   request.append_save, request.expression, options};
         ExecutionOptions execution(options);
+        plan_cache.reused = false;
+        if (!resumed) execution.ntt_plan_cache = &plan_cache;
         if (options.execution.selection.curve == CurveModel::Edwards) {
             execution.curve_prefetch = &prefetch;
             prefetch.next.clear();
@@ -271,13 +284,21 @@ ecm_stage1::ComputationResult run_ntt_batches(
         child.close(false);
         const bool restored_batch = resumed;
         resumed = false;
+        if (result.retry_smaller_ntt_batch && plan_cache.reused && !restored_batch && state.native.empty()) {
+            plan_cache = {};
+            ecm_ts_fprintf(stdout, "stage1_ntt_batch_retry: offset=%u curves=%u reason=cached_plan\n",
+                           offset,state.curves);
+            continue;
+        }
         if (result.retry_smaller_ntt_batch && !restored_batch && state.native.empty() && state.curves > 1) {
+            plan_cache = {};
+            batch_selected = true;
             const auto left = request.curves - offset;
             state.curves = state.curves > left ? left : state.curves / 2;
             state.preferred = state.curves;
             ecm_ts_fprintf(stdout, "stage1_ntt_batch_retry: offset=%u curves=%u reason=budget\n",
                            offset, state.curves);
-            save_progress();
+            save_progress("retry");
             continue;
         }
         if (result.completion != ComputationResult::Completion::Completed)
@@ -298,7 +319,7 @@ ecm_stage1::ComputationResult run_ntt_batches(
             std::make_move_iterator(result.curves.begin()), std::make_move_iterator(result.curves.end()));
         state.curves = 0;
         state.native.clear();
-        save_progress();
+        save_progress("complete");
         if (!publish_factors(previous)) {
             failure.fail(FailureSource::Publication);
             return failure;

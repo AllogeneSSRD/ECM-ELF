@@ -1,4 +1,5 @@
 #include "ladder.h"
+#include "host_lanes.h"
 #include "profiles.h"
 #include "weighted.cuh"
 #include "ecm/stage1/ntt_sizes.h"
@@ -1325,7 +1326,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             CK(cudaMemcpyAsync(roots.data(), tree(1), bytes, cudaMemcpyDeviceToHost,q));
             CK(cudaStreamSynchronize(q));
             const auto inverse_start = now_s();
-            ecm_edwards::Integer modulus, value, inverse_root, gcd;
+            ecm_edwards::Integer modulus, value, gcd;
             mpz_setbit(modulus.v,p);
             mpz_sub_ui(modulus.v,modulus.v,1);
             if (naf->check_modulus) {
@@ -1334,14 +1335,21 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                     throw std::invalid_argument("Edwards dictionary check modulus must divide M_p");
                 mpz_set(modulus.v, naf->check_modulus);
             }
+            std::vector<unsigned char> invertible(curves);
+            for_host_lanes(p,curves,[&](size_t lane) {
+                ecm_edwards::Integer value, inverse;
+                auto* root = roots.data()+lane*s.words;
+                mpz_import(value.v,s.words,-1,sizeof(uint32_t),0,0,root);
+                if (!mpz_invert(inverse.v,value.v,modulus.v)) return;
+                std::fill_n(root,s.words,0u);
+                mpz_export(root,nullptr,-1,sizeof(uint32_t),0,0,inverse.v);
+                invertible[lane] = 1;
+            });
             for (unsigned lane=0; lane<curves; ++lane) {
+                if (invertible[lane]) continue;
                 auto* root = roots.data()+lane*s.words;
                 mpz_import(value.v,s.words,-1,sizeof(uint32_t),0,0,root);
                 std::fill_n(root,s.words,0u);
-                if (mpz_invert(inverse_root.v,value.v,modulus.v)) {
-                    mpz_export(root,nullptr,-1,sizeof(uint32_t),0,0,inverse_root.v);
-                    continue;
-                }
                 mpz_gcd(gcd.v,value.v,modulus.v);
                 if (mpz_cmp(gcd.v,modulus.v)==0) {
                     // Read individual denominators only for an exceptional lane.
