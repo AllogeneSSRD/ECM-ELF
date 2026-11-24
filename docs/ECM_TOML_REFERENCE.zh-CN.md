@@ -1245,6 +1245,18 @@ groot_balanced = "auto"
 
 G根多项式布局："auto"按已验证的NTT拐点模型及实测tune选型，true强制分块均衡布局，false强制连续布局，默认"auto"。不改变giant点块划分或B2/D/P。仅CUDA支持强制布局，OpenCL接受"auto"。CLI --groot-layout auto|true|false覆盖当前worker配置，并保留CLI 0/1别名；tune行记录实际布局0/1。
 
+<a id="stage2_groot_subtree"></a>
+
+### groot_subtree
+
+```toml
+groot_subtree = "1[:3072], 0[8192:], auto[]"
+```
+
+类型 `int|string` · 范围 `[auto|-1|0|1|slice list]` · Worker 覆盖 `[worker.N] groot_subtree` · 级别 `高级`。
+
+CUDA Stage2 G 树子树策略。0 关闭，1 对支持的原生或承载梅森算术开启四根子树，auto 或 -1 按匹配的 ECM tune 结果选择。自动模式在两种模式均有合格结果前走原路径。切片按实际余因子位宽依次匹配，含起点、不含终点。命令行 --groot-subtree 优先。其他算术路径沿用原树。
+
 <a id="stage2_log_level"></a>
 
 ### log_level

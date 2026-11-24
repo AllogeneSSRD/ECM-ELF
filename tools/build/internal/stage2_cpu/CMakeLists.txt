@@ -4,3 +4,8 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
 set(GMP_INCLUDE_DIR "${ECM_GMP_ROOT}/include")
 set(GMP_LIBRARY "${ECM_GMP_ROOT}/lib/gmp.lib")
 include(../ecm_stage2_cpu_host.cmake)
+
+include(../nmake_host_dependencies.cmake)
+target_compile_options(ecm_cpu_library PRIVATE /utf-8)
+ecm_track_nmake_host_dependencies(ecm_cpu_library)
+ecm_track_nmake_host_dependencies(ecm_stage2_cpu_host)

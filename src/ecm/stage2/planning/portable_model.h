@@ -16,6 +16,7 @@ struct Shape {
     Word short_batch_hash=0;
     Word giant_chunk=0,chain_min=32768;bool force_ladder=false;
     bool groot_balanced=false,tail_balance=false;Word chain_block=64;
+    bool groot_subtree=false;
     unsigned baby_coop=0,giant_coop=0,seed_coop=0,reduce_coop=0,reduce_threads=0,reduce_kernel=0;
     bool same_reduce_backend(const Shape &s)const {return reduce_coop==s.reduce_coop && reduce_threads==s.reduce_threads && reduce_kernel==s.reduce_kernel;}
     void canonicalize_reduce_policy() {
@@ -27,11 +28,11 @@ struct Shape {
         if(tail_balance && d && p && giant_chunk)
             tail_balance=!force_ladder && giant_tail_borrow(giant_points(),giant_chunk,p,chain_min,true)!=0;
     }
-    using Key=std::array<Word,28>;
+    using Key=std::array<Word,29>;
     Key key()const {
         return {target_bits,arithmetic_bits,carrier,b1,b2,d,batch_bytes,chunk_max,buffers,
             Word(physical),Word(fold),Word(frontier),Word(mersenne),Word(short_batch_tune),
-            short_batch_hash,giant_chunk,chain_min,Word(force_ladder),Word(groot_balanced),Word(tail_balance),chain_block,baby_coop,giant_coop,seed_coop,reduce_coop,reduce_threads,reduce_kernel,b2_min};
+            short_batch_hash,giant_chunk,chain_min,Word(force_ladder),Word(groot_balanced),Word(tail_balance),chain_block,baby_coop,giant_coop,seed_coop,reduce_coop,reduce_threads,reduce_kernel,b2_min,Word(groot_subtree)};
     }
 };
 struct Work {
@@ -210,6 +211,7 @@ public:
         x.force_ladder=optional_uint(s,"giant_force_ladder")!=0;
         x.tail_balance=optional_uint(s,"giant_tail_balance")!=0;x.chain_block=optional_uint(s,"giant_chain_block",64);
         x.groot_balanced=sample_groot_layout(s);
+        x.groot_subtree=optional_uint(s,"groot_subtree")!=0;
         x.reduce_coop=unsigned(optional_uint(s,"reduce_coop"));x.reduce_threads=unsigned(optional_uint(s,"reduce_threads"));x.reduce_kernel=unsigned(optional_uint(s,"reduce_kernel"));
         x.baby_coop=unsigned(optional_uint(s,"baby_coop"));x.giant_coop=unsigned(optional_uint(s,"giant_coop"));x.seed_coop=unsigned(optional_uint(s,"seed_coop"));
         const auto &c=profile.conditions.at(uint(s,"condition"));
@@ -357,7 +359,7 @@ public:
         out.exact=!runtime_observation(a) && uint(a,"repeats")>=minimum_repeats && x.target_bits==sh.target_bits && x.arithmetic_bits==sh.arithmetic_bits && x.d==sh.d &&
             x.b2==sh.b2 && x.batch_bytes==sh.batch_bytes && x.buffers==sh.buffers &&
             x.physical==sh.physical && x.chunk_max==sh.chunk_max && x.giant_chunk==sh.giant_chunk &&
-            x.chain_min==sh.chain_min && x.force_ladder==sh.force_ladder && x.groot_balanced==sh.groot_balanced && x.tail_balance==sh.tail_balance && x.chain_block==sh.chain_block &&
+            x.chain_min==sh.chain_min && x.force_ladder==sh.force_ladder && x.groot_balanced==sh.groot_balanced && x.groot_subtree==sh.groot_subtree && x.tail_balance==sh.tail_balance && x.chain_block==sh.chain_block &&
             x.fold==sh.fold && x.frontier==sh.frontier &&
             x.short_batch_tune==sh.short_batch_tune && x.short_batch_hash==sh.short_batch_hash &&
             matches(profile.conditions.at(uint(a,"condition")),condition,Ignore::parse(""));
@@ -373,7 +375,7 @@ public:
                 if(sh.target_bits==x.target_bits && sh.arithmetic_bits==x.arithmetic_bits && sh.d==x.d &&
                    sh.batch_bytes==x.batch_bytes && sh.buffers==x.buffers && sh.chunk_max==x.chunk_max &&
                    sh.physical==x.physical && sh.giant_chunk==x.giant_chunk && sh.chain_min==x.chain_min &&
-                   sh.force_ladder==x.force_ladder && sh.groot_balanced==x.groot_balanced && sh.tail_balance==x.tail_balance && sh.chain_block==x.chain_block && sh.fold==x.fold && sh.frontier==x.frontier &&
+                   sh.force_ladder==x.force_ladder && sh.groot_balanced==x.groot_balanced && sh.groot_subtree==x.groot_subtree && sh.tail_balance==x.tail_balance && sh.chain_block==x.chain_block && sh.fold==x.fold && sh.frontier==x.frontier &&
                    sh.short_batch_tune==x.short_batch_tune && sh.short_batch_hash==x.short_batch_hash)same.push_back(&s);
             }
             std::sort(same.begin(),same.end(),[](const Fields *a,const Fields *b){return uint(*a,"b2")<uint(*b,"b2");});
@@ -408,7 +410,7 @@ public:
             if(a.target_bits!=x.target_bits || a.arithmetic_bits!=x.arithmetic_bits || a.carrier!=x.carrier || a.d!=x.d ||
                a.b2!=x.b2 || a.batch_bytes!=x.batch_bytes || a.physical!=x.physical ||
                a.buffers!=x.buffers || a.chunk_max!=x.chunk_max || a.giant_chunk!=x.giant_chunk ||
-               a.force_ladder!=x.force_ladder || a.chain_min!=x.chain_min || a.groot_balanced!=x.groot_balanced || a.tail_balance!=x.tail_balance || a.chain_block!=x.chain_block ||
+               a.force_ladder!=x.force_ladder || a.chain_min!=x.chain_min || a.groot_balanced!=x.groot_balanced || a.groot_subtree!=x.groot_subtree || a.tail_balance!=x.tail_balance || a.chain_block!=x.chain_block ||
                a.fold!=x.fold || a.frontier!=x.frontier || a.short_batch_tune!=x.short_batch_tune ||
                a.short_batch_hash!=x.short_batch_hash)continue;
             if(!best || real(s,"mean_seconds")<real(*best,"mean_seconds"))best=&s;

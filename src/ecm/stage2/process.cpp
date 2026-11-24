@@ -129,6 +129,8 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
     if(!o.tune_profile.empty())cmd+=L" --tune-profile "+quote(fs::path(o.tune_profile).wstring());
     if(o.groot_layout>=0)arg(L"--groot-layout",uint64_t(o.groot_layout));
     else cmd+=L" --groot-layout auto"; // Preserve explicit auto over a forced TOML value.
+    if(!o.groot_subtree.empty())
+        cmd+=L" --groot-subtree "+quote(std::wstring(o.groot_subtree.begin(),o.groot_subtree.end()));
     arg(L"--short-ntt-batch-tune",o.short_batch_tune?1:0);
     arg(L"--pack-zero",o.pack_zero?1:0);
     if(o.weighted_ntt)arg(L"--weighted-ntt",1);

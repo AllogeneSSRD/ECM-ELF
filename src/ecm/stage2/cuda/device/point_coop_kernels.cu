@@ -3,9 +3,18 @@
 #include "../launch.h"
 #include "../point_coop_plan.h"
 #include "point_coop_chain.cuh"
+#include "groot_subtree.cuh"
 #define ECM_STAGE2_BABY_WHEEL_COOP_ONLY
 #include "../../../../../kernels/cuda/stage2_baby_wheel.cuh"
 #undef ECM_STAGE2_BABY_WHEEL_COOP_ONLY
+
+void ecm_launch_groot_subtree(unsigned roots,const unsigned long long *leaves,unsigned long long *out,
+    const unsigned long long *modulus,int words,int bits,size_t count)
+{
+    if(words<=8)launch_groot_subtree<8>(roots,leaves,out,modulus,words,bits,count);
+    else if(words<=40)launch_groot_subtree<40>(roots,leaves,out,modulus,words,bits,count);
+    else launch_groot_subtree<72>(roots,leaves,out,modulus,words,bits,count);
+}
 
 // One finite dispatch shared by both the production chain and its mandatory
 // arithmetic checks. The selected template preserves the caller's actual radix.

@@ -123,6 +123,7 @@ inline constexpr BusinessOption business_options[]={
     {"stage2","stage2_seed_backend","[auto|scalar|coop32]","option_stage2_stage2_seed_backend","string",false,false,0,0},
     {"stage2","stage2_reduce_backend","[auto|scalar|coop32]","option_stage2_stage2_reduce_backend","string",false,false,0,0},
     {"stage2","stage2_groot_balanced","[auto|false|true|0|1]","option_stage2_stage2_groot_balanced","bool|string",false,false,0,0},
+    {"stage2","stage2_groot_subtree","[auto|-1|0|1|slice list]","option_stage2_stage2_groot_subtree","int|string",false,false,0,0},
     {"stage2","stage2_giant_tail_balance","[false|true|0|1]","option_stage2_stage2_giant_tail_balance","bool",true,true,0,1},
     {"stage2","stage2_b2_round_chain","[false|true|0|1]","option_stage2_stage2_b2_round_chain","bool",true,true,0,1},
     {"stage2","stage2_giant_chain","[64|32|auto]","option_stage2_stage2_giant_chain","string",false,false,0,0},

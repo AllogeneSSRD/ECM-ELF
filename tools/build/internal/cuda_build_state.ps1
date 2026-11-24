@@ -276,7 +276,8 @@ function Get-EcmStage2SourceSet([string]$Repo, $Inventory, [string]$Engine, [str
         'src/ecm/stage2/cpu/gwpoly_loader.cpp','src/ecm/stage2/cpu/runtime_tune.cpp','src/ecm/platform/stop.cpp')
     $deps += @(Get-EcmSourceClosure $Repo $cpuSources $IncludeDirs -Production:($Engine -eq 'production')) +
         @('tools/build/internal/stage2_cpu/CMakeLists.txt','tools/build/internal/stage2_cpu_host.ps1',
-          'tools/build/internal/ecm_stage2_cpu_host.cmake','tools/build/internal/ecm_libecm.cmake')
+          'tools/build/internal/ecm_stage2_cpu_host.cmake','tools/build/internal/ecm_libecm.cmake',
+          'tools/build/internal/nmake_host_dependencies.cmake')
     if ($Modules) { $deps += @($moduleInventory.inputs_sha256.PSObject.Properties.Name) + @((Join-Path $Modules 'modules.json')) }
     return [pscustomobject]@{ Sources = $sources; CudaSources = $cudaSources;
         Dependencies = @($deps | Sort-Object -Unique); CudaDependencies = $cudaDeps }

@@ -1,15 +1,15 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "694ec9f7c292a0703000ffcbdedfddcfac2e6e8f11de041f2aca86ff9ea85d24",
-    "src/ecm/platform/generated/configuration_defaults.h": "a8ee9d42f444ce167b3eb5f0ff2235f141dd5e38edfd1f90de5149eadc402b6e",
-    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "296eb786182ecec40aca18a36971b9fb3f5ac60141b621ff20ca6c67c2f4dda4",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "b70d7f42fa064ca209cb7dd1ae6c791a2e7ec9e841eef62aa5c8060e45aff1cb",
+    "src/ecm/platform/generated/configuration_defaults.h": "b1bf9120c0c2c155efb60c8d7803892769fb99608cbf198a132a26f1b60929c2",
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "9431bc9724fa3257e56cba9c07fafa7f3ab3bf5ac1bbfd75248d55f3a0957870",
     "src/ecm/application/configuration/generated/ecm_toml_template.h": "96750548906a3e2a0f18369201cb7253185a274a924b64886cd3c8940f1438f4",
     "config/ecm.toml.default": "1ea80ed80fb7e8c217fa978a1c28534b8bc6cb7e520850f99af1bb871e365af1",
-    "config/ecm.toml.example": "d4a90bf6a41ff8a32d7024b96315544a26feacc7443b14d327962d4be93f11cd",
-    "docs/ECM_TOML_REFERENCE.en.md": "fe8cbb1640c48bcca8adf1d38c5a33dbadecc79b702ee365bc68460e14f4f40e",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "15c02a223a818645c8ef6582c50e203a185edd4d05d0eb2fcec12ad0c9dc42f0",
-    "config/ecm_options.json": "e5f6bad02187526e14eb30897240273c99aca09e0d20d92ff224d45ea0733e46",
-    "tools/gen/generate_ecm_config.py": "21f961c8ed18725d03632a59ee56647a5abf93f2a204ddbae8083130feb92f77"
+    "config/ecm.toml.example": "03024266244ef6b3de17dc500f2c37f6c237003b5875030e5f0c5f01544bb1d9",
+    "docs/ECM_TOML_REFERENCE.en.md": "b65e2393a88dc56669b745ff710c416180e3310e2b638dbeede44dc5d8ae6839",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "ea478ae9856e34bb09394af75091f5b6bc928b63d79c6e550799c560fb07bcf6",
+    "config/ecm_options.json": "2a9b592bce29ab53bc88919727c0d1b7c02aa16dc608ba146facd356fa4a85fe",
+    "tools/gen/generate_ecm_config.py": "dc958b3dca0b3de26b544c9f86bce0bd4ebba11c4ce483938393f99bf03c32e5"
   }
 }

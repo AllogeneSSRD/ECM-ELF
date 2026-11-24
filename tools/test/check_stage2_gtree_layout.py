@@ -45,6 +45,7 @@ def main():
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--order', default='0,1,1,0,0,1')
     p.add_argument('--fixtures', action='store_true')
+    p.add_argument('--subtree', type=int, choices=(0,2,4), default=0)
     a = p.parse_args()
     if not a.fixtures and (not a.save or a.record < 1):
         p.error('benchmark requires --save and record >= 1')
@@ -60,7 +61,7 @@ def main():
         from test_edwards_stage2_relocation import save
         save(out/'fixture.save',(1<<127)-1,26,20)
         point = (out/'fixture.save').read_text()
-        a.d=2310; a.b2=1000000; a.carrier=0
+        a.d=2310; a.b2=1000000; a.carrier=127 if a.subtree else 0
     else:
         identities[str(a.save.resolve())]=sha(a.save)
         points=[s for s in a.save.read_text(encoding='utf-8-sig').splitlines() if s.startswith('METHOD=')]
@@ -83,6 +84,8 @@ def main():
             'tune_runtime_enabled=false\nshort_calibration=false\n',encoding='utf-8')
         sentinel=directory/'unused_tune.toml'
         env=base.copy()
+        if a.subtree:
+            env['NTT_GROOT_SUBTREE']=str(a.subtree)
         if a.fixtures:
             env.update(NTT_GROOT_DEVICE_TEST='1',NTT_GROOT_DEVICE_CHECK='1',NTT_GROOT_DEVICE_TEST_BAD=str(fault))
         command=[str(a.exe.resolve()),'--config',str(directory/'ecm.toml'),
@@ -137,6 +140,9 @@ def main():
             assert row['checks']['gmp_check_bad']==row['checks']['gmp_selftest_bad']=='0'
             if a.fixtures:
                 fixture=fields(text,'gdevice_fixture');assert fixture['cases']=='48' and fixture['bad']=='0'
+                if a.subtree:
+                    row['subtree']=fields(text,'gdevice_subtree')
+                    assert int(row['subtree']['pairs'])>0
         report['runs'].append(row)
         (out/'summary.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
         print(json.dumps(dict(label=label,wall=elapsed,exit=result.returncode,split=row.get('split'))),flush=True)

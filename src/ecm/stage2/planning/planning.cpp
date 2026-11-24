@@ -234,6 +234,8 @@ pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d
     portable_point_backends(s);
     {ecm_stage2::GrootLayoutScope layout(o.groot_layout);
 #ifndef ECM_STAGE2_OPENCL
+     s.groot_subtree=o.cost_profile.empty() && ecm_stage2::groot_subtree_supported(s.arithmetic_bits,s.mersenne) &&
+         o.groot_subtree_mode(s.target_bits)==1;
      s.groot_balanced=ecm_stage2::select_groot_layout(w,s.giant_points(),p,int(s.arithmetic_bits),portable_query);}
 #else
      s.groot_balanced=false;}
@@ -241,6 +243,37 @@ pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d
     return s;
 }
 bool portable_admit(const Options&,const Record&,pt::Shape&,std::string&);
+static const et::Fields *preferred_subtree_sample(pt::Estimator &model,pt::Shape shape,unsigned repeats) {
+    const auto *original=model.observed(shape);
+    if(!original || !ecm_stage2::groot_subtree_supported(shape.arithmetic_bits,shape.mersenne))return original;
+    shape.groot_subtree=true;
+    const auto *candidate=model.observed(shape);
+    if(candidate && et::uint(*original,"repeats")>=repeats && et::uint(*candidate,"repeats")>=repeats &&
+       et::real(*candidate,"mean_seconds")<et::real(*original,"mean_seconds"))return candidate;
+    return original;
+}
+
+void resolve_groot_subtree(Options &o,const Record &r) {
+#ifndef ECM_STAGE2_OPENCL
+    if(o.d && o.cost_profile.empty()) {
+        const auto shape=portable_shape(o,r,o.b2,o.d,o.carrier_exponent);
+        if(!ecm_stage2::groot_subtree_supported(shape.arithmetic_bits,shape.mersenne)) {o.selected_groot_subtree=0;return;}
+        const auto mode=o.groot_subtree_mode(shape.target_bits);
+        if(mode>=0) {o.selected_groot_subtree=mode;return;}
+        if(!o.tune_child && !o.tune_profile.empty()) {
+            const auto profile=read_runtime_profile(o);
+            pt::Estimator model(profile,portable_condition(o),pt::Ignore::parse(o.tune_ignore),portable_query,
+                                o.runtime_prepare_cache,o.tune_min_repeats);
+            const auto *row=preferred_subtree_sample(model,shape,unsigned(o.tune_min_repeats));
+            o.selected_groot_subtree=row && pt::optional_uint(*row,"groot_subtree")!=0;
+            return;
+        }
+    }
+#else
+    (void)r;
+#endif
+    o.selected_groot_subtree=0;
+}
 bool portable_runtime_candidate_admit(const Options&,const Record&,pt::Shape&,std::string&,bool *hit=nullptr);
 ecm_stage2::Word portable_runtime_bound_limit(const Options &o) {
     return o.auto_b2 && o.auto_max?o.auto_max:ecm_stage2::Word(INT64_MAX)-8192;
@@ -479,6 +512,7 @@ RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     s["giant_chunk_points"]=std::to_string(shape.giant_chunk);s["giant_chain_min"]=std::to_string(shape.chain_min);
     s["giant_force_ladder"]=shape.force_ladder?"1":"0";
     s["groot_balanced"]=shape.groot_balanced?"1":"0";
+    s["groot_subtree"]=shape.groot_subtree?"1":"0";
     s["giant_tail_balance"]=shape.tail_balance?"1":"0";s["giant_chain_block"]=std::to_string(shape.chain_block);
     s["baby_coop"]=std::to_string(shape.baby_coop);s["giant_coop"]=std::to_string(shape.giant_coop);s["seed_coop"]=std::to_string(shape.seed_coop);
     s["reduce_coop"]=std::to_string(shape.reduce_coop);s["reduce_threads"]=std::to_string(shape.reduce_threads);s["reduce_kernel"]=std::to_string(shape.reduce_kernel);
@@ -494,7 +528,7 @@ void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Me
     if(!m.clean || m.bad || !m.checked || !m.selftest_cases || !m.phases.complete || m.point_policy_replayed ||
        !(m.total_seconds>0) || m.d!=s.d || m.p!=ecm_stage2::cost::phi(s.d)/2 ||
        m.giant_points!=s.giant_points() || m.fold_resident!=s.fold || m.frontier_resident!=s.frontier ||
-       m.groot_balanced!=s.groot_balanced || m.giant_tail_balance!=s.tail_balance || m.baby_coop!=s.baby_coop || m.giant_coop!=s.giant_coop || m.seed_coop!=s.seed_coop || m.reduce_coop!=s.reduce_coop || m.reduce_threads!=s.reduce_threads || m.reduce_kernel!=s.reduce_kernel)
+       m.groot_balanced!=s.groot_balanced || m.groot_subtree!=s.groot_subtree || m.giant_tail_balance!=s.tail_balance || m.baby_coop!=s.baby_coop || m.giant_coop!=s.giant_coop || m.seed_coop!=s.seed_coop || m.reduce_coop!=s.reduce_coop || m.reduce_threads!=s.reduce_threads || m.reduce_kernel!=s.reduce_kernel)
         throw std::runtime_error("curve is incomplete, unchecked, or changed its planned execution path");
     auto metrics=et::fields(tune_metrics_json(m));metrics.erase("total_seconds");metrics.erase("point_policy_replayed");
     for(const auto &field:metrics)observation.sample[field.first]=field.second;
@@ -1234,6 +1268,9 @@ static std::optional<ParallelRoute> admit_parallel_route(Options o,const Record 
     if(!o.d)return std::nullopt;
     auto shape=portable_shape(o,r,o.b2,o.d,o.carrier_exponent);
     if(!portable_runtime_bounds(o,shape))return std::nullopt;
+    o.b2=shape.b2;
+    resolve_groot_subtree(o,r);
+    shape.groot_subtree=o.selected_groot_subtree==1;
     std::string plan;
     if(!portable_admit(o,r,shape,plan))return std::nullopt;
     const auto memory=curve_memory_record(plan);
@@ -1527,7 +1564,7 @@ PortableInput portable_input(unsigned bits,const fs::path &evidence,bool mersenn
     append(save,"METHOD=ECM; PARAM=0; SIGMA=26; B1=20; N=0x"+hex+"; X=0x"+x+"; Z=1;");
     return {save,records(save,0,1).at(0),mersenne?"mersenne_small_factor_stripped_band":"probable_prime_gmp_nextprime"};
 }
-bool portable_layouts_complete(pt::Estimator &model,pt::Shape shape,unsigned repeats,bool pair,bool auto_baby=false,bool auto_giant=false,bool auto_seed=false,bool auto_reduce=false,unsigned reduce_threads=128,unsigned reduce_kernel=0) {
+bool portable_layouts_complete(pt::Estimator &model,pt::Shape shape,unsigned repeats,bool pair,bool auto_baby=false,bool auto_giant=false,bool auto_seed=false,bool auto_reduce=false,unsigned reduce_threads=128,unsigned reduce_kernel=0,bool auto_subtree=false) {
     if(auto_reduce)pt::set_reduce_backend(shape,0);
     if(auto_seed)shape.seed_coop=0;
     if(auto_giant)shape.giant_coop=0;
@@ -1559,7 +1596,12 @@ bool portable_layouts_complete(pt::Estimator &model,pt::Shape shape,unsigned rep
         if(!choice.available)return false;
         pt::set_reduce_backend(shape,choice.mode,choice.threads,choice.kernel);
     }
-    const auto complete=[&](const pt::Shape &s){const auto row=model.observed(s);return row && et::uint(*row,"repeats")>=repeats;};
+    const auto observed=[&](const pt::Shape &s){const auto row=model.observed(s);return row && et::uint(*row,"repeats")>=repeats;};
+    const auto complete=[&](pt::Shape s) {
+        if(!observed(s))return false;
+        if(!auto_subtree || !ecm_stage2::groot_subtree_supported(s.arithmetic_bits,s.mersenne))return true;
+        s.groot_subtree=true;return observed(s);
+    };
     if(!complete(shape))return false;
     const bool legacy=ecm_stage2::legacy_groot_layout((shape.arithmetic_bits+63)/64,shape.giant_points(),ecm_stage2::d_catalog::degree(shape.d));
     if(!pair || legacy==shape.groot_balanced)return true;
@@ -1576,6 +1618,20 @@ bool portable_measure(Options &requested,const TaskDefaults &settings,const Port
     // Store that legacy policy in its actual condition, never label it as tuned.
     o.short_batch_tune=false;configure_short_ntt_batches(o);
     condition=profile.condition(portable_condition(o));
+    const auto subtree_shape=portable_shape(o,input.record,b2,d,carrier);
+    if(o.groot_subtree_mode(subtree_shape.target_bits)<0 &&
+       ecm_stage2::groot_subtree_supported(subtree_shape.arithmetic_bits,subtree_shape.mersenne) && o.cost_profile.empty()) {
+        Options original=o,subtree=o;original.selected_groot_subtree=0;subtree.selected_groot_subtree=1;
+        unsigned original_n=0,subtree_n=0;et::Fields original_sample,subtree_sample;
+        const bool first=portable_measure(original,settings,input,b2,d,carrier,repeats,budget,evidence,profile,condition,
+            skip_verified_factor,&original_n,&original_sample);
+        const bool second=original_n>=repeats && portable_measure(subtree,settings,input,b2,d,carrier,repeats,budget,evidence,profile,condition,
+            skip_verified_factor,&subtree_n,&subtree_sample);
+        const bool use_subtree=subtree_n>=repeats && et::real(subtree_sample,"mean_seconds")<et::real(original_sample,"mean_seconds");
+        if(completed_repeats)*completed_repeats=use_subtree?subtree_n:original_n;
+        if(completed_sample)*completed_sample=use_subtree?subtree_sample:original_sample;
+        return first || second;
+    }
     if(o.reduce_backend=="auto") {
         auto reference=portable_shape(o,input.record,b2,d,carrier);pt::set_reduce_backend(reference,0);
         if(o.seed_backend=="auto")reference.seed_coop=0;
@@ -1784,6 +1840,7 @@ bool portable_measure(Options &requested,const TaskDefaults &settings,const Port
         // a request policy, not permission to change a calibration's identity.
         worker.b2_round_chain=false;
         worker.carrier_exponent=carrier;worker.has_carrier=true;worker.log_level=stage2_log::quiet;
+        worker.selected_groot_subtree=shape.groot_subtree;
         worker.debug_log=false;worker.debug_file.clear();worker.tune_profile.clear();
         const auto base=stem+"_"+std::to_string(repeat);
         const auto result=evidence/(base+".jsonl"),log=evidence/(base+".log");
@@ -1814,13 +1871,14 @@ bool portable_measure(Options &requested,const TaskDefaults &settings,const Port
         if(pt::optional_uint(f,"point_policy_replayed"))throw std::runtime_error("calibration replayed the original point policy; timing is not eligible");
         if(bool(et::uint(f,"fold_resident"))!=shape.fold || bool(et::uint(f,"frontier_resident"))!=shape.frontier ||
            bool(pt::optional_uint(f,"giant_tail_balance"))!=shape.tail_balance ||
-           bool(et::uint(f,"groot_balanced"))!=shape.groot_balanced || pt::optional_uint(f,"baby_coop")!=shape.baby_coop || pt::optional_uint(f,"giant_coop")!=shape.giant_coop || pt::optional_uint(f,"seed_coop")!=shape.seed_coop || pt::optional_uint(f,"reduce_coop")!=shape.reduce_coop || pt::optional_uint(f,"reduce_threads")!=shape.reduce_threads || pt::optional_uint(f,"reduce_kernel")!=shape.reduce_kernel)
+           bool(et::uint(f,"groot_balanced"))!=shape.groot_balanced || bool(et::uint(f,"groot_subtree"))!=shape.groot_subtree || pt::optional_uint(f,"baby_coop")!=shape.baby_coop || pt::optional_uint(f,"giant_coop")!=shape.giant_coop || pt::optional_uint(f,"seed_coop")!=shape.seed_coop || pt::optional_uint(f,"reduce_coop")!=shape.reduce_coop || pt::optional_uint(f,"reduce_threads")!=shape.reduce_threads || pt::optional_uint(f,"reduce_kernel")!=shape.reduce_kernel)
             throw std::runtime_error("calibration execution path differs from planned path; evidence retained");
         f.erase("point_policy_replayed");
         if(repeat)trials.push_back(std::move(f));
         std::cout<<"ecm_tune_progress: N="<<shape.target_bits<<" D="<<d<<" B2="<<b2<<" repeat="<<repeat<<'/'<<repeats
             <<" arithmetic_bits="<<shape.arithmetic_bits<<" kind="<<(shape.mersenne?"mersenne":"generic")
             <<" groot_balanced="<<int(shape.groot_balanced)
+            <<" groot_subtree="<<int(shape.groot_subtree)
             <<" budget_left="<<budget.remaining()<<" s"<<std::endl;
     }
     if(trials.empty())return paired_changed;
@@ -1843,6 +1901,7 @@ bool portable_measure(Options &requested,const TaskDefaults &settings,const Port
     sample["giant_chunk_points"]=std::to_string(shape.giant_chunk);sample["giant_chain_min"]=std::to_string(shape.chain_min);
     sample["giant_force_ladder"]=shape.force_ladder?"1":"0";
     sample["groot_balanced"]=shape.groot_balanced?"1":"0";
+    sample["groot_subtree"]=shape.groot_subtree?"1":"0";
     sample["giant_tail_balance"]=shape.tail_balance?"1":"0";sample["giant_chain_block"]=std::to_string(shape.chain_block);
     sample["baby_coop"]=std::to_string(shape.baby_coop);sample["giant_coop"]=std::to_string(shape.giant_coop);
     // The prediction was formed before admitting this new measurement. Store
@@ -2184,7 +2243,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
             if(points<=p || (o.tune_max_batches && (points+p-1)/p>o.tune_max_batches))continue;
             pt::Estimator estimator(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache,o.tune_min_repeats);
             const auto prior=estimator.observed(shape);
-            if(portable_layouts_complete(estimator,shape,grid.repeats,o.groot_layout<0,o.baby_backend=="auto",o.giant_backend=="auto",o.seed_backend=="auto",o.reduce_backend=="auto",o.reduce_threads,o.reduce_kernel)){++skipped;++paired_references;continue;}
+            if(portable_layouts_complete(estimator,shape,grid.repeats,o.groot_layout<0,o.baby_backend=="auto",o.giant_backend=="auto",o.seed_backend=="auto",o.reduce_backend=="auto",o.reduce_threads,o.reduce_kernel,o.groot_subtree_mode(shape.target_bits)<0)){++skipped;++paired_references;continue;}
             unsigned completed=0;
             et::Fields formal_sample;
             const bool changed=portable_measure(o,settings,target.input,b,d,carrier,grid.repeats,
@@ -2246,7 +2305,8 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
                 const auto prior=model.observed(shape);
                 const auto reference=reference_samples.find({target_index,shape.key()});
                 const bool reuse_current=reference!=reference_samples.end();
-                const bool reuse=portable_layouts_complete(model,shape,grid.repeats,o.groot_layout<0,o.baby_backend=="auto",o.giant_backend=="auto",o.seed_backend=="auto",o.reduce_backend=="auto",o.reduce_threads,o.reduce_kernel);
+                const bool auto_subtree=o.groot_subtree_mode(shape.target_bits)<0;
+                const bool reuse=portable_layouts_complete(model,shape,grid.repeats,o.groot_layout<0,o.baby_backend=="auto",o.giant_backend=="auto",o.seed_backend=="auto",o.reduce_backend=="auto",o.reduce_threads,o.reduce_kernel,auto_subtree);
                 unsigned completed=0;
                 et::Fields formal_sample;
                 if(!reuse) {
@@ -2260,7 +2320,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
                     if(changed)portable_publish(destination,profile);
                 } else ++skipped;
                 pt::Estimator updated(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache,o.tune_min_repeats);
-                const auto observation=updated.observed(shape);
+                const auto observation=auto_subtree?preferred_subtree_sample(updated,shape,grid.repeats):updated.observed(shape);
                 if(!observation || (!reuse && completed<grid.repeats))return outcomes[d]=result;
                 result.state=Outcome::Tested;
                 // Rank this completed trial population; persistent rows combine
@@ -2269,7 +2329,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
                 result.time={et::real(timing,"mean_seconds"),et::real(timing,"stddev_seconds")};
                 if(o.groot_layout<0) {
                     auto legacy=shape;legacy.groot_balanced=ecm_stage2::legacy_groot_layout((shape.arithmetic_bits+63)/64,points,p);
-                    if(const auto other=updated.observed(legacy);other && et::uint(*other,"repeats")>=grid.repeats &&
+                    if(const auto other=auto_subtree?preferred_subtree_sample(updated,legacy,grid.repeats):updated.observed(legacy);other && et::uint(*other,"repeats")>=grid.repeats &&
                        et::real(*other,"mean_seconds")<result.time.seconds)
                         result.time={et::real(*other,"mean_seconds"),et::real(*other,"stddev_seconds")};
                 }
@@ -2558,7 +2618,7 @@ std::string tune_metrics_json(const EcmStage2Metrics &m) {
         <<",\"descent_seconds\":"<<m.descent_seconds<<",\"inverse_seconds\":"<<m.inverse_seconds<<",\"accum_seconds\":"<<m.accum_seconds
         <<",\"selftest_cases\":"<<m.selftest_cases<<",\"checked\":"<<m.checked<<",\"bad\":"<<m.bad
         <<",\"hits\":0,\"clean\":1,\"fold_resident\":"<<int(m.fold_resident)<<",\"frontier_resident\":"<<int(m.frontier_resident)
-        <<",\"groot_balanced\":"<<int(m.groot_balanced)
+        <<",\"groot_balanced\":"<<int(m.groot_balanced)<<",\"groot_subtree\":"<<int(m.groot_subtree)
         <<",\"baby_coop\":"<<m.baby_coop<<",\"giant_coop\":"<<m.giant_coop<<",\"seed_coop\":"<<m.seed_coop<<",\"reduce_coop\":"<<m.reduce_coop<<",\"reduce_threads\":"<<m.reduce_threads<<",\"reduce_kernel\":"<<m.reduce_kernel<<",\"point_check_seconds\":"<<m.point_check_seconds
         <<",\"giant_tail_balance\":"<<int(m.giant_tail_balance)<<",\"point_policy_replayed\":"<<int(m.point_policy_replayed)
         <<",\"phase_accounting\":"<<json_string(ecm_stage2::timing::contract);

@@ -89,6 +89,7 @@ static CurveProcessRequest curve_request(Options &o,const fs::path &save,const R
     request.tune_min_repeats=o.tune_min_repeats;
     request.short_batch_tune=o.short_batch_tune;
     request.groot_layout=o.groot_layout;
+    request.groot_subtree=o.selected_groot_subtree>=0?std::to_string(o.selected_groot_subtree):o.groot_subtree;
     request.stage1_batch=o.stage1_batch;
     request.stage1_csv=o.stage1_csv;
     request.stage1_exponent=o.stage1_exponent;
@@ -236,6 +237,7 @@ int curve_worker(Options o) {
     auto tuned_json=(o.tune_child || o.fixed_queue_route)?std::string{}:auto_json.empty()?select_tuned(o,r):select_runtime_tuned(o,r);
     if(!o.fixed_queue_route)round_giant_bounds(o,r);
     apply_point_backends(o);
+    resolve_groot_subtree(o,r);
     ecm_stage2::GiantPolicyScope point_execution(o.giant_tail_balance?1:0,o.selected_chain);
     const double selection_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
     const double auto_seconds=auto_json.empty()?0:std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
@@ -264,6 +266,7 @@ int curve_worker(Options o) {
     } else {
         if (!mpz_cmp(gcd.z, n.z)) throw std::runtime_error("saved X=0 gives no usable Stage1 point");
         ecm_stage2::GrootLayoutScope layout_scope(o.groot_layout);
+        ecm_stage2::GrootSubtreeScope subtree_scope(o.selected_groot_subtree==1);
         configure_cuda_wait(o.device);
         if(ecm_cuda_stage2_set_relocation(o.relocation))throw std::runtime_error("relocation requires the production Stage2 engine");
         const EcmStage2GpuHandoff handoff{[](void *handle){
@@ -351,6 +354,7 @@ int curve_worker(Options o) {
         ",\"lock_wait_seconds\":"+std::to_string(lock_wait_seconds)+
         ",\"carrier_exponent\":"+std::to_string(o.carrier_exponent)+
         ",\"requested_carrier_exponent\":"+std::to_string(requested_carrier)+
+        ",\"groot_subtree\":"+std::to_string(int(tune_metrics.groot_subtree))+
         ",\"requested_D\":"+std::to_string(requested_d)+",\"requested_B2\":"+std::to_string(requested_b2)+
         ",\"giant_tail_balance\":"+std::string(tune_metrics.giant_tail_balance?"true":"false")+
         ",\"giant_tail_balance_requested\":"+std::string(o.giant_tail_balance?"true":"false")+
@@ -402,7 +406,7 @@ int curve_worker(Options o) {
                  <<(m.clean && m.selftest_cases && m.checked && !m.bad && m.phases.complete &&
                     !m.point_policy_replayed && submission.factors.empty()?1:0)
                  <<",\"d\":"<<m.d<<",\"p\":"<<m.p<<",\"b2\":"<<o.b2<<",\"carrier\":"<<o.carrier_exponent
-                 <<",\"layout\":"<<int(m.groot_balanced)<<",\"fold\":"<<int(m.fold_resident)
+                 <<",\"layout\":"<<int(m.groot_balanced)<<",\"subtree\":"<<int(m.groot_subtree)<<",\"fold\":"<<int(m.fold_resident)
                  <<",\"frontier\":"<<int(m.frontier_resident)<<",\"points\":"<<m.giant_points
                  <<",\"baby\":"<<m.baby_coop<<",\"giant\":"<<m.giant_coop<<",\"seed\":"<<m.seed_coop
                  <<",\"reduce\":"<<m.reduce_coop<<",\"reduce_threads\":"<<m.reduce_threads
@@ -433,7 +437,7 @@ bool checked_queue_curve(const std::string &payload,const ParallelRoute &route) 
     const auto &s=route.shape;
     const std::pair<const char*,uint64_t> expected[]={
         {"checked_nf",1},{"d",s.d},{"p",ecm_stage2::d_catalog::degree(s.d)},
-        {"b2",s.b2},{"carrier",s.carrier},{"layout",s.groot_balanced},{"fold",s.fold},
+        {"b2",s.b2},{"carrier",s.carrier},{"layout",s.groot_balanced},{"subtree",s.groot_subtree},{"fold",s.fold},
         {"frontier",s.frontier},{"points",s.giant_points()},{"baby",s.baby_coop},{"giant",s.giant_coop},
         {"seed",s.seed_coop},{"reduce",s.reduce_coop},{"reduce_threads",s.reduce_threads},{"reduce_kernel",s.reduce_kernel}
     };

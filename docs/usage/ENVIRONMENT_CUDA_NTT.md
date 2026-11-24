@@ -101,6 +101,7 @@ TOML 的 `[stage2] ntt_two_axis` 统一控制五个阶段，默认开启。`--tw
 | `NTT_SMALL_PRIME_REUSE` | 1 | 在满足缓存身份时复用同一曲线的小素数处理结果。生产固定。 |
 | `NTT_S4_GROOT_ONLY` | 1 | G-tree 只保留根结果。生产固定。 |
 | `NTT_GROOT_DEVICE`、`NTT_GROOT_COMPACT_RAW`、`NTT_GROOT_LEAF_STAGING` | 1 | 使用设备 G-root、紧凑 raw 缓冲和分段 leaf 暂存。生产固定。 |
+| `NTT_GROOT_SUBTREE` | 0 | 设备树 GMP 诊断参数，仅在 `NTT_GROOT_DEVICE_CHECK=1` 时生效。`2` 测一层，`4` 测两层。生产通过 TOML 的 `groot_subtree` 控制四根子树。 |
 | `NTT_GROOT_LEAF_CHUNK` | 0 | 限制一次暂存的 G-tree 叶数，0 使用工作区计算出的大小。 |
 | `NTT_DEVICE_GLEAF`、`NTT_GROOT_TO_FOLD` | 1 | 在满足显存与形状准入时保留 G-tree 叶节点，并把设备 G-root 直接交给 fold。生产固定。 |
 | `NTT_DEVICE_GLEAF_MAX_MB` | 512 | 设备 G-tree 叶节点的显存预算。 |

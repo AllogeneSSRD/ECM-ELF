@@ -259,6 +259,7 @@ struct GDeviceStats {
     unsigned long long metadata_words=0, metadata_peak_bytes=0, raw_peak_bytes=0;
     unsigned long long logical_frontier_peak_bytes=0, host_staging_peak_bytes=0;
     unsigned long long checked_nodes=0, checked_words=0;
+    unsigned long long subtree_trees=0, subtree_tiles=0, subtree_pairs=0;
 };
 
 extern GDeviceStats g_gdevice;

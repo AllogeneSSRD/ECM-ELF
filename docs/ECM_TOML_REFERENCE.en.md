@@ -1245,6 +1245,18 @@ Type `bool|string` · Range `[auto|false|true|0|1]` · Worker override `[worker.
 
 G-root polynomial layout. "auto" uses the qualified NTT-cliff model and measured tuning; true forces the balanced tile layout, false forces the contiguous layout. Default "auto". This does not rebalance giant point chunks or change B2/D/P. CUDA only; OpenCL accepts "auto". CLI --groot-layout auto|true|false overrides this worker TOML; numeric CLI aliases 0/1 remain supported. Tune rows store the resolved layout as 0/1.
 
+<a id="stage2_groot_subtree"></a>
+
+### groot_subtree
+
+```toml
+groot_subtree = "1[:3072], 0[8192:], auto[]"
+```
+
+Type `int|string` · Range `[auto|-1|0|1|slice list]` · Worker override `[worker.N] groot_subtree` · Level `advanced`.
+
+CUDA Stage2 G-tree subtrees. 0 disables, 1 enables four-root subtrees for supported native or carrier Mersenne arithmetic, and auto or -1 uses matching ECM tune results. Auto uses the original path until both modes have qualified results. Ordered slices match the actual cofactor width, including the start and excluding the end. CLI --groot-subtree overrides this policy. Other arithmetic paths use the original tree.
+
 <a id="stage2_log_level"></a>
 
 ### log_level

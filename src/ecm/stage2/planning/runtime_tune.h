@@ -15,7 +15,7 @@ inline std::string runtime_pause_scope(const std::string &context,const Shape &r
     std::ostringstream out;out.imbue(std::locale::classic());out<<std::setprecision(17)<<context<<'\n';
     auto shape=[&](const Shape &s){for(auto value:s.key())out<<value<<',';out<<'\n';};
     shape(reference);
-    for(const auto &c:candidates)if(c.shape.carrier==reference.carrier && c.shape.groot_balanced==reference.groot_balanced) {
+    for(const auto &c:candidates)if(c.shape.carrier==reference.carrier && c.shape.groot_balanced==reference.groot_balanced && c.shape.groot_subtree==reference.groot_subtree) {
         shape(c.shape);out<<c.priority<<','<<c.probe_allowed<<','<<c.statistics.count<<','
             <<c.statistics.seconds<<','<<c.statistics.stddev<<','<<c.statistics.preferred_order<<'\n';
     }
@@ -74,7 +74,7 @@ inline PointBackendChoice qualified_giant_backend(const Estimator &engine,const 
         if(s.target_bits!=reference.target_bits || s.arithmetic_bits!=reference.arithmetic_bits || s.carrier!=reference.carrier ||
            !s.same_reduce_backend(reference) || s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.baby_coop!=reference.baby_coop || s.seed_coop!=reference.seed_coop ||
            s.chain_block!=reference.chain_block || s.fold!=reference.fold || s.frontier!=reference.frontier ||
-           s.groot_balanced!=reference.groot_balanced || s.tail_balance!=reference.tail_balance ||
+           s.groot_balanced!=reference.groot_balanced || s.groot_subtree!=reference.groot_subtree || s.tail_balance!=reference.tail_balance ||
            (s.giant_coop!=0 && s.giant_coop!=16 && s.giant_coop!=32) || giant_backend_bucket(s)!=bucket)continue;
         const auto at=s.giant_coop==32?2:s.giant_coop==16?1:0;s.giant_coop=0;
         auto key=s.key();key[3]=0;auto &pair=pairs[key];
@@ -105,7 +105,7 @@ inline PointBackendChoice qualified_seed_backend(const Estimator &engine,const S
         if(s.target_bits!=reference.target_bits || s.arithmetic_bits!=reference.arithmetic_bits || s.carrier!=reference.carrier ||
            !s.same_reduce_backend(reference) || s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.baby_coop!=reference.baby_coop ||
            s.giant_coop!=reference.giant_coop || s.chain_block!=reference.chain_block ||
-           s.fold!=reference.fold || s.frontier!=reference.frontier || s.groot_balanced!=reference.groot_balanced ||
+           s.fold!=reference.fold || s.frontier!=reference.frontier || s.groot_balanced!=reference.groot_balanced || s.groot_subtree!=reference.groot_subtree ||
            s.tail_balance!=reference.tail_balance || (s.seed_coop!=0 && s.seed_coop!=32) || giant_backend_bucket(s)!=bucket)continue;
         const auto at=s.seed_coop?1:0;s.seed_coop=0;auto key=s.key();key[3]=0;auto &pair=pairs[key];
         if(!pair[at] || uint(row,"repeats")>uint(*pair[at],"repeats"))pair[at]=&row;
@@ -142,7 +142,7 @@ inline ReduceBackendChoice qualified_reduce_backend(const Estimator &engine,cons
         if(s.target_bits!=reference.target_bits || s.arithmetic_bits!=reference.arithmetic_bits || s.carrier!=reference.carrier ||
            s.mersenne!=reference.mersenne || s.b2!=reference.b2 || !s.same_point_backend(reference) ||
            s.chain_block!=reference.chain_block || s.fold!=reference.fold || s.frontier!=reference.frontier ||
-           s.groot_balanced!=reference.groot_balanced || s.tail_balance!=reference.tail_balance ||
+           s.groot_balanced!=reference.groot_balanced || s.groot_subtree!=reference.groot_subtree || s.tail_balance!=reference.tail_balance ||
            (s.reduce_coop!=0 && s.reduce_coop!=32) || (s.reduce_coop && s.reduce_threads!=threads))continue;
         Work w;if(!engine.cached_work(s,w) || interval(s,w).key!=interval(reference,rw).key)continue;
         const unsigned at=s.reduce_coop?s.reduce_kernel:0;if(at>2)continue;

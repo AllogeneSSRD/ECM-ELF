@@ -112,6 +112,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage2","stage2_seed_backend","string","[auto|scalar|coop32]","stage2","seed_backend","",false},
     {"stage2","stage2_reduce_backend","string","[auto|scalar|coop32]","stage2","reduce_backend","",false},
     {"stage2","stage2_groot_balanced","bool|string","[auto|false|true|0|1]","stage2","groot_balanced","",false},
+    {"stage2","stage2_groot_subtree","int|string","[auto|-1|0|1|slice list]","stage2","groot_subtree","",false},
     {"stage2","stage2_giant_tail_balance","bool","[false|true|0|1]","stage2","giant_tail_balance","",false},
     {"stage2","stage2_b2_round_chain","bool","[false|true|0|1]","stage2","b2_round_chain","",false},
     {"stage2","stage2_giant_chain","string","[64|32|auto]","stage2","giant_chain","",false},

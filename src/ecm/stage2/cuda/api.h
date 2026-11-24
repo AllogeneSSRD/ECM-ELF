@@ -41,6 +41,7 @@ struct EcmStage2Metrics {
     double inverse_seconds=0,accum_seconds=0;
     ecm_stage2::timing::PhaseTimes phases;
     bool clean=false,fold_resident=false,frontier_resident=false,groot_balanced=false;
+    bool groot_subtree=false;
 };
 struct EcmStage2GpuHandoff {
     void (*ready)(void *)=nullptr;

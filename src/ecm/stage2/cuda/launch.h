@@ -28,6 +28,8 @@ void ecm_launch_s2g_seed_pair_kernel(EcmCudaLaunch cfg, const unsigned long long
 template<int NW>
 void ecm_launch_s2g_segprod_kernel(EcmCudaLaunch cfg, const unsigned long long *dn, unsigned long long ninv, int nw, const unsigned long long *dz, unsigned long long npts, unsigned long long seg, unsigned long long nseg, unsigned long long *out, const unsigned long long *fix);
 void ecm_launch_s2g_projective_leaf_kernel(EcmCudaLaunch cfg, const unsigned long long *n, int nw, const unsigned long long *x, const unsigned long long *z, size_t first, size_t count, unsigned long long *out);
+void ecm_launch_groot_subtree(unsigned roots,const unsigned long long *leaves,unsigned long long *out,
+    const unsigned long long *modulus,int words,int bits,size_t count);
 template<int NW>
 void ecm_launch_s2g_block_prod_kernel(EcmCudaLaunch cfg, const unsigned long long *vals, int nvals, int nw, int per_block, const unsigned long long *n, unsigned long long ninv, unsigned long long *out);
 template<int NW>

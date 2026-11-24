@@ -53,6 +53,20 @@ F 树、Newton 倒数和 F 下降各执行一次。相应的墙钟包括准备�
 
 Windows RTX 4070 Ti，CUDA 13.3，285 W 功耗上限。2k 各次活跃功耗中位数范围 80.28–92.79 W，SM 频率中位数均为 2610 MHz。旧版为上节的 0.73.6 worker，复用版为 0.73.7 `sm_89` worker，SHA-256 为 `cde644a6fa077d019d28068e6625b020ae85aa750e0bd51607cd2784960ee036`。正式样本的下降叶值哈希逐档对齐。同步与异步上传各通过 48 个 GMP 设备树用例，故障注入触发节点校验失败。[GMP 及故障注入](../../data/experiments/stage2_gtree_reuse/fixture_qualified/summary.json) · [同步上传日志](../../data/experiments/stage2_gtree_reuse/fixture_qualified_blocking/console.log)
 
+### 驻留 G 树的片内子树
+
+CUDA 子树内核可融合 G 树底部一层或两层。每个协作组计算一个输出系数，四根模式的二次片根留在共享内存。规范系数写入原有紧凑前沿，中高层继续使用原树执行。支持非首一投影叶和短尾。生产用 `groot_subtree` 选择原路径或四根模式。下表中的两根模式为诊断档。[设备内核](../../src/ecm/stage2/cuda/device/groot_subtree.cuh) · [配置与调优](../usage/STAGE2.md#固定参数g树实验)
+
+| Edwards 输入 | B2 | 每片根数 | G 树（秒） | Stage2 整曲线（秒） | G 树单轴 NTT 乘积数 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| M2203 | 480 亿 | 0 / 2 / 4 | 1.851 / 1.587 / 1.422 | 3.261 / 2.838 / 2.410 | 798,924 / 399,323 / 199,523 |
+| M2203 | 1,440 亿 | 0 / 4 | 5.877 / 5.011 | 8.029 / 6.635 | 2,396,771 / 598,568 |
+| M4253 | 320 亿 | 0 / 2 / 4 | 1.731 / 1.916 / 1.679 | 4.354 / 4.461 / 4.580 | 532,617 / 266,216 / 133,016 |
+
+M2203 的四根模式在两个 B2 档的六对样本中都缩短 G 树和整曲线。G 树配对省时中位数分别为 0.411 秒和 0.928 秒。M4253 的四根模式三对整曲线都增加耗时。子树承担的二叉乘积数与所省的单轴 NTT 乘积数一致，上层双轴乘积数保持一致。另在 M8011 / 80111、B2=90 亿、D/P=120120/11520 做一对宽位回退，子树计数为零，NTT 计数与叶值哈希一致。[480 亿和 320 亿对照与宽位回退](../../data/experiments/stage2_groot_subtree/paired/summary.json) · [1,440 亿重复对照](../../data/experiments/stage2_groot_subtree/long_2k/summary.json)
+
+使用同一批既有 Stage1 存档，M2203 的 sigma=17、B1=1,000，M4253 的 sigma=4294967311、B1=64，两档固定 D/P=60060/5760。每个表中条件交错测三次，列出算术平均值。G 树取 `real_batched_split.gtrees`，整曲线取 `stage2_full_wall`。0.73.10 `sm_89` worker SHA-256 为 `0f9788098a5e7b4fe71901dc1a030b3ee52cabebddd3db4ab81810008354d03d`。RTX 4070 Ti、Windows、CUDA 13.3，功耗上限 285 W，各次活跃 SM 频率中位数为 2610 MHz。M2203 两档活跃功耗中位数分别落在 47.05–86.95 W、68.62–96.93 W，M4253 为 81.31–112.01 W。全部整曲线样本返回 NF，逐档下降叶值哈希一致。两种片大小各通过 48 个 GMP 设备树用例，包含首项非一、短尾和均衡布局，故障注入触发节点校验。[2 根 GMP 检查](../../data/experiments/stage2_groot_subtree/fixture_2/summary.json) · [4 根 GMP 检查](../../data/experiments/stage2_groot_subtree/fixture_4/summary.json)
+
 ## Edwards 全位宽对照
 
 小档 B2，13 个实际余因子，318–16272 位。纵轴为秒／曲线，越低越快。左侧放大前六个位宽，右侧显示全部 13 点。图例按设备分组。Ryzen AI 9 HX 370 的 0.69.9 使用蓝色和青色实线，0.66.1 使用对应的浅色虚线。历史 CUDA 数据用虚线，4060 Laptop 的较早版本用渐浅的紫色。Prime95 四线程历史参考用黑色点线与空心三角。色带表示有逐次记录的观测范围。

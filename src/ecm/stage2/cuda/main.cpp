@@ -190,6 +190,11 @@ Options arguments(int argc, char **argv) {
         else if (a == "--relocation") {const auto n=num();if(n>1)throw std::runtime_error("relocation must be 0 or 1");o.relocation=n!=0;o.portable_cli.insert(a);}
         else if (a == "--weighted-ntt") {const auto n=num();if(n>1)throw std::runtime_error("weighted-ntt must be 0 or 1");o.weighted_ntt=n!=0;o.portable_cli.insert(a);}
         else if (a == "--two-axis-ntt") {const auto n=num();if(n>1)throw std::runtime_error("two-axis-ntt must be 0 or 1");o.ntt_two_axis=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--groot-subtree") {
+            o.groot_subtree=value();
+            o.groot_subtree_rules=ecm_stage2::parse_groot_subtree_policy(o.groot_subtree);
+            o.portable_cli.insert(a);
+        }
         else if (a == "--pack-zero") {const auto n=num();if(n>1)throw std::runtime_error("pack-zero must be 0 or 1");o.pack_zero=n!=0;o.portable_cli.insert(a);}
         else if (a == "--low-cpu-wait") {const auto n=num();if(n>1)throw std::runtime_error("low-cpu-wait must be 0 or 1");o.low_cpu_wait=n!=0;o.portable_cli.insert(a);}
         else if (a == "--tune-ignore") {o.tune_ignore=value();o.portable_cli.insert(a);ecm_stage2::tune::portable::Ignore::parse(o.tune_ignore);}
@@ -359,6 +364,7 @@ void help() {
         "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
         "           --weighted-ntt 0|1: fuse the first NTT stage into CUDA packing (weighted_ntt in TOML).\n"
         "           --two-axis-ntt 0|1: enable eligible two-axis CUDA products across Stage2 (ntt_two_axis in TOML).\n"
+        "           --groot-subtree auto|-1|0|1|slices: select CUDA G-tree subtrees.\n"
         "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (pack_zero in TOML).\n"
         "           --baby-backend auto|scalar|coop32 --giant-backend auto|scalar|coop16|coop32\n"
         "           --seed-backend auto|scalar|coop32 (paired seeds and GPU [D]Q, >8192 bits)\n"
@@ -422,6 +428,10 @@ int driver(Options o, const ecm_stage2::LaunchConfig* launch) {
             const auto settings = ecm_config::read_stage2(ecm_config::cli_entries(child_config.lines,o.worker,true));
             freeze_publication(o,settings,child_config.path);
             if (o.worker_cpu_affinity.empty()) o.worker_cpu_affinity = settings.shared_cpu_affinity;
+            if(!o.portable_cli.count("--groot-subtree")) {
+                o.groot_subtree=settings.groot_subtree;
+                o.groot_subtree_rules=ecm_stage2::parse_groot_subtree_policy(o.groot_subtree);
+            }
         }
         ecm_platform::apply_worker_cpu_affinity(o.worker_cpu_affinity, !o.frozen_publication);
         bind_engine_options(o);
@@ -567,6 +577,10 @@ int driver(Options o, const ecm_stage2::LaunchConfig* launch) {
     if(!stage2_backend::opencl && !o.portable_cli.count("--weighted-ntt"))o.weighted_ntt=s.weighted_ntt;
     configure_weighted_ntt(o);
     if(!o.portable_cli.count("--two-axis-ntt"))o.ntt_two_axis=s.ntt_two_axis;
+    if(!o.portable_cli.count("--groot-subtree")) {
+        o.groot_subtree=s.groot_subtree;
+        o.groot_subtree_rules=ecm_stage2::parse_groot_subtree_policy(o.groot_subtree);
+    }
     configure_two_axis_ntt(o);
     if(!o.tune_profile.empty())o.tune_profile=absolute_from(cwd,o.tune_profile).string();
     else if(shared_output) {

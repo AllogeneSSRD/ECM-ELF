@@ -2,6 +2,7 @@
 // F/G tree construction, layout, degree and root selection.
 #include "tree.h"
 #include "options.h"
+#include "ecm/stage2/groot_subtree_policy.h"
 
 std::vector<std::vector<unsigned long long>> build_tree_flat(
     PolyLayer &L,
@@ -289,17 +290,6 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
     size_t leaf_offset=0;
     for(size_t i=0;i<pad;++i){offsets[i]=leaf_offset;leaf_offset+=2*W*deg[pad+i];}
     if(leaf_offset!=need){std::fprintf(stderr,"FATAL: G tree dense leaf offsets\n");std::exit(3);}
-    // A full batch repeats the offsets of its n-1 binary products.
-    GrootMetadata local_metadata;
-    const bool keep_metadata=C.cache_groot_offsets;
-    auto &metadata=keep_metadata ? C.groot_metadata : local_metadata;
-    const size_t meta_words=3*(keep_metadata ? n-1 : pad/2);
-    metadata.reserve(meta_words);
-    g_gdevice.metadata_peak_bytes=std::max(g_gdevice.metadata_peak_bytes,8ull*metadata.capacity);
-    const bool cached=keep_metadata && metadata.leaves==n && metadata.word_width==W && metadata.balanced==balanced;
-    if(keep_metadata && !metadata.pinned)metadata.pageable.resize(metadata.capacity);
-    auto *host_meta=metadata.pinned ? metadata.pinned : metadata.pageable.data();
-    size_t meta_offset=0;
     auto validate=[&](size_t base) {
         if(!check)return;
         std::vector<unsigned long long> words(cur_words);
@@ -315,7 +305,67 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
     validate(pad);
     const double start=now_s();
     static bool poisoned=false;
-    for(size_t base=pad/2; base; base/=2) {
+    const char *fault=std::getenv("NTT_GROOT_DEVICE_TEST_BAD");
+    auto poison=[&](unsigned long long *dst,size_t words) {
+        if(fault && std::atoi(fault) && !poisoned && words) {
+            CK(cudaMemsetAsync(dst,0xff,8));poisoned=true;
+            stage2_log::print(stage2_log::debug, "gdevice_fault: first computed frontier poisoned\n");
+        }
+    };
+    size_t frontier=pad, live=n;
+#ifndef ECM_STAGE2_OPENCL
+    static const auto diagnostic_subtree=fuse_env_ull("NTT_GROOT_SUBTREE",0);
+    const auto requested=g_groot_device_check && diagnostic_subtree ? diagnostic_subtree : ecm_stage2::groot_subtree_enabled?4:0;
+    if((requested==2 || requested==4) && n>1 && W<=72 &&
+        (L.carrier_exponent || mpz_scan0(L.N,0)==L.S) &&
+        !lease_audit.enabled && !g_s4_carry_trace && !g_s4_carry_test_bad && !g_s4_final_readback) {
+        const unsigned roots=unsigned(std::min<size_t>(requested,pad));
+        const size_t tile_count=(n+roots-1)/roots;
+        const size_t next_base=pad/roots;
+        const size_t next_words=(n+tile_count)*W;
+        // The balanced layout moves whole aligned tiles, so nonempty
+        // subtrees are dense in storage and only the last can be partial.
+        size_t seen=0, packed_words=0;
+        offsets.resize(next_base);
+        for(size_t i=0;i<next_base;++i) {
+            offsets[i]=packed_words;
+            if(const size_t d=deg[next_base+i]) {
+                if(d!=std::min<size_t>(roots,n-seen)) {
+                    std::fprintf(stderr,"%s: FATAL: resident subtree layout mismatch\n",NTT_PROBE_NAME);
+                    std::exit(3);
+                }
+                seen+=d;packed_words+=(d+1)*W;
+            }
+        }
+        if(packed_words!=next_words || next_words>C.raw_capacity(next)) {
+            std::fprintf(stderr,"%s: FATAL: resident subtree exceeds raw lease\n",NTT_PROBE_NAME);
+            std::exit(3);
+        }
+        ecm_launch_groot_subtree(roots,cur,next,C.red->dn,int(W),int(L.S),n);
+        CK(cudaGetLastError());
+        poison(next,next_words);
+        std::swap(cur,next);
+        frontier=next_base;live=tile_count;cur_words=next_words;
+        ++g_gdevice.subtree_trees;
+        g_gdevice.subtree_tiles+=tile_count;
+        g_gdevice.subtree_pairs+=n-tile_count;
+        g_gdevice.levels+=roots==4 ? 2 : 1;
+        g_gdevice.pairs+=n-tile_count;fs.muls+=n-tile_count;
+        g_gdevice.logical_frontier_peak_bytes=std::max(g_gdevice.logical_frontier_peak_bytes,8ull*(need+next_words));
+        validate(frontier);
+    }
+#endif
+    GrootMetadata local_metadata;
+    const bool keep_metadata=C.cache_groot_offsets;
+    auto &metadata=keep_metadata ? C.groot_metadata : local_metadata;
+    const size_t meta_words=3*(keep_metadata ? live-1 : frontier/2);
+    metadata.reserve(meta_words);
+    g_gdevice.metadata_peak_bytes=std::max(g_gdevice.metadata_peak_bytes,8ull*metadata.capacity);
+    const bool cached=keep_metadata && metadata.leaves==n && metadata.word_width==W && metadata.balanced==balanced;
+    if(keep_metadata && !metadata.pinned)metadata.pageable.resize(metadata.capacity);
+    auto *host_meta=metadata.pinned ? metadata.pinned : metadata.pageable.data();
+    size_t meta_offset=0;
+    for(size_t base=frontier/2; base; base/=2) {
         stage2_trace::Range level_trace("GTree.level");
         const double level_start=now_s();
         std::vector<unsigned long long> target(base);size_t next_words=0;
@@ -362,11 +412,7 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
             ++g_gdevice.groups;g_gdevice.pairs+=nb;fs.muls+=nb;
             ++L.s4->groups;
         }
-        const char *fault=std::getenv("NTT_GROOT_DEVICE_TEST_BAD");
-        if(fault && std::atoi(fault) && !poisoned && next_words) {
-            CK(cudaMemsetAsync(next,0xff,8));poisoned=true;
-            stage2_log::print(stage2_log::debug, "gdevice_fault: first computed frontier poisoned\n");
-        }
+        poison(next,next_words);
         std::swap(cur,next);offsets.swap(target);cur_words=next_words;++g_gdevice.levels;validate(base);
         if(g_s4_batched_progress)
             stage2_log::print(stage2_log::debug, "gdevice_progress: base=%llu groups=%llu t_level=%.3f t_total=%.3f\n",

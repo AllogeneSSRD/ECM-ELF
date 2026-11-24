@@ -16,6 +16,7 @@
 #include "cuda/api.h"
 #include "planning/portable_model.h"
 #include "reduce_backend.h"
+#include "ecm/stage2/groot_subtree_policy.h"
 namespace s2prod {
 namespace fs=std::filesystem;
 enum class ParallelMode : unsigned { automatic=0, serial=1, paired=2 };
@@ -109,6 +110,12 @@ struct Options {
     uint64_t tune_budget=1800,short_budget=10,stage1_mhz=0,factor_bits=0;
     unsigned inferred_carrier=0;
     int groot_layout=-1;
+    std::string groot_subtree=ecm_config::defaults::stage2_stage2_groot_subtree;
+    std::vector<ecm_stage2::GrootSubtreeRule> groot_subtree_rules=ecm_stage2::parse_groot_subtree_policy(groot_subtree);
+    int selected_groot_subtree=-1;
+    int groot_subtree_mode(unsigned target_bits) const {
+        return selected_groot_subtree>=0 ? selected_groot_subtree : ecm_stage2::groot_subtree_mode(groot_subtree_rules,target_bits);
+    }
     bool short_calibration=true;
     bool short_batch_tune=false;
     bool pack_zero=ecm_config::defaults::stage2_stage2_pack_zero;

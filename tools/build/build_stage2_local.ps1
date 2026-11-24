@@ -152,7 +152,7 @@ if ($HostOnly) {
 }
 . (Join-Path $PSScriptRoot 'internal/stage2_cpu_host.ps1')
 Write-Host '== build CPU Stage2 host =='
-$cpuLibraries = @(Build-EcmStage2CpuHost $Build $Gmp $vc $Jobs -Rebuild:$Rebuild)
+$cpuLibraries = @(Build-EcmStage2CpuHost $Build $Gmp $vc -Rebuild:$Rebuild)
 $cpuHashes = Get-EcmSourceHashes $Build @('cpu-host/ecm_stage2_cpu_host.lib','cpu-host/ecm_cpu_library.lib')
 $signatureText += "`n" + (($cpuHashes.Keys | ForEach-Object { "$_=$($cpuHashes[$_])" }) -join "`n")
 $fresh = -not $Rebuild -and (Test-Path $exe) -and (Test-Path $signaturePath) -and $previous -and
@@ -291,9 +291,11 @@ if ($buildGwDll) {
     & cmd.exe /d /c $gwCommand 2>&1 | Out-File -LiteralPath $gwLog -Encoding utf8
     if ($LASTEXITCODE -ne 0) { Get-Content -LiteralPath $gwLog -Tail 40; throw 'Local GWNUM Stage2 build failed' }
     Copy-Item -LiteralPath (Join-Path $gwBuild 'gwnum.dll') -Destination $Build -Force
-    $gwVersion = & $exe --target cpu --version | Out-String
-    if ($LASTEXITCODE -ne 0 -or $gwVersion -notmatch '(?m)^gwnum\.dll Stage2 ABI=') {
-        throw "Stage2 failed to load the local GWNUM DLL: $gwVersion"
+    $gwVersion = & $exe --target cpu --version 2>&1 | Out-String
+    $gwExit = $LASTEXITCODE
+    if ($gwExit -ne 0 -or $gwVersion -notmatch '(?m)^gwnum\.dll Stage2 ABI=') {
+        $exitHex = '{0:X8}' -f $gwExit
+        throw "Stage2 GWNUM version probe failed (exit $gwExit, 0x$exitHex): $($gwVersion.Trim())"
     }
     Write-Host $gwVersion.Trim()
 }

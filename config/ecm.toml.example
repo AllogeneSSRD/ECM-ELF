@@ -776,6 +776,16 @@ target = "gpu"  # string: [cpu|gpu]
 # 局，默认"auto"。不改变giant点块划分或B2/D/P。仅CUDA支持强制布局，OpenCL接受"auto"。CLI
 # --groot-layout auto|true|false覆盖当前worker配置，并保留CLI 0/1别名；tune行记录实际布局0/1。
 
+# groot_subtree = "1[:3072], 0[8192:], auto[]"  # int|string: [auto|-1|0|1|slice list]
+# CUDA Stage2 G-tree subtrees. 0 disables, 1 enables four-root subtrees for supported native or
+# carrier Mersenne arithmetic, and auto or -1 uses matching ECM tune results. Auto uses the original
+# path until both modes have qualified results. Ordered slices match the actual cofactor width,
+# including the start and excluding the end. CLI --groot-subtree overrides this policy. Other
+# arithmetic paths use the original tree.
+# CUDA Stage2 G 树子树策略。0 关闭，1 对支持的原生或承载梅森算术开启四根子树，auto 或 -1 按匹配的
+# ECM tune 结果选择。自动模式在两种模式均有合格结果前走原路径。切片按实际余因子位宽依次匹配，含起
+# 点、不含终点。命令行 --groot-subtree 优先。其他算术路径沿用原树。
+
 # giant_tail_balance = false  # bool: [false|true|0|1]
 # Allow the last two giant point chunks to borrow whole P batches so both can use chains. B2,
 # capacity, coverage and chunk count are unchanged. Default false. No actual borrow keeps the

@@ -57,6 +57,7 @@ struct CurveProcessRequest {
     uint64_t tune_min_repeats=2;
     bool short_batch_tune=0;
     int groot_layout=-1;
+    std::string groot_subtree;
     uint64_t stage1_batch=0;
     std::string stage1_csv{};
     std::string stage1_exponent{};

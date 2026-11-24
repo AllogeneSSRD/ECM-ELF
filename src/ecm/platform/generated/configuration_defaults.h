@@ -123,6 +123,7 @@ inline constexpr char stage2_stage2_giant_backend[]="auto";
 inline constexpr char stage2_stage2_seed_backend[]="auto";
 inline constexpr char stage2_stage2_reduce_backend[]="auto";
 inline constexpr char stage2_stage2_groot_balanced[]="auto";
+inline constexpr char stage2_stage2_groot_subtree[]="1[:3072], 0[8192:], auto[]";
 inline constexpr bool stage2_stage2_giant_tail_balance=false;
 inline constexpr bool stage2_stage2_b2_round_chain=true;
 inline constexpr char stage2_stage2_giant_chain[]="64";

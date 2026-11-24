@@ -407,7 +407,7 @@ inline std::string runtime_group(const Fields &s) {
     key+="baby_coop="+std::to_string(optional_uint(s,"baby_coop"))+";giant_coop="+std::to_string(optional_uint(s,"giant_coop"))+";seed_coop="+std::to_string(optional_uint(s,"seed_coop"))+";";
     for(const char *field:{"reduce_coop","reduce_threads","reduce_kernel"})key+=std::string(field)+"="+std::to_string(optional_uint(s,field))+";";
     key+="tail_balance="+std::to_string(optional_uint(s,"giant_tail_balance"))+";chain_block="+std::to_string(optional_uint(s,"giant_chain_block",64))+";";
-    return key+"groot_balanced="+(sample_groot_layout(s)?"1;":"0;");
+    return key+"groot_balanced="+(sample_groot_layout(s)?"1;":"0;")+"groot_subtree="+std::to_string(optional_uint(s,"groot_subtree"))+';';
 }
 inline std::string scope(const Fields &s) {
     // Formal calibration and production timing remain distinct populations.
@@ -423,7 +423,7 @@ inline std::string scope(const Fields &s) {
     key+="baby_coop="+std::to_string(optional_uint(s,"baby_coop"))+";giant_coop="+std::to_string(optional_uint(s,"giant_coop"))+";seed_coop="+std::to_string(optional_uint(s,"seed_coop"))+";";
     for(const char *field:{"reduce_coop","reduce_threads","reduce_kernel"})key+=std::string(field)+"="+std::to_string(optional_uint(s,field))+";";
     key+="tail_balance="+std::to_string(optional_uint(s,"giant_tail_balance"))+";chain_block="+std::to_string(optional_uint(s,"giant_chain_block",64))+";";
-    return key+"groot_balanced="+(sample_groot_layout(s)?"1;":"0;");
+    return key+"groot_balanced="+(sample_groot_layout(s)?"1;":"0;")+"groot_subtree="+std::to_string(optional_uint(s,"groot_subtree"))+';';
 }
 inline void validate(const Fields &s) {
     const auto reduce=optional_uint(s,"reduce_coop"),threads=optional_uint(s,"reduce_threads"),kernel=optional_uint(s,"reduce_kernel");
@@ -436,8 +436,11 @@ inline void validate(const Fields &s) {
         throw std::runtime_error("invalid point arithmetic backend");
     if(optional_uint(s,"giant_tail_balance")>1 || (optional_uint(s,"giant_chain_block",64)!=32 && optional_uint(s,"giant_chain_block",64)!=64))throw std::runtime_error("invalid point policy");
     if(optional_uint(s,"groot_balanced")>1)throw std::runtime_error("invalid G-root layout");
+    if(optional_uint(s,"groot_subtree")>1)throw std::runtime_error("invalid G-tree subtree mode");
     validate_provenance(s);
     const auto bits=uint(s,"target_bits"),arithmetic=uint(s,"arithmetic_bits"),carrier=uint(s,"carrier_exponent");
+    if(optional_uint(s,"groot_subtree") && (arithmetic>72*64 || text(s,"modulus_kind")!="mersenne"))
+        throw std::runtime_error("unsupported G-tree subtree sample");
     if(((baby && baby!=255) || (giant && giant!=255) || (seed && seed!=255)) && arithmetic<=8192)
         throw std::runtime_error("cooperative point sample has unsupported arithmetic width");
     if(s.count("point_check_seconds") && !(real(s,"point_check_seconds")>=0))
@@ -568,6 +571,7 @@ inline std::string compact_literal(const std::string &value) {
 
 inline Fields compact_sample(Fields s) {
     if(!s.count("groot_balanced"))s["groot_balanced"]=sample_groot_layout(s)?"1":"0";
+    if(!s.count("groot_subtree"))s["groot_subtree"]="0";
     if(!s.count("giant_tail_balance"))s["giant_tail_balance"]="0";
     if(!s.count("giant_chain_block"))s["giant_chain_block"]="64";
     validate(s);
@@ -577,7 +581,7 @@ inline Fields compact_sample(Fields s) {
     }
     static const std::set<std::string> keep={
         "condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","b2_min","d","p",
-        "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder","groot_balanced","giant_tail_balance","giant_chain_block","baby_coop","giant_coop","seed_coop","reduce_coop","reduce_threads","reduce_kernel",
+        "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder","groot_balanced","groot_subtree","giant_tail_balance","giant_chain_block","baby_coop","giant_coop","seed_coop","reduce_coop","reduce_threads","reduce_kernel",
         "source","benchmark_kind","program_version","updated_at","verified","repeats","mean_seconds","stddev_seconds",
         "required_free_bytes","preferred_order","validation_count","validation_max_relative_error",
         "phase_shape_seconds","phase_setup_seconds","phase_baby_seconds","phase_ftree_seconds","phase_main_setup_seconds",
@@ -667,6 +671,7 @@ inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
             {"execution_path",ecm_stage2::tune::portable::quoted(uint(s,"fold_resident")?(uint(s,"frontier_resident")?"resident":"host_frontier"):"host_fold_frontier")}};
         for(const auto &f:derived){if(s.count(f.first) && s.at(f.first)!=f.second)throw std::runtime_error("inconsistent derived tune field");s[f.first]=f.second;}
         if(!s.count("groot_balanced"))s["groot_balanced"]=sample_groot_layout(s)?"1":"0";
+        if(!s.count("groot_subtree"))s["groot_subtree"]="0";
         if(!s.count("giant_tail_balance"))s["giant_tail_balance"]="0";
         if(!s.count("giant_chain_block"))s["giant_chain_block"]="64";
     }

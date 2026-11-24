@@ -16,8 +16,8 @@ struct Stage2CoopField {
         if(cgbn_compare(e,r,n)>=0)cgbn_sub(e,r,r,n);
     }
 
-    __device__ __forceinline__ void reduce_mersenne(Bn &r,const typename Env::cgbn_wide_t &t) const {
-        Bn low,high,v,tail;
+    __device__ __forceinline__ void fold_mersenne(Bn &r,const typename Env::cgbn_wide_t &t) const {
+        Bn low,high,v;
         const int d=Env::BITS-mersenne_bits;
         // ab < n^2: low_p(ab)+high_p(ab) < 2n. Do not discard the
         // carry at the container boundary when p==BITS.
@@ -27,8 +27,14 @@ struct Stage2CoopField {
         cgbn_bitwise_ior(e,high,high,v);
         const int carry=cgbn_add(e,v,low,high);
         if(carry || cgbn_compare(e,v,n)>=0)cgbn_sub(e,v,v,n);
+        cgbn_set(e,r,v);
+    }
+
+    __device__ __forceinline__ void reduce_mersenne(Bn &r,const typename Env::cgbn_wide_t &t) const {
+        Bn v,tail;
+        fold_mersenne(v,t);
         // Montgomery R^-1 is rotation by (BITS-p) mod p in the p-bit ring.
-        const int rotate=d%mersenne_bits;
+        const int rotate=(Env::BITS-mersenne_bits)%mersenne_bits;
         if(rotate) {
             cgbn_shift_right(e,tail,v,rotate);
             cgbn_shift_left(e,v,v,mersenne_bits-rotate);

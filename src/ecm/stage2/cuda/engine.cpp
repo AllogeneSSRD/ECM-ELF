@@ -637,6 +637,7 @@ int run_real(
             }
             m.clean=!stage2_extra_fixtures;
             m.fold_resident=BR.fold_device.enabled;m.groot_balanced=BR.groot_balanced;
+            m.groot_subtree=g_gdevice.subtree_trees!=0;
         }
         BR.t_return_finalize = t0 + el - BR.t_post_end;
         BR.t_post_loop += BR.t_return_finalize;
@@ -702,6 +703,9 @@ int run_real(
             g_gdevice.leaf_words,g_gdevice.root_words,g_gdevice.resident_words,g_gdevice.trace_words,g_gdevice.metadata_words,
             g_gdevice.metadata_peak_bytes,g_gdevice.raw_peak_bytes,g_gdevice.logical_frontier_peak_bytes,
             g_gdevice.host_staging_peak_bytes,g_gdevice.checked_nodes,g_gdevice.checked_words);
+        if(g_gdevice.subtree_trees)stage2_log::print(stage2_log::debug,
+            "gdevice_subtree: trees=%llu tiles=%llu pairs=%llu\n",
+            g_gdevice.subtree_trees,g_gdevice.subtree_tiles,g_gdevice.subtree_pairs);
         stage2_log::print(stage2_log::debug, "real_batched_gmemory: compact_raw=%d leaf_staging=%d pinned_trees=%llu pinned_slices=%llu pinned_words=%llu pageable_words=%llu leaf_fallbacks=%llu legacy_trees=%llu pinned_borrow_peak_bytes=%llu rawA_peak_bytes=%llu rawB_peak_bytes=%llu\n",
             (int)g_groot_compact_raw,(int)g_groot_leaf_staging,g_gmemory.pinned_trees,g_gmemory.pinned_slices,
             g_gmemory.pinned_words,g_gmemory.pageable_words,g_gmemory.leaf_fallbacks,g_gmemory.legacy_trees,

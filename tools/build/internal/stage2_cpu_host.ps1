@@ -1,10 +1,12 @@
-function Build-EcmStage2CpuHost([string]$Build, [string]$Gmp, $Vc, [int]$Jobs, [switch]$Rebuild) {
+function Build-EcmStage2CpuHost([string]$Build, [string]$Gmp, $Vc, [switch]$Rebuild) {
     $dir = Join-Path $Build 'cpu-host'
     Initialize-EcmBuildDirectory $dir
+    $cmakeBuild = Join-Path $dir 'nmake'
+    Initialize-EcmBuildDirectory $cmakeBuild
     $project = Join-Path $PSScriptRoot 'stage2_cpu'
     $batch = Join-Path $dir 'build.cmd'
-    $configure = "cmake -S `"$project`" -B `"$dir`" -G Ninja -DCMAKE_BUILD_TYPE=Release `"-DECM_GMP_ROOT=$($Gmp.Replace('\','/'))`""
-    $compile = "cmake --build `"$dir`" --target ecm_stage2_cpu_host --parallel $Jobs"
+    $configure = "cmake -S `"$project`" -B `"$cmakeBuild`" -G `"NMake Makefiles`" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TRY_COMPILE_CONFIGURATION=Release `"-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY=$($dir.Replace('\','/'))`" `"-DECM_GMP_ROOT=$($Gmp.Replace('\','/'))`""
+    $compile = "cmake --build `"$cmakeBuild`" --target ecm_stage2_cpu_host"
     if ($Rebuild) { $compile += ' --clean-first' }
     [IO.File]::WriteAllText($batch, "@echo off`r`n$($Vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$configure`r`nif errorlevel 1 exit /b 1`r`n$compile`r`n", [Text.UTF8Encoding]::new($false))
     $log = Join-Path $dir 'build.log'

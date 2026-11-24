@@ -44,7 +44,7 @@ class WidthPredictor {
         // original receipt's accounting label. Require all phases and their
         // conservation identity; never reconstruct phases from nested timers.
         if(a.shape.target_bits!=s.target_bits || a.shape.arithmetic_bits!=s.arithmetic_bits ||
-           a.shape.groot_balanced!=s.groot_balanced || a.shape.fold!=s.fold || a.shape.frontier!=s.frontier ||
+           a.shape.groot_balanced!=s.groot_balanced || a.shape.groot_subtree!=s.groot_subtree || a.shape.fold!=s.fold || a.shape.frontier!=s.frontier ||
            a.shape.batch_bytes!=s.batch_bytes || a.shape.chunk_max!=s.chunk_max ||
            a.work.p*2<w.p || w.p*2<a.work.p || a.work.points*2<w.points || w.points*2<a.work.points ||
            !matches(engine.profile.conditions.at(uint(*a.sample,"condition")),engine.condition,Ignore::parse("")))return false;

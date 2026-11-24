@@ -2,6 +2,7 @@
 #pragma once
 #include "../../../../io/config_format.h"
 #include "ecm/stage2/algorithm_policy.h"
+#include "ecm/stage2/groot_subtree_policy.h"
 #include "../../../platform/generated/configuration_defaults.h"
 #include <array>
 namespace ecm_config {
@@ -362,6 +363,7 @@ struct Stage2Values {
     std::string seed_backend="auto";
     std::string reduce_backend="auto";
     std::string groot_balanced="auto";
+    std::string groot_subtree="1[:3072], 0[8192:], auto[]";
     bool giant_tail_balance=false;
     bool b2_round_chain=true;
     std::string giant_chain="64";
@@ -465,6 +467,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_seed_backend",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="scalar"&&v!="coop32")throw std::runtime_error("stage2_seed_backend must be [auto|scalar|coop32]");c.seed_backend=v;c.has_seed_backend=true;},[](Stage2Values&c,const Stage2Values&v){c.seed_backend=v.seed_backend;c.has_seed_backend=v.has_seed_backend;}},
     {"stage2_reduce_backend",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="scalar"&&v!="coop32")throw std::runtime_error("stage2_reduce_backend must be [auto|scalar|coop32]");c.reduce_backend=v;c.has_reduce_backend=true;},[](Stage2Values&c,const Stage2Values&v){c.reduce_backend=v.reduce_backend;c.has_reduce_backend=v.has_reduce_backend;}},
     {"stage2_groot_balanced",[](Stage2Values&c,const std::string&v){c.groot_balanced=automatic_boolean_text(v,"stage2_groot_balanced");},[](Stage2Values&c,const Stage2Values&v){c.groot_balanced=v.groot_balanced;}},
+    {"stage2_groot_subtree",[](Stage2Values&c,const std::string&v){ecm_stage2::parse_groot_subtree_policy(v);c.groot_subtree=v;},[](Stage2Values&c,const Stage2Values&v){c.groot_subtree=v.groot_subtree;}},
     {"stage2_giant_tail_balance",[](Stage2Values&c,const std::string&v){c.giant_tail_balance=boolean(v,"stage2_giant_tail_balance");},[](Stage2Values&c,const Stage2Values&v){c.giant_tail_balance=v.giant_tail_balance;}},
     {"stage2_b2_round_chain",[](Stage2Values&c,const std::string&v){c.b2_round_chain=boolean(v,"stage2_b2_round_chain");c.has_b2_round_chain=true;},[](Stage2Values&c,const Stage2Values&v){c.b2_round_chain=v.b2_round_chain;c.has_b2_round_chain=v.has_b2_round_chain;}},
     {"stage2_giant_chain",[](Stage2Values&c,const std::string&v){c.giant_chain=v;},[](Stage2Values&c,const Stage2Values&v){c.giant_chain=v.giant_chain;}},
