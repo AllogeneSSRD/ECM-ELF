@@ -43,3 +43,8 @@
 - 群阶分解保留后端与 GP 路径，复用现有计算和 Toast。右侧停靠状态保留，联动时激活对应标签。正式用法见 [GUI v2](../usage/GUI_V2.md)。
 - App 回归验证多行选择时不能发起分析，单条 Edwards 结果可通过按钮带入参数，未勾选时可直接点击多因子记录中的第二个因子并导航到右侧。内置 PARI 的小输入、历史输入及 192 bit 输入三组用例通过。证据见 `data/experiments/gui_result_group_order_app_20261123/` 与 `data/experiments/gui_result_group_order_embedded_20261123/`。
 - 在 DX11 窗口直接点击因子 1013 后，GUI 自动带入 Montgomery param 0 和 sigma 26，用内置 PARI 得到群阶 1008、点阶 63。证据见 `data/experiments/gui_result_group_order_click_final_20261123/`。
+
+## 群阶结果的输入位数
+
+- 启动时从已校验的输入计算十进制和二进制有效位数，去掉前导零后用十进制前缀和位数计算对数。输入快照和完整结果复制均保留两位小数。
+- App 回归涵盖普通输入 233 和带前导零的 `2^64`，后者对应 `Digits: 19.27 | Bits: 64.00`。

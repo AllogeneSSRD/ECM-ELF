@@ -4,6 +4,8 @@
 #include <fstream>
 #include <set>
 #include <algorithm>
+#include <cmath>
+#include <string_view>
 namespace ecmgui_v2 {
 namespace fs=std::filesystem;
 namespace {
@@ -90,6 +92,11 @@ void GroupOrderJob::cancel(){if(process_)error="Analysis cancelled";stop();}
 bool GroupOrderJob::start(const OrderInput&i,const std::string&helper){
     if(busy())return false;error.clear();result={};if(!valid_order_input(i,error))return false;
     snapshot=i;helper_=helper;fallback_.clear();signature=order_signature(i);started_=GetTickCount64();
+    const auto decimal=std::string_view(snapshot.factor).substr(snapshot.factor.find_first_not_of('0'));
+    // A decimal prefix avoids overflow for large inputs and retains ample precision for display.
+    const auto prefix=decimal.substr(0,15);
+    input_digits=std::log10(std::stod(std::string(prefix)))+double(decimal.size()-prefix.size());
+    input_bits=input_digits*std::log2(10.0);
     if(snapshot.gp.empty())snapshot.gp=find_order_gp();
     else{auto name=fs::u8path(snapshot.gp);if(!name.has_parent_path()){if(!name.has_extension())name+=L".exe";const auto found=executable_in_path(name);if(!found.empty())snapshot.gp=found;}}
     if(snapshot.backend==1){if(snapshot.gp.empty()){result=order_gp::failure("gp","gp_not_found");return true;}try{launch(true);return true;}catch(const std::exception&){stop();return gp_failed("gp_start_failed");}}

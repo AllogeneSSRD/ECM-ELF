@@ -1,5 +1,6 @@
 #include "../../../src/ecm/application/gui_v2/app.h"
 #include <cassert>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <cstring>
@@ -665,11 +666,13 @@ static void result_table_contract(const fs::path& root){
     assert(state.ui_page==7);
     draw_frame(app,7);
     assert(app.group_order_completions==1&&app.group_order_job.snapshot.factor=="233");
+    assert(std::abs(app.group_order_job.input_digits-std::log10(233.0))<1e-9);
+    assert(std::abs(app.group_order_job.input_bits-std::log2(233.0))<1e-9);
     assert(app.group_order_job.snapshot.sigma=="26"&&app.group_order_job.snapshot.profile==1);
     assert(app.group_order_job.snapshot.backend==1&&app.group_order_input.gp=="./missing-order-fixture.exe");
 
     auto multiple=row(77,77,7);
-    multiple.insert(multiple.size()-2,",\"stage\":2,\"sigma\":27,\"param\":2,\"factors\":[\"65537\",\"1013\"]");
+    multiple.insert(multiple.size()-2,",\"stage\":2,\"sigma\":27,\"param\":2,\"factors\":[\"65537\",\"00018446744073709551616\"]");
     multiple.replace(multiple.find("\"NF\""),4,"\"F\"");
     write(b,read(b)+multiple);
     assert(app.results.refresh());
@@ -685,7 +688,9 @@ static void result_table_contract(const fs::path& root){
     click_at({second_factor_x,table->OuterRect.Min.y+1.5f*row_height});
     assert(state.ui_page==1&&state.ui_right_page==7&&app.selected_results.empty());
     draw_frame(app,7);
-    assert(app.group_order_completions==2&&app.group_order_job.snapshot.factor=="1013");
+    assert(app.group_order_completions==2&&app.group_order_job.snapshot.factor=="00018446744073709551616");
+    assert(std::abs(app.group_order_job.input_digits-64*std::log10(2.0))<1e-9);
+    assert(std::abs(app.group_order_job.input_bits-64.0)<1e-9);
     assert(app.group_order_job.snapshot.sigma=="27"&&app.group_order_job.snapshot.profile==5);
     ImGui::DestroyContext(context);
     std::cout<<"{\"result_sort_cycle\":true,\"sort_survives_refresh\":true,\"factored_row_both_themes\":true,\"copy_selected_then_new\":true,\"copy_history_restored\":true,\"result_group_order_link\":true}\n";

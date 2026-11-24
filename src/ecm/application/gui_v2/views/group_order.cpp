@@ -6,6 +6,7 @@
 #include <commdlg.h>
 #include <filesystem>
 #include <algorithm>
+#include <cstdio>
 namespace ecmgui_v2 {
 namespace {
 bool edit(const char*id,std::string&value,size_t limit=4097,const char*hint=nullptr){std::vector<char> data(std::max(limit,value.size()+1));std::copy(value.begin(),value.end(),data.begin());if(!ImGui::InputTextWithHint(id,hint?hint:"",data.data(),data.size()))return false;value=data.data();return true;}
@@ -93,6 +94,11 @@ void App::draw_group_order(bool zh){
         ImGui::Separator();const auto&snapshot=group_order_job.snapshot;
         const bool composite=r.has("components");
         ImGui::TextWrapped("%s = %s | sigma = %s | %s",composite?"n":"p",snapshot.factor.c_str(),snapshot.sigma.c_str(),ui::curve_presets[snapshot.profile].label);
+        char digits[32],bits[32];
+        std::snprintf(digits,sizeof(digits),"%.2f",group_order_job.input_digits);
+        std::snprintf(bits,sizeof(bits),"%.2f",group_order_job.input_bits);
+        const std::string size=std::string(ui::text("go.digits",zh))+": "+digits+" | "+ui::text("go.bits",zh)+": "+bits;
+        ui::secondary_text(size.c_str());
         // Path resolution belongs to the snapshot; compare the editable mathematical identity.
         if(snapshot.factor!=group_order_input.factor||snapshot.sigma!=group_order_input.sigma||snapshot.profile!=group_order_input.profile)ui::secondary_text(ui::text("go.stale",zh));
         const std::string status=ui::text(("go.status."+r.get("status").text()).c_str(),zh);
@@ -104,7 +110,7 @@ void App::draw_group_order(bool zh){
             if(!r.get("native_failure").text().empty())ImGui::TextWrapped("%s",r.get("native_failure").text().c_str());
             if(!r.get("fallback").text().empty())ImGui::TextWrapped("%s: %s",ui::text("go.fallback",zh),r.get("fallback").text().c_str());ImGui::EndTooltip();
         }
-        group_order_copy=std::string(composite?"n = ":"p = ")+snapshot.factor+" | sigma = "+snapshot.sigma+" | "+ui::curve_presets[snapshot.profile].label+"\n"+status+" | "+r.get("backend").text()+"\n";
+        group_order_copy=std::string(composite?"n = ":"p = ")+snapshot.factor+" | sigma = "+snapshot.sigma+" | "+ui::curve_presets[snapshot.profile].label+"\n"+size+"\n"+status+" | "+r.get("backend").text()+"\n";
         std::string output;
         const auto show_order=[&](const go_json::Value& value,bool is_point,bool computed){
             const std::string first=std::string(ui::text(is_point?"go.point_order":"go.group_order",zh))+": "+(computed?value.get(is_point?"point_order":"group_order").text():ui::text("go.incomplete",zh));

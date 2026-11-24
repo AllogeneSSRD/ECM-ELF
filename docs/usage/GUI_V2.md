@@ -193,6 +193,8 @@ GP证明模数及分解因子素性，检查点消去及最小性；GUI独立检
 
 “保存”只将`[gui] group_order_gp`写入当前工作流`ecm.toml`，保留注释及其他未改字段；未保存的计算配置仍保持草稿，外部文件发生变化时拒绝覆盖。相对目录路径以当前工作流目录解释，空值在计算时重试PATH。该字段只供GUI使用，Stage1/Stage2的GP设置保持独立。未保存的路径也可立即用于本页计算；选择后端和数学输入属于会话状态。
 
+结果摘要在 `p`（合数时为 `n`）和 sigma 下方显示输入的有效十进制位数和二进制位数，分别取以 10 和 2 为底的对数，保留两位小数。复制完整结果时也包含这一行。
+
 页面自动扫描当前工作流目录中的`*result*.txt`，并纳入工作流已配置的结果文件；未载入工作流时扫描GUI程序目录。因此`results.json.txt`和`results.json_2.txt`会分别出现在来源下拉列表；也可用“选择结果文件”打开其他目录的TXT/JSON/JSONL，再用“重新扫描”刷新。每行必须是独立JSON对象，只导入`status=F`、`worktype=ECM`且包含可识别sigma的因子；支持普通Montgomery的顶层sigma/param、`Edwards.sigma`及`GMP-ECM-param3.sigma`，每个因子分别列出。点击记录填入p、sigma和算法，不会自动开始计算或改写来源。NF、缺失/越界sigma、冲突曲线标记和不支持的构造会跳过并显示计数；该导入不验证结果CRC或代替因子证明。单文件上限32MiB、20000个因子。
 
 本地分析需要主 GUI 及同目录匹配的 `gmp-10.dll`、`libpari.dll` 和 `pari-data/seadata`。GMP 延迟加载；计算程序使用的共享诊断助手仍由构建和正式发布流程提供。DLL 或数据缺失、ABI 不匹配时，Auto 尝试 GP；显式本地模式报告未完成，不暗中使用 GMP。只有手动选择 GMP 才使用原有 20 万 BSGS 表项/每次 2 秒算法，超过 64 位仍仅给出 probable 素性分类。仅使用外部 GP 时可部署 GUI 和语言文件。外部 gp.exe 不随包分发。分析不启动计算 worker、不写队列、不修改 GPU 频率。后端验收使用 `tools/test/test_shared_pari.py`，GUI 数学对照使用 `test_group_order_backend.py` 与 `test_native_order.py`，实际界面验证使用 `test_group_order.py`。
@@ -216,6 +218,8 @@ GP证明模数及分解因子素性，检查点消去及最小性；GUI独立检
 [网页画廊](../web/ely-skins-20261022.html)另提供三套中空浅色菱形瞳孔变体，以及现有版本切换和静态双眼放大。菱形仅绘制轮廓，中心保留虹膜底色，不使用实心填充。变体位于被忽略的`assets/web/ely_variants/`，只用于Web演示，不加入程序皮肤列表、原生资源目录、配置或程序分发包；程序仍使用现有三套图集。
 
 ## 一键 DX11 测试
+
+本机 GUI v2 构建统一使用仓库根目录下的 `build_gui_v2_local`。需要测试程序时，运行 `tools/build/test/build_gui_v2.ps1 -BuildDir build_gui_v2_local -TestHelpers`。
 
 双击 `tools\test\gui_v2\run_all.bat`，默认测试 `build_gui_v2_local\ecm_gui_v2.exe`。需要 Windows、Python 3.11+，以及同目录的 `ecm_gui_v2_state_test.exe`、`ecm_gui_v2_app_test.exe`、`ecm_gui_v2_owner_probe.exe`、`ecm_gui_v2_fake_worker.exe`；缺少时入口会列出文件及测试 helper 构建命令，不自动重建程序。
 

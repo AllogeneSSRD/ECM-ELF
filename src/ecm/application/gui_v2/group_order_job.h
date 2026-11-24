@@ -28,6 +28,7 @@ public:
     std::string error,signature;
     go_json::Value result;
     OrderInput snapshot;
+    double input_digits=0,input_bits=0;
 private:
     HANDLE process_=nullptr,job_=nullptr;
     std::wstring request_,output_;

@@ -467,6 +467,8 @@
       <Item id="go.unsupported" name="This Edwards construction is not implemented by the order engine." />
       <Item id="go.composite_hint" name="Orders are computed separately over each F_p; e records input multiplicity, not a field extension." />
       <Item id="go.factor" name="Factor n" />
+      <Item id="go.digits" name="Digits" />
+      <Item id="go.bits" name="Bits" />
       <Item id="go.gp_path" name="GP executable" />
       <Item id="go.save_path" name="Save" />
       <Item id="go.gp_hint" name="Empty: find gp in PATH. Relative paths use the workflow directory." />

@@ -467,6 +467,8 @@
       <Item id="go.unsupported" name="群阶引擎尚未实现此Edwards构造。" />
       <Item id="go.composite_hint" name="按各个素域 F_p 分别计算；e 表示输入中的幂次，不代表扩域。" />
       <Item id="go.factor" name="因子 n" />
+      <Item id="go.digits" name="十进制位数" />
+      <Item id="go.bits" name="二进制位数" />
       <Item id="go.gp_path" name="GP程序路径" />
       <Item id="go.save_path" name="保存" />
       <Item id="go.gp_hint" name="留空在PATH查找gp；相对路径基于工作流目录。" />
