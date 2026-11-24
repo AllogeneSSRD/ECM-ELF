@@ -42,6 +42,7 @@ struct S4Ctx {
     std::vector<TwoAxisPlan> two_axis_plans;
     size_t two_axis_bytes=0, two_axis_peak=0;
     unsigned long long two_axis_muls[BC_NCAT]{}, two_axis_checked[BC_NCAT]{};
+    unsigned long long two_axis_parent_hits=0;
     size_t release_two_axis();
     S4Reduce *red = nullptr;
     unsigned long long *d_out = nullptr;
@@ -106,8 +107,8 @@ struct PolyLayer : ecm_stage2::ModulusContext {
     unsigned long long short_batch_changed=0;
     void count_ntt(unsigned long long n,unsigned long long pairs,unsigned long long chunks,
                    unsigned long long reused_forwards,int category);
-    void count_two_axis(const stage2_two_axis::FoldWorkspace& plan,int category,size_t ma,size_t mb,
-                        size_t first,size_t count);
+    void count_two_axis(const stage2_two_axis::FoldWorkspace& plan,int category,size_t forward_rows,
+                        size_t count,unsigned forwards=2);
     void print_ntt_lengths()const;
     /* slice S4: batched multiplies are ONE launch for `nbatch` poly multiplies, so the launch
        count is reported separately from the multiply count (which keeps the S3 numbers

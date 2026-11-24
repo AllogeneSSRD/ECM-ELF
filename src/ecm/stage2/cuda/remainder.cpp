@@ -376,6 +376,7 @@ bool FoldDeviceState::init(
         st.two_axis_status="carrier";
         if (L.carrier_exponent && two_axis_mib<=SIZE_MAX>>20) {
             two_axis_limit=size_t(two_axis_mib)<<20;
+            two_axis_cache_mask=unsigned(fuse_env_ull("NTT_S4_FOLD_TWO_AXIS_CACHE",3)&3);
             two_axis_check=fold_device_flag("NTT_S4_FOLD_TWO_AXIS_CHECK");
             st.two_axis_status="pending";
         }
@@ -453,8 +454,8 @@ void FoldDeviceState::mul(size_t a,size_t ma,size_t b,size_t mb,size_t dest,size
 {
     if (two_axis_limit && !two_axis) {
         two_axis=stage2_two_axis::create(layer->carrier_exponent,unsigned(P+1),two_axis_limit,stats->two_axis_status);
-        two_axis_limit=0;
         if(two_axis)stats->two_axis_bytes=stage2_two_axis::bytes(*two_axis);
+        else two_axis_limit=0;
     }
     if (two_axis) {
         if (!ma || !mb || ma>P+1 || mb>P+1 || !count || count>ma+mb-1 ||
@@ -464,13 +465,43 @@ void FoldDeviceState::mul(size_t a,size_t ma,size_t b,size_t mb,size_t dest,size
         }
         const double begin=now_s();
         auto* out=memory.data[1]+dest;
-        stage2_two_axis::multiply(*two_axis,memory.data[0]+a,unsigned(ma),memory.data[0]+b,unsigned(mb),out,unsigned(count));
+        const int slot=b==f?0:b==inv?1:-1;
+        size_t forward_rows=std::min(ma,count)+std::min(mb,count);
+        unsigned forwards=2;
+        stage2_two_axis::Spectrum fixed_two_axis{};
+        if(slot>=0 && (two_axis_cache_mask&(1u<<slot))) {
+            auto &spectrum=two_axis_spectra[slot];
+            // F's monic term cannot reach the lower P coefficients. All
+            // reciprocal rows fit the full linear plan, so its high terms
+            // cannot wrap into a quotient window of any length k.
+            const unsigned rows=unsigned(slot==0?P:P+1);
+            const bool fits=slot==0?mb==P+1 && count<=P:mb<=rows;
+            if(fits) {
+                if(!spectrum.data) {
+                    spectrum=stage2_two_axis::retain(*two_axis,unsigned(slot),memory.data[0]+b,rows,two_axis_limit);
+                    if(spectrum.data) {
+                        ++stats->two_axis_spectrum_builds[slot];
+                        forward_rows=std::min(ma,count)+rows;
+                        stats->two_axis_spectrum_bytes=stage2_two_axis::bytes(*two_axis)-stats->two_axis_bytes;
+                    } else two_axis_cache_mask &= ~(1u<<slot);
+                } else {
+                    ++stats->two_axis_spectrum_hits[slot];
+                    forward_rows=std::min(ma,count);
+                    forwards=1;
+                }
+                fixed_two_axis=spectrum;
+            }
+        }
+        if(fixed_two_axis.data)
+            stage2_two_axis::multiply_retained(*two_axis,memory.data[0]+a,unsigned(ma),fixed_two_axis,out,0,unsigned(count));
+        else
+            stage2_two_axis::multiply(*two_axis,memory.data[0]+a,unsigned(ma),memory.data[0]+b,unsigned(mb),out,unsigned(count));
         if(two_axis_check) {
             const auto checked=verify_two_axis_product(*layer,memory.data[0]+a,ma,memory.data[0]+b,mb,out,0,count,true,false);
             stats->two_axis_checked+=checked.coefficients;
             stats->d2h_bytes+=checked.read_bytes;
         }
-        layer->count_two_axis(*two_axis,BC_FOLD,ma,mb,0,count);
+        layer->count_two_axis(*two_axis,BC_FOLD,forward_rows,count,forwards);
         flat->t_multiply+=now_s()-begin;
         ++flat->muls;++stats->muls;++stats->two_axis_muls;
         stats->avoided_h2d_bytes+=8ull*(ma+mb)*W;

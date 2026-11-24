@@ -2,9 +2,12 @@
 #include "../../../cuda/ntt/runtime.h"
 #include "two_axis.cuh"
 
+#include <array>
 #include <memory>
 
 namespace stage2_two_axis {
+
+static constexpr size_t memory_reserve = 1ull << 30;
 
 struct FoldWorkspace {
     FuseCtx y{}, x{};
@@ -17,11 +20,13 @@ struct FoldWorkspace {
     unsigned p = 0, words = 0, limbs = 0, ly = 0, k = 0, lx = 0;
     unsigned limb_shared = 0;
     size_t allocated = 0;
+    std::array<Word*,2> retained{};
     Word cube = 0, cube2 = 0, x_root = 0, x_inv = 0, x_scale = 0;
 
     ~FoldWorkspace() {
         fuse_release(y);
         fuse_release(x);
+        for (auto* spectrum : retained) if (spectrum) CK(cudaFree(spectrum));
         if (data) CK(cudaFree(data));
     }
 };
@@ -35,6 +40,11 @@ static void inverse_rows(Word* data, unsigned length, int bits, const Word* tabl
     for (unsigned i = threadIdx.x; i < length; i += blockDim.x) shared[i] = row[i];
     __syncthreads();
     ntt_tile_pass<true, true>(row, shared, length, bits, table);
+}
+
+__global__ static void multiply_spectra(Word* out, const Word* a, const Word* b, size_t words, Word scale) {
+    const size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i < words) out[i] = gl_mul(gl_mul(a[i], b[i]), scale);
 }
 
 static FoldWorkspace* create_shape(unsigned p, unsigned ma, unsigned mb, unsigned first, unsigned output_rows,
@@ -86,9 +96,8 @@ static FoldWorkspace* create_shape(unsigned p, unsigned ma, unsigned mb, unsigne
     if (s.allocated > limit) return nullptr;
     size_t free_bytes, total_bytes;
     CK(cudaMemGetInfo(&free_bytes, &total_bytes));
-    constexpr size_t reserve = 1ull << 30;
     fallback = "headroom";
-    if (free_bytes < reserve || s.allocated > free_bytes - reserve) return nullptr;
+    if (free_bytes < memory_reserve || s.allocated > free_bytes - memory_reserve) return nullptr;
     const auto status = cudaMalloc(&s.data, data_words * sizeof(Word));
     if (status == cudaErrorMemoryAllocation) {
         cudaGetLastError();
@@ -149,47 +158,123 @@ size_t bytes(const FoldWorkspace& workspace) { return workspace.allocated; }
 unsigned coefficient_length(const FoldWorkspace& workspace) { return workspace.ly; }
 unsigned polynomial_length(const FoldWorkspace& workspace) { return workspace.lx; }
 Word* host_staging(FoldWorkspace& workspace) { return workspace.staging; }
+size_t spectrum_words(const FoldWorkspace& workspace) { return size_t(workspace.ly) * workspace.lx; }
 
-void multiply(FoldWorkspace& s, const Word* a, unsigned ma, const Word* b, unsigned mb, Word* out, unsigned count,
-              unsigned first, bool reverse_b) {
-    // Input indices at or above the end of the output window cannot contribute.
-    const unsigned b_rows = mb;
-    ma = std::min(ma, first + count);
-    mb = std::min(mb, first + count);
+static void forward_attributes(const FoldWorkspace& s) {
+    CK(cudaFuncSetAttribute(pack_forward, cudaFuncAttributeMaxDynamicSharedMemorySize, int(s.ly * sizeof(Word))));
+    ntt_tile_attributes(s.x.warp_tail && s.x.t >= 5, int(sizeof(Word)) << s.x.t);
+}
+
+static Spectrum pretransform_ready(FoldWorkspace& s, Operand operand, const Word* coefficients, unsigned rows,
+                                   unsigned reverse_rows, Word* retained) {
+    const bool left = operand == Operand::left;
+    auto* packed = left ? s.b : s.input;
+    auto* spectrum = retained ? retained : (left ? s.a : s.b);
     const bool radix3 = s.lx != s.k;
-    const dim3 threads(32, 8), forward_grid((s.ly + 31) / 32, (s.k + 31) / 32);
+    const dim3 grid((s.ly + 31) / 32, (s.k + 31) / 32), threads(32, 8);
+    const size_t shared = s.ly * sizeof(Word);
+    pack_forward<<<rows, FUSE_TILE_THREADS, shared>>>(coefficients, packed, s.words, s.ly, s.y.k,
+                                                     s.digits, s.y.tblF, reverse_rows);
+    if (radix3)
+        transpose_forward<true><<<grid, threads>>>(packed, spectrum, s.ly, s.k, rows, s.ly, s.twiddle, s.cube);
+    else
+        transpose_forward<false><<<grid, threads>>>(packed, spectrum, s.ly, s.k, rows, s.ly, nullptr, 0);
+    CK(cudaGetLastError());
+    ntt_forward_fused(spectrum, s.x, s.x_root, s.ly * (s.lx / s.k));
+    return {spectrum};
+}
+
+Spectrum pretransform(FoldWorkspace& s, Operand operand, const Word* coefficients, unsigned rows,
+                      unsigned reverse_rows, Word* retained) {
+    forward_attributes(s);
+    return pretransform_ready(s, operand, coefficients, rows, reverse_rows, retained);
+}
+
+Spectrum retain(FoldWorkspace& s, unsigned slot, const Word* coefficients, unsigned rows, size_t limit) {
+    auto& storage = s.retained.at(slot);
+    if (!storage) {
+        const size_t needed = spectrum_words(s) * sizeof(Word);
+        if (s.allocated > limit || needed > limit - s.allocated) return {};
+        size_t free_bytes, total_bytes;
+        CK(cudaMemGetInfo(&free_bytes, &total_bytes));
+        if (free_bytes < memory_reserve || needed > free_bytes - memory_reserve) return {};
+        const auto status = cudaMalloc(&storage, needed);
+        if (status == cudaErrorMemoryAllocation) {
+            cudaGetLastError();
+            storage = nullptr;
+            return {};
+        }
+        CK(status);
+        s.allocated += needed;
+    }
+    return pretransform(s, Operand::left, coefficients, rows, 0, storage);
+}
+
+void frequency_product(FoldWorkspace& s, Spectrum left, Spectrum right) {
+    const size_t words = spectrum_words(s);
+    constexpr unsigned threads = 256;
+    multiply_spectra<<<unsigned((words + threads - 1) / threads), threads>>>(
+        s.a, left.data, right.data, words, s.x_scale);
+    CK(cudaGetLastError());
+}
+
+static void finish_window(FoldWorkspace& s, Word* polynomial, Word* coefficients,
+                          Word* out, unsigned first, unsigned count) {
+    const bool radix3 = s.lx != s.k;
+    const dim3 threads(32, 8);
     const unsigned inverse_columns = first ? s.k : std::min(s.k, count);
     const dim3 inverse_grid((inverse_columns + 31) / 32, (s.ly + 31) / 32);
     const size_t shared = s.ly * sizeof(Word);
-    CK(cudaFuncSetAttribute(pack_forward, cudaFuncAttributeMaxDynamicSharedMemorySize, int(shared)));
     CK(cudaFuncSetAttribute(inverse_rows, cudaFuncAttributeMaxDynamicSharedMemorySize, int(shared)));
-    pack_forward<<<ma, FUSE_TILE_THREADS, shared>>>(a, s.b, s.words, s.ly, s.y.k, s.digits, s.y.tblF);
-    pack_forward<<<mb, FUSE_TILE_THREADS, shared>>>(b, s.input, s.words, s.ly, s.y.k, s.digits, s.y.tblF,
-                                                  reverse_b ? b_rows : 0);
-    auto forward = [&](const Word* from, Word* to, unsigned rows) {
-        if (radix3)
-            transpose_forward<true><<<forward_grid, threads>>>(from, to, s.ly, s.k, rows, s.ly, s.twiddle, s.cube);
-        else
-            transpose_forward<false><<<forward_grid, threads>>>(from, to, s.ly, s.k, rows, s.ly, nullptr, 0);
-        CK(cudaGetLastError());
-    };
-    forward(s.b, s.a, ma);
-    forward(s.input, s.b, mb);
-    ntt_tile_attributes(s.x.warp_tail && s.x.t >= 5, int(sizeof(Word)) << s.x.t);
-    const unsigned batch = s.ly * (radix3 ? 3 : 1);
-    ntt_forward_fused(s.a, s.x, s.x_root, batch);
-    ntt_forward_fused(s.b, s.x, s.x_root, batch);
-    ntt_inverse_fused(s.a, s.b, s.x, s.x_inv, s.x_scale, batch);
     if (radix3)
-        transpose_inverse<true><<<inverse_grid, threads>>>(s.a, s.b, s.ly, s.k, count, s.ly, s.twiddle + 2 * s.k, s.cube2, first);
+        transpose_inverse<true><<<inverse_grid, threads>>>(polynomial, coefficients, s.ly, s.k, count, s.ly, s.twiddle + 2 * s.k, s.cube2, first);
     else
-        transpose_inverse<false><<<inverse_grid, threads>>>(s.a, s.b, s.ly, s.k, count, s.ly, nullptr, 0, first);
-    inverse_rows<<<count, FUSE_TILE_THREADS, shared>>>(s.b, s.ly, s.y.k, s.y.tblI);
+        transpose_inverse<false><<<inverse_grid, threads>>>(polynomial, coefficients, s.ly, s.k, count, s.ly, nullptr, 0, first);
+    inverse_rows<<<count, FUSE_TILE_THREADS, shared>>>(coefficients, s.ly, s.y.k, s.y.tblI);
     const unsigned limb_blocks = (s.limbs + mersenne::weighted_limb_threads - 1) / mersenne::weighted_limb_threads;
     mersenne::weighted_limb_sums<<<dim3(limb_blocks, count), mersenne::weighted_limb_threads, s.limb_shared>>>(
-        s.a, s.b, s.inverse_weights, s.digits, s.spans, s.p, s.limbs, s.ly);
-    normalize<<<count, carry_threads>>>(reinterpret_cast<uint32_t*>(out), s.a, s.limbs, s.p, 2 * s.words);
+        polynomial, coefficients, s.inverse_weights, s.digits, s.spans, s.p, s.limbs, s.ly);
+    normalize<<<count, carry_threads>>>(reinterpret_cast<uint32_t*>(out), polynomial, s.limbs, s.p, 2 * s.words);
     CK(cudaGetLastError());
+}
+
+void inverse_window(FoldWorkspace& s, Word* out, unsigned first, unsigned count) {
+    // frequency_product has already applied the power-of-two axis scale.
+    if (s.x.t) {
+        const unsigned tile = 1u << s.x.t;
+        const size_t shared = tile * sizeof(Word);
+        CK(cudaFuncSetAttribute(inverse_rows, cudaFuncAttributeMaxDynamicSharedMemorySize, int(shared)));
+        inverse_rows<<<unsigned(spectrum_words(s) / tile), FUSE_TILE_THREADS, shared>>>(s.a, tile, s.x.t, s.x.tblI);
+        CK(cudaGetLastError());
+    }
+    ntt_inverse_outer_fused(s.a, s.x, s.x_inv, s.ly * (s.lx / s.k), 0);
+    finish_window(s, s.a, s.b, out, first, count);
+}
+
+void multiply_retained(FoldWorkspace& s, const Word* coefficients, unsigned rows, Spectrum fixed,
+                       Word* out, unsigned first, unsigned count, unsigned reverse_rows) {
+    pretransform(s, Operand::left, coefficients, std::min(rows, first + count), reverse_rows);
+    ntt_inverse_fused(s.a, fixed.data, s.x, s.x_inv, s.x_scale, s.ly * (s.lx / s.k));
+    finish_window(s, s.a, s.b, out, first, count);
+}
+
+void multiply_preserving_left(FoldWorkspace& s, const Word* coefficients, unsigned rows,
+                              Word* out, unsigned first, unsigned count, unsigned reverse_rows) {
+    pretransform(s, Operand::right, coefficients, std::min(rows, first + count), reverse_rows);
+    ntt_inverse_fused(s.b, s.a, s.x, s.x_inv, s.x_scale, s.ly * (s.lx / s.k));
+    finish_window(s, s.b, s.input, out, first, count);
+}
+
+void multiply(FoldWorkspace& s, const Word* a, unsigned ma, const Word* b, unsigned mb, Word* out, unsigned count,
+              unsigned first, bool reverse_b) {
+    // Terms at or above the window end cannot contribute.
+    const unsigned end = first + count;
+    forward_attributes(s);
+    pretransform_ready(s, Operand::left, a, std::min(ma, end), 0, nullptr);
+    const auto right = pretransform_ready(s, Operand::right, b, std::min(mb, end), reverse_b ? mb : 0, nullptr);
+    // Fuse the spectral product with the first inverse pass for one-shot calls.
+    ntt_inverse_fused(s.a, right.data, s.x, s.x_inv, s.x_scale, s.ly * (s.lx / s.k));
+    finish_window(s, s.a, s.b, out, first, count);
 }
 
 }

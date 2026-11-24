@@ -1,4 +1,5 @@
 #include "ecm/cuda/ntt/runtime.h"
+#include "ecm/stage2/cuda/two_axis.h"
 #include "ecm/stage2/cuda/device/two_axis.cuh"
 
 #include <charconv>
@@ -294,7 +295,60 @@ static bool workspace_available(size_t words) {
     return false;
 }
 
+static bool check_staged_product(unsigned p, unsigned ma, unsigned mb, unsigned first, unsigned count, bool reverse) {
+    const auto width = (p + 63) / 64;
+    const char* reason = nullptr;
+    auto* workspace = two_axis::create_product(p, ma, mb, first, count, false, 512ull << 20, reason);
+    if (!workspace) {
+        std::fprintf(stderr, "staged workspace: %s\n", reason);
+        return false;
+    }
+    const auto x = two_axis::polynomial_length(*workspace);
+    Buffer da(size_t(ma) * width), db(size_t(mb) * width), retained(two_axis::spectrum_words(*workspace));
+    Buffer out(size_t(count) * width);
+    std::vector<Integer> b(mb);
+    auto raw_b = fill(b, p, 73);
+    CK(cudaMemcpy(db.data, raw_b.data(), raw_b.size() * sizeof(Word), cudaMemcpyHostToDevice));
+    const auto rhs = two_axis::pretransform(*workspace, two_axis::Operand::right, db.data,
+        std::min(mb, first + count), reverse ? mb : 0, retained.data);
+    if (reverse)
+        for (unsigned i = 0; i < mb / 2; ++i) mpz_swap(b[i].value, b[mb - i - 1].value);
+    Integer expected, actual, modulus;
+    mpz_setbit(modulus.value, p);
+    mpz_sub_ui(modulus.value, modulus.value, 1);
+    std::vector<Word> row(size_t(count) * width), fused(row.size());
+    bool valid = true;
+    for (unsigned iteration = 0; iteration < 2; ++iteration) {
+        std::vector<Integer> a(ma);
+        auto raw_a = fill(a, p, 41 + iteration);
+        CK(cudaMemcpy(da.data, raw_a.data(), raw_a.size() * sizeof(Word), cudaMemcpyHostToDevice));
+        const auto lhs = two_axis::pretransform(*workspace, two_axis::Operand::left, da.data, std::min(ma, first + count));
+        two_axis::frequency_product(*workspace, lhs, rhs);
+        two_axis::inverse_window(*workspace, out.data, first, count);
+        CK(cudaMemcpy(row.data(), out.data, row.size() * sizeof(Word), cudaMemcpyDeviceToHost));
+        two_axis::multiply(*workspace, da.data, ma, db.data, mb, out.data, count, first, reverse);
+        CK(cudaMemcpy(fused.data(), out.data, fused.size() * sizeof(Word), cudaMemcpyDeviceToHost));
+        valid &= row == fused;
+        for (unsigned i = 0; i < count; ++i) {
+            convolution_at(expected, first + i, a, b, modulus);
+            mpz_import(actual.value, width, -1, sizeof(Word), 0, 0, row.data() + size_t(i) * width);
+            valid &= mpz_cmp(expected.value, actual.value) == 0;
+        }
+    }
+    two_axis::release(workspace);
+    std::printf("staged_api p=%u x=%u first=%u count=%u reverse=%u gmp_checked=%u %s\n",
+        p, x, first, count, unsigned(reverse), 2 * count, valid ? "PASS" : "FAIL");
+    return valid;
+}
+
 int main(int argc, char** argv) {
+    if (argc == 3 && std::string_view(argv[1]) == "--staged-api") {
+        CK(cudaSetDevice(read_unsigned(argv[2])));
+        const bool low = check_staged_product(127, 37, 27, 0, 11, true);
+        const bool middle = check_staged_product(521, 17, 20, 13, 11, false);
+        const bool multi_tile = check_staged_product(2203, 6150, 6190, 6150, 19, true);
+        return low && middle && multi_tile ? 0 : 1;
+    }
     if (argc < 9 || argc > 11) {
         std::fprintf(stderr, "usage: %s DEVICE P COEFF_BITS POLY_BITS RADIX3 MA MB REPEATS [legacy|fused|gpu|stripe|flat|plan] [STRIPE_ROWS]\n", argv[0]);
         return 2;

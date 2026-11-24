@@ -33,6 +33,12 @@ RTX 4070 Ti 上的 0.73.6 默认双轴样本，每档三次，沿用 `stage2_ful
 
 下一步验证把 `T低 − QF低` 留在相同的系数频率表示，最后合做一次去权、进位和归约。先单独归约 `T` 高段供商计算。这个改动需要证明有符号差值的精确性上界、权重一致与设备所有权。GPU Graph 化前可先测试固定 P 的零填充 H，省去每轮读回最高非零项的同步；短尾和退化状态要保持覆盖与校验。[CUDA H 折叠步骤及长度读回](../../src/ecm/stage2/cuda/remainder.cpp#L509)
 
+阶段接口已拆出 `pretransform`、`frequency_product` 和 `inverse_window`。预变换可写入调用者持有的频谱，供独立的频域乘积反复读取。一次性路径保留融合的乘积与多项式轴首个逆变换。H 折叠的 F / reciprocal 缓存、下降的父谱共享仍待接入与测试。[双轴接口](../../src/ecm/stage2/cuda/two_axis.h)
+
+RTX 4070 Ti 的分段探针对照了 82 个 GMP 系数，覆盖低积、非零窗口起点、反序输入、radix-3 和跨 tile 逆变换。每个形状将同一份右频谱用于两次乘法。M8011 / 80111 的完整曲线按 B2=9,000,000,000、D=120,120 重放，拆分前后均返回 `NF`，下降叶值哈希和 NTT 计数一致。[分段验证](../../data/experiments/stage2_groot_subtree_config/staged_api_correctness.log) · [完整曲线](../../data/experiments/stage2_groot_subtree_config/staged_axis_curves/)
+
+在现有完整线性多项式轴上，H 折叠已缓存 F 的低 P 项和完整倒数。F 下降先覆盖能在同形状组内相邻提交的兄弟，让窗口结果写进右输入暂存区，直接保留左矩阵中的父谱。跨形状的兄弟共享仍需联合规划。[当前实现](../architecture/NTT.md)
+
 F 下降用父状态 `U` 同时乘两个兄弟多项式。父长度 `m=a+b`，左右所取窗口分别为 `[b,m)` 和 `[a,m)`，两边的代数循环长度下界同为 `m`。可按能覆盖两侧的共同精确性条件选一套轴形状，正变换父状态一次，再分两条频域乘积。只对有收益的上层或均衡父节点启用。较短层可以继续走普通成批路径。候选同时测 F sibling 上传、逆变换和两子窗口结果。上述窗口与线性卷积的一致性已做 768 组小环核对；真实下降的 GMP 节点和叶值仍是接入门槛。[当前 CUDA 下降分组](../../src/ecm/stage2/cuda/remainder.cpp#L1038) · [循环窗口证明](../reference/ECM_STAGE2_MATH.md)
 
 ## 宽位后端拆分

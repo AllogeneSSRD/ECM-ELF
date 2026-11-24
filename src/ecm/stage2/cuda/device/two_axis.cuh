@@ -90,7 +90,7 @@ __global__ void transpose_inverse(const Word* input, Word* output, unsigned ly,
 }
 
 __global__ __launch_bounds__(FUSE_TILE_THREADS)
-void pack_forward(const Word* input, Word* output, unsigned words, unsigned length,
+static void pack_forward(const Word* input, Word* output, unsigned words, unsigned length,
                   unsigned bits, const mersenne::WeightedDigit* digits, const Word* table,
                   unsigned reverse_rows = 0) {
     extern __shared__ Word shared[];
@@ -112,7 +112,7 @@ constexpr unsigned carry_threads = 256;
 // This is the same cyclic carry transfer as the Stage1 weighted kernel.
 // A thread owns consecutive limbs, then receives the prefix of its interval.
 __global__ __launch_bounds__(carry_threads)
-void normalize(uint32_t* output, const Word* sums, unsigned words, unsigned p, unsigned output_stride = 0) {
+static void normalize(uint32_t* output, const Word* sums, unsigned words, unsigned p, unsigned output_stride = 0) {
     __shared__ unsigned warps[carry_threads / 32];
     const unsigned pitch = output_stride ? output_stride : words;
     auto* dest = output + size_t(blockIdx.x) * pitch;

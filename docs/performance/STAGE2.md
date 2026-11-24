@@ -35,6 +35,16 @@ CPU 单线程 G 树分片在 8k、16k 两种位宽、90 亿与 440 亿 B2 上的
 
 **波动与设备。** 保留通过结果和几何校验的全部样本，用配对中位数减少单次波动的影响。例如 8k 十倍档 F 树两对缩短 7.0% 和 10.9%，另一对增加 118.2%，图中显示中位数 −7.0%。Windows RTX 4070 Ti，CUDA 13.3，驱动 610.88，功耗上限 285 W。ECM-ELF 0.73.6 `sm_89` worker SHA-256 为 `056ca3007fd8865d9595981cff43788e70365953ade1b4719e5ee785472e378f`。250 ms 遥测中，GPU 利用率至少 50% 的样本频率中位数均为 2610 MHz，各次活跃功耗中位数在 41.84–121.71 W 之间。[逐次命令、日志和功耗](../../data/experiments/stage2_two_axis_width_chart/tenfold/)
 
+### 双轴固定频谱与父谱复用
+
+两种复用同时开启时，8k 的 H 折叠墙钟中位数从 0.979 秒降至 0.802 秒，配对变化中位数为 −18.1%。16k 从 0.541 秒降至 0.355 秒，三对分别缩短 15.7%、53.7% 和 34.6%。`ntt_phase_row` 显示，H 折叠多项式轴正变换分别少了 32.8% 和 32.5%，逆变换数相同。每档使用两块 96 MiB 的固定频谱，计入 H 折叠原预算。F 下降分别跳过 3 次和 1 次父谱变换，双轴工作区峰值相同，整段墙钟波动较大。整曲线配对变化中位数为 8k −3.9%、16k +2.0%。[各次计时、变换计数和频谱字节数](../../data/experiments/stage2_groot_subtree_config/spectrum_reuse_compact/summary.json)
+
+Windows RTX 4070 Ti，驱动 610.88，CUDA 13.3，功耗上限 285 W。250 ms 采样中，GPU 利用率至少 50% 的各次功耗中位数为 8k 92.4–97.1 W、16k 52.0–56.4 W，SM 时钟中位数均为 2610 MHz。ECM-ELF 0.73.11 单曲线 worker SHA-256 为 `93620b81ba5d65f79502b60af52c0b53949e8d6759aec9324d95e315bd7a63f2`。同一二进制按关开、开关、关开顺序各测三对，关闭 GMP 抽查。输入为 M8011 / 80111 与 M16319 / 270811405193137 的 Edwards 存档，B1=1,000、sigma=26。8k 使用 B2=90,000,000,000、D/P=120,120/11,520，16k 使用 B2=13,500,000,000、D/P=60,060/5,760。阶段取 `real_batched_split`，整曲线取 `stage2_full_wall`，两档各自的下降叶值哈希和因子结果一致。[命令与功耗样本](../../data/experiments/stage2_groot_subtree_config/spectrum_reuse_compact/)
+
+单独计时一个父状态与两个兄弟多项式的乘积，合成输入复用了两档曲线的顶层形状，父长度为 11,520 和 5,760，兄弟长度为 5,761 和 2,881。两档各交错 12 对，CUDA 事件从预变换到两个窗口都写回为止，配对变化中位数为 −18.1% 和 −17.3%。窗口逐字一致。同卡 100 ms 采样有 6 个活跃样本，功耗中位数 36.1 W、SM 时钟 2610 MHz。探针 SHA-256 为 `af6bacf97b92b47637760542fb6da8242368b528411c8a70d503173a39d7eb00`。[CUDA 事件和功耗记录](../../data/experiments/stage2_groot_subtree_config/parent_spectrum_events.json)
+
+独立的 8k 正确性运行通过了 H 折叠 585 个、F 下降 27 个 GMP 系数抽查。将折叠预算降至 255 MiB 后，两份缓存均未获准入，195 次双轴乘积仍完成，下降叶值哈希一致。[抽查日志](../../data/experiments/stage2_groot_subtree_config/spectrum_reuse_compact/8k_gmp/run.log) · [预算回退日志](../../data/experiments/stage2_groot_subtree_config/spectrum_reuse_compact/8k_budget_fallback/run.log)
+
 ### G 树的双轴覆盖与计时边界
 
 十倍 B2 的 2k、4k、8k 分别有约 799 万、533 万、75 万次 G 树乘积，双轴命中约占 0.017%。单轴对照中最短两个变换长度合计占乘积数约 87.5%，最长长度按 `次数 × N log₂ N` 估算只占约 13%–14% 的变换工作量。2k 的逐层日志中，前两层累计耗时中位数约 2 ms，13 层树约 13 ms，乘积次数和耗时分布不同。H 折叠每轮以同样的三个低积处理完整多项式，能够重复使用同一双轴工作区。[逐层计时与 NTT 计数](../../data/experiments/stage2_two_axis_width_chart/tenfold/times_10/2k_on_1/stage2_debug.log)

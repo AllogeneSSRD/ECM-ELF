@@ -667,10 +667,11 @@ int run_real(
             BR.fold_flat.t_prepare,BR.fold_flat.t_multiply,BR.fold_flat.t_subtract,BR.fold_flat.t_bridge);
         const auto &fd=BR.fold_device;
         if (L.carrier_exponent && fuse_env_ull("NTT_S4_FOLD_TWO_AXIS_MIB",0))
-            stage2_log::print(stage2_log::phases,"stage2_fold_two_axis: status=%s muls=%llu bytes=%llu gmp_checked=%llu\n",
-                fd.two_axis_status,fd.two_axis_muls,fd.two_axis_bytes,fd.two_axis_checked);
+            stage2_log::print(stage2_log::phases,"stage2_fold_two_axis: status=%s muls=%llu bytes=%llu gmp_checked=%llu spectrum_bytes=%llu f_builds=%llu f_hits=%llu inv_builds=%llu inv_hits=%llu\n",
+                fd.two_axis_status,fd.two_axis_muls,fd.two_axis_bytes,fd.two_axis_checked,fd.two_axis_spectrum_bytes,
+                fd.two_axis_spectrum_builds[0],fd.two_axis_spectrum_hits[0],fd.two_axis_spectrum_builds[1],fd.two_axis_spectrum_hits[1]);
         if (L.carrier_exponent && fuse_env_ull("NTT_S4_TWO_AXIS_MIB",0)) {
-            stage2_log::print(stage2_log::phases,"stage2_two_axis_workspace: peak_bytes=%zu\n",s4.two_axis_peak);
+            stage2_log::print(stage2_log::phases,"stage2_two_axis_workspace: peak_bytes=%zu parent_hits=%llu\n",s4.two_axis_peak,s4.two_axis_parent_hits);
             for(int phase=0;phase<BC_NCAT;++phase) if(phase!=BC_FOLD)
                 stage2_log::print(stage2_log::phases,"stage2_two_axis_phase: phase=%s muls=%llu gmp_checked=%llu\n",
                     kBatchedCat[phase],s4.two_axis_muls[phase],s4.two_axis_checked[phase]);

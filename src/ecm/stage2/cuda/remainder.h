@@ -29,6 +29,7 @@ struct FoldDeviceStats {
     unsigned long long avoided_h2d_bytes=0,avoided_d2h_bytes=0,checked_words=0;
     unsigned long long spectrum_builds=0,spectrum_hits=0,spectrum_peak_bytes=0;
     unsigned long long two_axis_muls=0,two_axis_bytes=0,two_axis_checked=0;
+    unsigned long long two_axis_spectrum_bytes=0,two_axis_spectrum_hits[2]={},two_axis_spectrum_builds[2]={};
     const char* two_axis_status="off";
     bool root_requested=false;
     unsigned long long root_device_trees=0,root_device_words=0,root_checked_words=0;
@@ -42,6 +43,8 @@ struct FoldDeviceState {
     NttFixedSpectrum f_spectrum;
     stage2_two_axis::FoldWorkspace* two_axis=nullptr;
     size_t two_axis_limit=0;
+    unsigned two_axis_cache_mask=0;
+    stage2_two_axis::Spectrum two_axis_spectra[2]={};
     bool two_axis_check=false;
     unsigned long long *map=nullptr,*length=nullptr,*modulus=nullptr,*digest=nullptr;
     PolyLayer *layer=nullptr;FoldDeviceStats *stats=nullptr;FoldFlatStats *flat=nullptr;

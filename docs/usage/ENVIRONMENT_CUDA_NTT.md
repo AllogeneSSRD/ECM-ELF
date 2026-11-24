@@ -69,10 +69,12 @@
 | `NTT_S4_FOLD_SPECTRUM_MIB` | 0 | 为每条曲线的 H fold 设定固定 F 频谱缓存上限。单位为 MiB，0 关闭。缓存单独分配，须至少保留 1024 MiB 的当前空闲显存，fold 结束时释放。空间不足时沿用普通卷积。 |
 | `NTT_S4_FOLD_TWO_AXIS_MIB` | 1024 | 双轴开启时，CUDA 驻留 H fold 的独立 MiB 预算。要求梅森承载、Goldilocks 精确性合格并保留至少 1024 MiB 当前空闲显存。准入后整个 H fold 使用双轴工作区，进入下降前释放。形状、预算或分配未通过时使用单轴。 |
 | `NTT_S4_FOLD_TWO_AXIS_CHECK` | 0 | 设为 1 时对双轴产物独立做 GMP 校验。至多 64 个输出时全量校验，更大的乘积抽查首、中、尾。诊断会读取设备系数并计入运行墙钟。 |
+| `NTT_S4_FOLD_TWO_AXIS_CACHE` | 3 | 双轴固定频谱掩码。`1` 缓存 F，`2` 缓存倒数，`3` 缓存两者，`0` 关闭。频谱与基准工作区共用 `NTT_S4_FOLD_TWO_AXIS_MIB` 预算，并保留至少 1024 MiB 空闲显存。 |
 | `NTT_S4_TWO_AXIS_MIB` | 2048 | 双轴开启时，F 树、G 树、Newton 倒数和下降的独立 MiB 预算。梅森承载且形状和显存准入通过时才使用双轴。 |
 | `NTT_S4_TWO_AXIS_PHASES` | 27 | 实验位掩码。F 树为 1，G 树为 2，下降为 8，Newton 倒数为 16。默认覆盖四个阶段。 |
 | `NTT_S4_TWO_AXIS_MIN_COEFFS` | 4096 | 双轴准入要求裁剪后的较大输入达到该项数。每组最多 8 个乘积，低层大批量乘法由单轴处理。 |
 | `NTT_S4_TWO_AXIS_CHECK` | 0 | 对 F/G 树、倒数和下降的双轴产物做独立 GMP 校验，抽查口径与 fold 相同。 |
+| `NTT_S4_TWO_AXIS_SHARE_PARENT` | 1 | 在符合形状限制的驻留双轴 F 下降分组内共享父频谱，使用已有工作区。`0` 关闭。 |
 
 TOML 的 `[stage2] ntt_two_axis` 统一控制五个阶段，默认开启。`--two-axis-ntt 0|1` 优先。关闭时清除双轴的两项预算，环境中已设置的实验预算也失效。
 | `NTT_S4_FINAL_READBACK` | 0 | 延后到末端集中读回输出。生产固定。 |

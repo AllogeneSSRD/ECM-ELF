@@ -171,6 +171,8 @@ void configure_two_axis_ntt(const Options &o) {
     };
     budget("NTT_S4_FOLD_TWO_AXIS_MIB","1024");
     budget("NTT_S4_TWO_AXIS_MIB","2048");
+    budget("NTT_S4_FOLD_TWO_AXIS_CACHE","3");
+    budget("NTT_S4_TWO_AXIS_SHARE_PARENT","1");
 }
 void configure_cuda_wait(int device) {
 #ifndef ECM_STAGE2_OPENCL

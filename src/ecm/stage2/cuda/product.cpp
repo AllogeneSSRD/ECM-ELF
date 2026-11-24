@@ -54,18 +54,18 @@ void PolyLayer::count_ntt(unsigned long long n,unsigned long long pairs,unsigned
     v.pairs+=pairs;v.forward+=2*pairs-reused_forwards;v.inverse+=pairs;
 }
 
-void PolyLayer::count_two_axis(const stage2_two_axis::FoldWorkspace& plan,int category,size_t ma,size_t mb,
-                               size_t first,size_t count)
+void PolyLayer::count_two_axis(const stage2_two_axis::FoldWorkspace& plan,int category,size_t forward_rows,
+                               size_t count,unsigned forwards)
 {
     if(!ntt_lengths.enabled)return;
     const auto ly=stage2_two_axis::coefficient_length(plan);
     auto &coefficients=phase_counts[category].coefficients[ly];
     ++coefficients.pairs;
-    coefficients.forward+=std::min(ma,first+count)+std::min(mb,first+count);
+    coefficients.forward+=forward_rows;
     coefficients.inverse+=count;
     auto &polynomial=phase_counts[category].polynomial[stage2_two_axis::polynomial_length(plan)];
     ++polynomial.pairs;
-    polynomial.forward+=2ull*ly;
+    polynomial.forward+=forwards*ly;
     polynomial.inverse+=ly;
 }
 
@@ -293,6 +293,9 @@ static bool try_two_axis_product(PolyLayer &L,const unsigned long long* wa,const
     auto &plan=*found->workspace;
     const size_t w=L.W;
     const bool reverse_b=resident && resident->reverse_b;
+    static const bool share_parent=fuse_env_ull("NTT_S4_TWO_AXIS_SHARE_PARENT",1)!=0;
+    const bool share=share_parent && category==BC_DESCENT && reverse_b && count<=b_rows;
+    bool same_parent=false;
     for(size_t i=0;i<nbatch;++i) {
         const unsigned long long *a,*b;
         unsigned long long* dest;
@@ -306,7 +309,14 @@ static bool try_two_axis_product(PolyLayer &L,const unsigned long long* wa,const
             const auto* map=resident->host_meta;
             a=resident->src+map[i];b=resident->src+map[nbatch+i];dest=resident->dst+map[2*nbatch+i];
         }
-        stage2_two_axis::multiply(plan,a,unsigned(ma),b,unsigned(mb),dest,unsigned(count),unsigned(first),reverse_b);
+        const bool reuse=same_parent;
+        same_parent=share && i+1<nbatch && resident->host_meta[i]==resident->host_meta[i+1];
+        if(same_parent && !reuse)
+            stage2_two_axis::pretransform(plan,stage2_two_axis::Operand::left,a,unsigned(a_rows));
+        if(same_parent || reuse)
+            stage2_two_axis::multiply_preserving_left(plan,b,unsigned(mb),dest,unsigned(first),unsigned(count),unsigned(mb));
+        else
+            stage2_two_axis::multiply(plan,a,unsigned(ma),b,unsigned(mb),dest,unsigned(count),unsigned(first),reverse_b);
         if(host)CK(stage2_wait::copy(out.data()+i*count*w,dest,count*w*8,cudaMemcpyDeviceToHost));
         if(check) {
             const size_t stride=std::max(ma,mb)*w;
@@ -315,7 +325,8 @@ static bool try_two_axis_product(PolyLayer &L,const unsigned long long* wa,const
                 verify_two_axis_product(L,a,ma,b,mb,dest,first,count,true,reverse_b);
             C.two_axis_checked[category]+=verified.coefficients;
         }
-        L.count_two_axis(plan,category,ma,mb,first,count);
+        L.count_two_axis(plan,category,b_rows+(reuse?0:a_rows),count,reuse?1:2);
+        C.two_axis_parent_hits+=reuse;
         L.cost.add(category,ma,mb);
     }
     // The resident tree can immediately refill its pinned metadata after this call.
