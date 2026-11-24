@@ -161,6 +161,8 @@ BatchedRun run_batched(
     if(L.s4 && fuse_env_ull("NTT_REQUEST_AUDIT",0))
         ecm_stage2::s4_signature_boundary(L.s4->s4_program_signature,ecm_stage2::S4InverseDone);
     std::vector<unsigned long long> Hflat,finvflat;
+    // Persist a full offset table for the low-width repeated-tree regime.
+    if(L.s4)L.s4->cache_groot_offsets=L.S<=4096 && imax/P>=128;
     if(fold_flat_enabled && !finv.empty()) {
         const double tb=now_s();finvflat=cp_to_flat(finv,W);CPoly{}.swap(finv);
         R.fold_flat.t_bridge+=now_s()-tb;
@@ -687,7 +689,10 @@ BatchedRun run_batched(
         c0=c1;
     }
     giant_loop.finish();
-    if(L.s4) L.s4->release_two_axis();
+    if(L.s4) {
+        L.s4->release_two_axis();
+        L.s4->groot_metadata.release();
+    }
     stage2_two_axis::release(device_fold.two_axis);
     device_fold.f_spectrum.release();
     R.t_post_loop=now_s();

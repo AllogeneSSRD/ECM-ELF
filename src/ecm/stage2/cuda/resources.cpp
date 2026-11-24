@@ -45,6 +45,30 @@ size_t S4Ctx::raw_release()
     return bytes;
 }
 
+void GrootMetadata::reserve(size_t words)
+{
+    if(words<=capacity)return;
+    release();
+    CK(cudaMalloc(&device,words*sizeof(*device)));
+    capacity=words;
+    if(g_s4_async && cudaHostAlloc(&pinned,words*sizeof(*pinned),cudaHostAllocDefault)!=cudaSuccess) {
+        pinned=nullptr;
+        cudaGetLastError();
+    }
+}
+
+void GrootMetadata::release()
+{
+    // Free the device allocation before releasing its host upload source.
+    if(device)CK(cudaFree(device));
+    if(pinned)CK(cudaFreeHost(pinned));
+    device=pinned=nullptr;
+    std::vector<unsigned long long>().swap(pageable);
+    capacity=leaves=word_width=0;
+}
+
+GrootMetadata::~GrootMetadata() {release();}
+
 size_t S4Ctx::output_release()
 {
     // Only at phase boundaries after the result has been copied to host

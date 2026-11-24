@@ -170,6 +170,8 @@ void gfinv_batch_fixture(const mpz_t actual,size_t actualW)
 
 void groot_device_fixture(PolyLayer &L)
 {
+    const bool previous_cache=L.s4 && L.s4->cache_groot_offsets;
+    if(L.s4)L.s4->cache_groot_offsets=true;
     const size_t W=L.W;unsigned long long cases=0,words=0;
     const auto nodes0=g_gdevice.checked_nodes,words0=g_gdevice.checked_words;
     mpz_t c,z;mpz_inits(c,z,nullptr);
@@ -194,6 +196,10 @@ void groot_device_fixture(PolyLayer &L)
         ++cases;words+=expected.size();
     }
     mpz_clears(c,z,nullptr);
+    if(L.s4) {
+        L.s4->groot_metadata.release();
+        L.s4->cache_groot_offsets=previous_cache;
+    }
     stage2_log::print(stage2_log::debug, "gdevice_fixture: cases=%llu words=%llu checked_nodes=%llu checked_words=%llu bad=0 (GMP nonmonic, zero/constant-one, empty/single/padded/large trees)\n",
         cases,words,g_gdevice.checked_nodes-nodes0,g_gdevice.checked_words-words0);
 }

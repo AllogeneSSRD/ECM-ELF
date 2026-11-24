@@ -35,6 +35,24 @@ CPU 单线程 G 树分片在 8k、16k 两种位宽、90 亿与 440 亿 B2 上的
 
 **波动与设备。** 保留通过结果和几何校验的全部样本，用配对中位数减少单次波动的影响。例如 8k 十倍档 F 树两对缩短 7.0% 和 10.9%，另一对增加 118.2%，图中显示中位数 −7.0%。Windows RTX 4070 Ti，CUDA 13.3，驱动 610.88，功耗上限 285 W。ECM-ELF 0.73.6 `sm_89` worker SHA-256 为 `056ca3007fd8865d9595981cff43788e70365953ade1b4719e5ee785472e378f`。250 ms 遥测中，GPU 利用率至少 50% 的样本频率中位数均为 2610 MHz，各次活跃功耗中位数在 41.84–121.71 W 之间。[逐次命令、日志和功耗](../../data/experiments/stage2_two_axis_width_chart/tenfold/)
 
+### G 树的双轴覆盖与计时边界
+
+十倍 B2 的 2k、4k、8k 分别有约 799 万、533 万、75 万次 G 树乘积，双轴命中约占 0.017%。单轴对照中最短两个变换长度合计占乘积数约 87.5%，最长长度按 `次数 × N log₂ N` 估算只占约 13%–14% 的变换工作量。2k 的逐层日志中，前两层累计耗时中位数约 2 ms，13 层树约 13 ms，乘积次数和耗时分布不同。H 折叠每轮以同样的三个低积处理完整多项式，能够重复使用同一双轴工作区。[逐层计时与 NTT 计数](../../data/experiments/stage2_two_axis_width_chart/tenfold/times_10/2k_on_1/stage2_debug.log)
+
+在 0.73.6 上用 `NTT_S4_TWO_AXIS_PHASES=2` 固定附加阶段为 G 树，H 折叠继续走自身的双轴路径。各条件一次试跑，准入门槛取 4,096 / 2,048 / 1,024 项时，2k 的 G 树耗时为 1.724 / 1.606 / 1.425 秒，8k 为 0.795 / 1.003 / 0.970 秒，16k 为 3.953 / 3.948 / 3.771 秒。这三档依次使用 B2=480 / 90 / 135 亿，降门槛的方向随形状变化。生产默认门槛仍为 4,096 项，单批最多接受八个双轴乘积。[阈值原始样本](../../data/experiments/stage2_gtree_reuse/threshold/summary.json) · [双轴准入](../../src/ecm/stage2/cuda/product.cpp#L250)
+
+F 树、Newton 倒数和 F 下降各执行一次。相应的墙钟包括准备、搬运、计划分配或释放及同步。Newton 随精度上升释放上一层的双轴计划，8k 的驻留下降在一次运行中申请了五种双轴形状。阶段墙钟体现完整路径的代价，无法单独归因到 NTT kernel。[Newton 路径](../../src/ecm/stage2/cuda/remainder.cpp#L122) · [8k 双轴准入日志](../../data/experiments/stage2_two_axis_width_chart/tenfold/times_10/8k_on_1/stage2_debug.log)
+
+8k 的独立开关复测固定 B2=90 亿，仅将附加双轴阶段掩码从 `27` 改为 `19`，三对的下降时间差为 −0.307 至 +0.431 秒。相同的 G 树配置也测到 +0.031 至 +0.397 秒的配对差。该复测支持保留下降的默认策略，测得的墙钟波动仍需与 kernel 耗时分开解释。[仅切换下降的配对样本](../../data/experiments/stage2_gtree_reuse/descent/summary.json)
+
+### 驻留 G 树偏移表缓存
+
+算术位宽不超过 4,096 位且至少有 128 棵满批 G 树时，CUDA Stage2 为相同树形复用偏移表。M2203（B1=1,000，sigma=17，B2=1,440 亿，D/P=60,060/5,760）建 417 棵 G 树。每曲线的元数据上传由 **7,191,561 字降至 21,606 字**，设备偏移表峰值由 98,304 字节增至 138,216 字节。8k 无条件缓存试验在三对中均增加 G 树耗时，生产采用上述条件化策略。[缓存实现](../../src/ecm/stage2/cuda/tree.cpp#L292) · [无条件缓存对照](../../data/experiments/stage2_gtree_reuse/cache/summary.json)
+
+同一存档交错测三对，G 树阶段均更快，平均 **5.415 → 5.107 秒**，配对省时中位数 **0.109 秒**，范围 0.063–0.752 秒。整曲线平均为 **7.131 → 7.137 秒**。G 树时间包括偏移表准备、上传和设备乘法，整曲线沿用 `stage2_full_wall`。8k、16k 另各重放一对，验证未启用缓存时的偏移上传和下降哈希。[阶段耗时与逐次证据](../../data/experiments/stage2_gtree_reuse/qualified/summary.json)
+
+Windows RTX 4070 Ti，CUDA 13.3，285 W 功耗上限。2k 各次活跃功耗中位数范围 80.28–92.79 W，SM 频率中位数均为 2610 MHz。旧版为上节的 0.73.6 worker，复用版为 0.73.7 `sm_89` worker，SHA-256 为 `cde644a6fa077d019d28068e6625b020ae85aa750e0bd51607cd2784960ee036`。正式样本的下降叶值哈希逐档对齐。同步与异步上传各通过 48 个 GMP 设备树用例，故障注入触发节点校验失败。[GMP 及故障注入](../../data/experiments/stage2_gtree_reuse/fixture_qualified/summary.json) · [同步上传日志](../../data/experiments/stage2_gtree_reuse/fixture_qualified_blocking/console.log)
+
 ## Edwards 全位宽对照
 
 小档 B2，13 个实际余因子，318–16272 位。纵轴为秒／曲线，越低越快。左侧放大前六个位宽，右侧显示全部 13 点。图例按设备分组。Ryzen AI 9 HX 370 的 0.69.9 使用蓝色和青色实线，0.66.1 使用对应的浅色虚线。历史 CUDA 数据用虚线，4060 Laptop 的较早版本用渐浅的紫色。Prime95 四线程历史参考用黑色点线与空心三角。色带表示有逐次记录的观测范围。

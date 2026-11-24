@@ -160,6 +160,8 @@ Stage2 将 S-bit 系数放入足够宽的 Kronecker 槽。最大 operand 含 A �
 
 F/G 树、Newton 倒数和下降的形状准入共享一个预算，H fold 使用独立预算。F 树与倒数使用现有主机系数，G 根树和缩放下降可直接消费驻留系数。下降方向反转的 sibling 在打包时反读，逆转置写紧凑输出窗口。若有效线性积有 `full` 项，窗口为 `[first,end)`，多项式轴长度只需覆盖两个输入、`end` 和 `full−first`。这样循环回卷落在窗口之外。F 树、倒数及 G/fold 循环结束时释放该阶段缓存。双曲线调度为符合梅森承载条件的候选预留两项双轴预算。[CUDA NTT 环境变量](../usage/ENVIRONMENT_CUDA_NTT.md#多项式分块卷积与归约)
 
+算术位宽不超过 4,096 位且有至少 128 棵满批 G 树时，驻留 G 树在同一条曲线内缓存各组的输入与输出偏移。键为叶数、系数 limb 数和树布局。相同满批复用主机与设备表，尾批形状改变时重新生成，G/fold 循环结束后释放。此缓存可用于单轴和双轴乘法。[阶段性能](../performance/STAGE2.md#g-树的双轴覆盖与计时边界)
+
 独立生产程序默认使用pack/zero融合：`pack_zero=true`，可用false或`--pack-zero 0`关闭；共享及 Worker TOML 用法见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#pack_zero)。普通上传、resident gather及reverse-B按最终digit地址一次覆盖完整工作区，融合有效digit写入与所有补零；无需额外设备数据数组，不改变数学NTT或carry/归约。驱动把解析值传入曲线及tune子进程，底层探针仍使用显式`NTT_S4_PACK_ZERO=0|1`。索引合同、两卡450条正式曲线、复测和默认资格统一见[准备与同步](../performance/STAGE2_PREPARATION.md#packzero-融合路径)，共享内核位于[s4_input_pack.cuh](../../src/ecm/stage2/cuda/device/pack.cuh)。
 
 ## Carry 的完整 digit 检查

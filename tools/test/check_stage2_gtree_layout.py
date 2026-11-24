@@ -95,6 +95,8 @@ def main():
             '--log',str(directory/'engine.log'),'--debug-log-file',str(directory/'debug.log'),'--log-level','batches']
         if layout>=0:
             command+=['--groot-layout',str(layout)]
+        if a.fixtures:
+            command+=['--b2-round-chain','0']
         (directory/'command.json').write_text(json.dumps(dict(command=command,environment={k:v for k,v in env.items() if k.startswith('NTT_')}),indent=2),encoding='utf-8')
         monitor=None
         if not a.fixtures and shutil.which('nvidia-smi'):

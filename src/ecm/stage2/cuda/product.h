@@ -20,6 +20,19 @@ struct MulCost {
     unsigned long long tot_bits() const;
 };
 
+struct GrootMetadata {
+    unsigned long long *device = nullptr, *pinned = nullptr;
+    std::vector<unsigned long long> pageable;
+    size_t capacity = 0, leaves = 0, word_width = 0;
+    bool balanced = false;
+    GrootMetadata() = default;
+    GrootMetadata(const GrootMetadata &) = delete;
+    GrootMetadata &operator=(const GrootMetadata &) = delete;
+    void reserve(size_t words);
+    void release();
+    ~GrootMetadata();
+};
+
 struct S4Ctx {
     struct TwoAxisPlan {
         size_t ma, mb, span, staging_output;
@@ -55,6 +68,8 @@ struct S4Ctx {
     size_t raw_capacity(const unsigned long long *p) const;
     void raw_reserve(size_t a,size_t b);
     size_t raw_release();
+    GrootMetadata groot_metadata;
+    bool cache_groot_offsets = false;
     size_t output_release();
     size_t release_buffers();
     double t_h2d_raw = 0.0, t_packdev = 0.0;

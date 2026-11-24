@@ -289,18 +289,17 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
     size_t leaf_offset=0;
     for(size_t i=0;i<pad;++i){offsets[i]=leaf_offset;leaf_offset+=2*W*deg[pad+i];}
     if(leaf_offset!=need){std::fprintf(stderr,"FATAL: G tree dense leaf offsets\n");std::exit(3);}
-    struct Metadata {
-        unsigned long long *device=nullptr,*pinned=nullptr;size_t capacity=0;
-        ~Metadata(){if(device)CK(cudaFree(device));if(pinned)CK(cudaFreeHost(pinned));}
-    } meta;
-    if(pad>1) {
-        meta.capacity=3*(pad/2);CK(cudaMalloc(&meta.device,meta.capacity*8));
-        if(g_s4_async) {
-            cudaError_t err=cudaHostAlloc(&meta.pinned,meta.capacity*8,cudaHostAllocDefault);
-            if(err!=cudaSuccess){meta.pinned=nullptr;cudaGetLastError();}
-        }
-        g_gdevice.metadata_peak_bytes=std::max(g_gdevice.metadata_peak_bytes,8ull*meta.capacity);
-    }
+    // A full batch repeats the offsets of its n-1 binary products.
+    GrootMetadata local_metadata;
+    const bool keep_metadata=C.cache_groot_offsets;
+    auto &metadata=keep_metadata ? C.groot_metadata : local_metadata;
+    const size_t meta_words=3*(keep_metadata ? n-1 : pad/2);
+    metadata.reserve(meta_words);
+    g_gdevice.metadata_peak_bytes=std::max(g_gdevice.metadata_peak_bytes,8ull*metadata.capacity);
+    const bool cached=keep_metadata && metadata.leaves==n && metadata.word_width==W && metadata.balanced==balanced;
+    if(keep_metadata && !metadata.pinned)metadata.pageable.resize(metadata.capacity);
+    auto *host_meta=metadata.pinned ? metadata.pinned : metadata.pageable.data();
+    size_t meta_offset=0;
     auto validate=[&](size_t base) {
         if(!check)return;
         std::vector<unsigned long long> words(cur_words);
@@ -336,22 +335,30 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
         }
         for(const auto &group:groups) {
             const size_t ma=group.first.first,mb=group.first.second,nb=group.second.size();
-            std::vector<unsigned long long> map(3*nb);
-            for(size_t j=0;j<nb;++j) {
-                const size_t i=group.second[j],left=2*i,right=left+1;
-                const bool swap=deg[2*base+left]>deg[2*base+right];
-                map[j]=offsets[swap?right:left];map[nb+j]=offsets[swap?left:right];map[2*nb+j]=target[i];
+            const size_t words=3*nb;
+            if(words>meta_words-meta_offset) {
+                std::fprintf(stderr,"%s: FATAL: resident tree metadata exceeds capacity\n",NTT_PROBE_NAME);
+                std::exit(3);
             }
-            // Previous metadata upload is complete when the multiply's final carry check returns.
-            // All scatter reads of DEVICE metadata precede this update in the default stream.
-            if(meta.pinned) {
-                std::copy(map.begin(),map.end(),meta.pinned);
-                CK(cudaMemcpyAsync(meta.device,meta.pinned,map.size()*8,cudaMemcpyHostToDevice));
-            } else CK(stage2_wait::copy(meta.device,map.data(),map.size()*8,cudaMemcpyHostToDevice));
-            g_gdevice.metadata_words+=map.size();
-            S4DeviceBatch batch{cur,meta.device,next,map.data(),cur_words,next_words,nb};
+            std::vector<unsigned long long> transient(keep_metadata ? 0 : words);
+            auto *map=keep_metadata ? host_meta+meta_offset : transient.data();
+            auto *device_map=metadata.device+meta_offset;
+            if(!cached) {
+                for(size_t j=0;j<nb;++j) {
+                    const size_t i=group.second[j],left=2*i,right=left+1;
+                    const bool swap=deg[2*base+left]>deg[2*base+right];
+                    map[j]=offsets[swap?right:left];map[nb+j]=offsets[swap?left:right];map[2*nb+j]=target[i];
+                }
+                if(metadata.pinned) {
+                    if(!keep_metadata)std::copy_n(map,words,metadata.pinned);
+                    CK(cudaMemcpyAsync(device_map,metadata.pinned+meta_offset,words*8,cudaMemcpyHostToDevice));
+                } else CK(stage2_wait::copy(device_map,map,words*8,cudaMemcpyHostToDevice));
+                g_gdevice.metadata_words+=words;
+            }
+            S4DeviceBatch batch{cur,device_map,next,map,cur_words,next_words,nb};
             std::vector<unsigned long long> unused;
             poly_mul_batch_modN(L,nullptr,nullptr,ma,mb,nb,unused,cat,nullptr,0,ma+mb-1,&batch);
+            if(keep_metadata)meta_offset+=words;
             ++g_gdevice.groups;g_gdevice.pairs+=nb;fs.muls+=nb;
             ++L.s4->groups;
         }
@@ -365,6 +372,9 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
             stage2_log::print(stage2_log::debug, "gdevice_progress: base=%llu groups=%llu t_level=%.3f t_total=%.3f\n",
                 (unsigned long long)base,(unsigned long long)groups.size(),now_s()-level_start,now_s()-start);
     }
+    metadata.leaves=n;
+    metadata.word_width=W;
+    metadata.balanced=balanced;
     if(root_sink) {
         // The consumer copies before any subsequent call can recycle raw A/B.
         root_sink(cur,n+1);g_gdevice.root_words+=(n+1)*W;return tree;
