@@ -18,7 +18,7 @@
 - `length` 按实际点数筛选，支持单值或闭区间。例如默认 auto 下 `length=8192` 分别调优 8,192 点 linear 和 IBDWT。省略 `exp` 和 `length` 时遍历整表。这两个字段互斥。各类型的连续上限见下表。[预计算长度表](../../include/ecm/stage1/ntt_sizes.h)
 - `naf` 适用于 Edwards，显式取 2–12 内的单值或闭区间，包含奇数。省略或填 0 时筛选 6、8、10、12，即使生产配置固定了窗口也执行该筛选。命令行 `--naf-w W` 可固定一个窗口。Montgomery PARAM0 按 x-only 测量。
 - `batch` 是并行曲线数，接受 1–512 内的单值或闭区间。`[stage1] ntt_max_batch` 默认 512，可设为 1–512，限制调优和生产新批次。例如设为 128 后，`batch=64-256` 在 64–128 内测量，`batch=129` 报错。各长度和 NAF 窗口还要满足设备显存、NAF 字典和主机内存预算。省略 `batch` 时自动搜索可容纳的批量；显式单值只测该批量。`--tune-exhaustive` 逐批精测。只有显式给出非空 `batch=` 才保存全部已测批量。
-- `find=N` 在 1–99 之间取整数，搜索吞吐**严格大于**峰值 N% 的最小批量。省略时只报告常规 95% 档。例如 `-tune "ntt,length=4096,naf=6,find=80"`。
+- `find=N` 在 1–99 之间取整数，二分查找吞吐**严格大于**峰值 N% 的较小批量。省略时只报告常规 95% 档。例如 `-tune "ntt,length=4096,naf=6,find=80"`。
 - `force` 或 `force=1` 按当前搜索范围从粗测开始重跑，忽略已有 tune 测量和续跑文件。本轮内相同候选仍可复用。写回时比较历史吞吐和显存需求，保留更优及低显存候选；控制台汇报本轮实测。默认 `force=0` 沿用缓存。例如 `-tune "ntt,length=2560,naf=6,find=95,force"`。
 - `repeat=A:B` 指定每个候选粗测 A 组、精测 B 组，默认 `2:2`。两项独立取 1–20 的整数。`repeat=3:5` 可按三组粗测、五组精测。
 - `time` 是每组时长的正数倍率，默认 1。目标设备时间为 `100 × time` ms，四舍五入到整数毫秒，最少 1 ms。例如 `time=2,repeat=2:5` 时，每个粗测候选测 2 × 200 ms，精测候选测 5 × 200 ms。`--tune-seconds N` 限制整个命令启动新测量的墙钟预算。正在测的候选会完成并写表。
@@ -31,7 +31,7 @@
 3. 入选窗口精调 tile、outer 和 batch。默认比较倍增批量和峰值邻档。`--tune-exhaustive` 比较区间内每个可行批量。粗测和这一步统一临时用 16 步/Graph，显式 Graph 或 profile 沿用其设定。
 4. 若主循环 Best 使用 radix-5，`stage1_ntt_pfa_scan` 固定其 batch、tile、outer 和 Graph，比较 twiddle、pfa-direct、pfa-coalesced 三种布局。若最短 digit 至少为 12 位，再对胜出布局比较五点逆变换与去权汇集的融合路径。已测的基线可直接参加比较。二次幂长度跳过此步。对已有完整记录的长度，使用 `force` 重新扫描。
 5. 对胜出布局和批量扫描 Graph，比较 4、8、16、32、64 步，复用已经测过的 16 步。日志 `stage1_ntt_graph_scan` 标出该批量。随后按更新后的峰值计算 95% 批量。显式 Graph 或固定 profile 直接使用指定步数。
-6. 指定 `find=N` 时，先按精测条件重新运行单曲线和 Best 批量，缓存命中时也实测；Best 为 1 时只测一次。然后从请求范围的最小批量向上检查，首个严格超过本次峰值 N% 的批量即为结果。中间批量可复用匹配的精测记录，遇到更高吞吐即更新峰值。显式范围从 2 或更大值开始时，单曲线只作参照。按批量递增检查也能覆盖吞吐非单调的情况。日志 `phase=find_anchors` 标记端点复测，`stage1_ntt_find` 标记搜索开始。
+6. 指定 `find=N` 时，先按精测条件重新运行单曲线和 Best 批量，缓存命中时也实测。Best 为 1 时只测一次。单曲线在请求范围内且达标时可直接采用。其余情形在请求下限和 Best 之间二分，每次探测中点，达标则缩小上界，否则抬高下界。中点可复用匹配的精测记录，遇到更高吞吐即更新峰值与门槛。吞吐随批量呈单调趋势时可定位最小达标批量，局部波动时可能跳过孤立的达标批量。显式范围从 2 或更大值开始时，单曲线只作参照。日志 `phase=find_anchors` 标记端点复测，`stage1_ntt_find` 标记搜索开始。
 
 默认搜索结束后，每个 GPU、NAF 窗口和同一组 NTT 候选为本轮最多标记四种并行数。日志中的 `Single` 是单曲线，`Max` 是当前预算下实际通过测量的最大批量，`Best` 是精测吞吐最高的批量，`95%` 是精测中达到该峰值 95% 的最小批量。多个角色落在同一批量时合并。入选批量保留已测的粗测、精测和执行变体，因此表中可能有多行。`find=N` 命中的批量也会保留供生产选型使用。其他预算下已发布的批量仍可作为候选。
 
@@ -53,7 +53,7 @@ Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，�
 
 例如 x-only 选中 64 步、窗口为 16 时，每块启动 4 个 Graph。若该块预热实测 0.8 ms，默认每组回放 125 块，即每曲线 8000 步。窗口是每个 Graph 的步数上限。x-only 的正数尾段可独立建图；所选块短于窗口时，测到的是该尾段。原生 NAF 的连续零列使用 1、2、4 等二次幂长度的 Graph，非零列直接执行倍点和点加。例如 186 列含 26 个非零列时，最短块约 7 列。若这 7 列耗时 160 ms，默认正式组只执行一块。100 ms 是每个正式组的软目标，调优命令的总耗时还包含初始化、试跑及核对。
 
-`sample_pool_steps` 是采样池列数，`block_steps` 是一块实际回放的列数，`timed_steps` 是每曲线每个正式组的列数，`repeats` 是正式组数。原生 Edwards 保存完整标量列数 `naf_columns`、一轮的非零列数 `sample_nonzero` 和所有正式组的 CUDA event 总时间 `total_device_ms`。聚合吞吐 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。各组的中位时间 `median_ms` 和标准差用于观察波动。控制台实测行在吞吐之后依次列出 dataflow 掩码（十进制数值加 `bit`）、每组实际/目标设备时间（ms）、每条曲线每组步数（`steps/group`）和每条曲线每个回放块的步数（`steps/block`）。两列步数相除即每组回放块数。末列 `radix5_layout` 显示混合长度的布局：`twiddle`（旋转因子）、`pfa-direct`（直接 PFA）或 `pfa-coalesced`（合并访存 PFA）。二次幂长度显示 `-`。原生 Edwards 每步对应一列 NAF，x-only 每步对应一个标量位。原生 Edwards 的 `group_ms` 取各组平均，x-only 取中位数。x-only 仍采用 `1000 × batch × timed_steps / median_ms`。`Single`、`Best`、`95%` 分别报告单曲线、峰值及达到峰值 95% 的最小实测批量。[GPU 回放和计时](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/cuda/ntt/tune.cpp)
+`sample_pool_steps` 是采样池列数，`block_steps` 是一块实际回放的列数，`timed_steps` 是每曲线每个正式组的列数，`repeats` 是正式组数。原生 Edwards 保存完整标量列数 `naf_columns`、一轮的非零列数 `sample_nonzero` 和所有正式组的 CUDA event 总时间 `total_device_ms`。聚合吞吐 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。各组的中位时间 `median_ms` 和标准差用于观察波动。控制台实测行在吞吐之后依次列出 dataflow 掩码（十进制）、每组实际/目标设备时间（ms）、每条曲线每组步数（`steps/group`）和每条曲线每个回放块的步数（`steps/block`）。两列步数相除即每组回放块数。末列 `radix5_layout` 显示混合长度的布局：`twiddle`（旋转因子）、`pfa-direct`（直接 PFA）或 `pfa-coalesced`（合并访存 PFA）。二次幂长度显示 `-`。原生 Edwards 每步对应一列 NAF，x-only 每步对应一个标量位。原生 Edwards 的 `group_ms` 取各组平均，x-only 取中位数。x-only 仍采用 `1000 × batch × timed_steps / median_ms`。`Single`、`Best`、`95%` 分别报告单曲线、峰值及达到峰值 95% 的最小实测批量。[GPU 回放和计时](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/cuda/ntt/tune.cpp)
 
 ## Tune 文件
 
@@ -65,7 +65,7 @@ Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，�
 
 ### Stage1 CUDA NTT 的 `dataflow` 默认值与启用条件
 
-`[ntt].matrix` 的 `dataflow` 记录执行计划最终选用的标志，整列参与决策键比较。控制台的 `22112bit` 表示十进制掩码 22112，用 `(dataflow & 掩码) != 0` 判断某一位。常规 `-tune` 比较完整计划，混合长度还显式比较 radix-5 布局与逆向融合。其他各位随长度、批量和 tile 等条件选择。单独开关某一位的性能差异需要另行对照测量。[标志定义](../../src/ecm/stage1/cuda/ntt/ladder.h) · [调优与布局选择](../../src/ecm/stage1/cuda/ntt/tune.cpp) · [决策键](../../src/ecm/stage2/planning/tune_rows.def)
+`[ntt].matrix` 的 `dataflow` 记录执行计划最终选用的标志，整列参与决策键比较。控制台的 `22112` 表示十进制掩码 22112，用 `(dataflow & 掩码) != 0` 判断某一位。常规 `-tune` 比较完整计划，混合长度还显式比较 radix-5 布局与逆向融合。其他各位随长度、批量和 tile 等条件选择。单独开关某一位的性能差异需要另行对照测量。[标志定义](../../src/ecm/stage1/cuda/ntt/ladder.h) · [调优与布局选择](../../src/ecm/stage1/cuda/ntt/tune.cpp) · [决策键](../../src/ecm/stage2/planning/tune_rows.def)
 
 以下默认值对应常规生产和调优计划。`p` 是算术指数，`N` 是 NTT 点数，`batch` 是物理曲线数，tile 大小均以点计。“默认请求”表示先将该位加入候选掩码，最终置位还须满足本条的条件。内部实验掩码可替换默认请求；显式 radix-5 布局随后覆盖位 7、8，原生 Edwards NAF 随后清除位 0–2。底层调用未传控制对象时，初始请求掩码为 0。[默认请求与最终分派](../../src/ecm/stage1/cuda/ntt/ladder.cu)
 

@@ -9,6 +9,16 @@ import tomllib
 from test_stage1_ntt_production import edwards_stage1, ntt_executions, saved_points
 
 
+def check_find_probe_budget(log, first):
+    start = re.search(r"stage1_ntt_find: .*best_batch=(\d+) graph=\d+", log)
+    assert start, log
+    search = log[start.end():].split("Single ", 1)[0]
+    probes = re.findall(r" (\d+)c [\d.]+ iter/s|stage1_ntt_reuse: .*batch=(\d+) ", search)
+    last = int(start[1])
+    assert all(first <= int(measured or reused) < last for measured, reused in probes), probes
+    assert len(probes) <= (last - first).bit_length(), (first, last, len(probes))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", required=True, type=Path)
@@ -253,7 +263,7 @@ def main():
         assert {(b,layout) for b,layout in measured} >= {(batch,"twiddle"),(batch,"pfa-direct")}
         assert all(b == batch for b,_ in measured)
         inverse_fusion = 1 << 24
-        flows = [int(flow) for flow in re.findall(r" iter/s (\d+)bit ", scan)]
+        flows = [int(flow) for flow in re.findall(r" iter/s (\d+) ", scan)]
         assert sum(bool(flow & inverse_fusion) for flow in flows) == 1, scan
         assert f"batch={batch} " in log[offsets[3]:offsets[4]]
         assert re.search(r"measured=[1-9]\d* reused=0 ", log)
@@ -415,6 +425,7 @@ def main():
     log = run("find95_first_run", ["-tune", "length=16,naf=6,time=0.01,find=95", "16"],
               settings="ntt_max_batch = 8")
     assert log.index("stage1_ntt_graph_scan:") < log.index("stage1_ntt_find:") < log.index("Single ")
+    check_find_probe_budget(log, 1)
     best, = (r for r in rows() if r["batch_roles"] & 4)
     economical, = (r for r in rows() if r["batch_roles"] & 8)
     assert economical["iter_per_s"] >= 0.95 * best["iter_per_s"]
@@ -435,6 +446,7 @@ def main():
             log = search(tag, extra)
             start = re.search(r"stage1_ntt_find: .*best_batch=(\d+) graph=(\d+)", log)
             assert start and anchors(log) == ([1] if int(start[1]) == 1 else [1,int(start[1])])
+            check_find_probe_budget(log, 2 if batch_arg else 1)
             assert log.find("stage1_ntt_graph_scan:") < start.start()
             b = best_batch(log)
             report = re.search(rf"{percent}% +\d+ +\d+ +\S+ +(\d+)c ", log)
@@ -585,7 +597,7 @@ def main():
         log = run(f"short_blocks_{curve}", ["--param", curve, "-tune",
             "ntt,length=4096,batch=32,time=0.01" + spec, "128"],
             settings="ntt_profile = 1\nntt_window_bits = 64")
-        samples = re.findall(r" iter/s (\d+)bit (\d+\.\d{3})/1 ms (\d+) (\d+) -$", log, re.M)
+        samples = re.findall(r" iter/s (\d+) (\d+\.\d{3})/1 ms (\d+) (\d+) -$", log, re.M)
         assert len(samples) == 2
         for _, actual, steps, block in samples:
             assert float(actual) > 0 and 0 < int(block) < 64 and int(steps) % int(block) == 0
@@ -640,7 +652,8 @@ def main():
     assert {(1, 1), (2, 3)} <= {pair for r in updated for pair in coverage(r)}
     wide = run("wide", ["-tune", "exp=900001,naf=6,batch=1,time=0.25", "16"],
                convolution="auto", settings="ntt_memory_mib = 128")
-    assert {line.split()[-1] for line in wide.splitlines() if " 40960 " in line and "bit " in line} == {"twiddle", "pfa-direct", "pfa-coalesced"}
+    layouts = re.findall(r"^.*? 40960 \d+ \S+ \d+c [\d.]+ iter/s \d+ .* (\S+)$", wide, re.M)
+    assert set(layouts) == {"twiddle", "pfa-direct", "pfa-coalesced"}
     assert "Best " in wide
     candidates = [r for r in rows() if r["reference_bits"] >= 720001]
     assert {r["length"] for r in candidates} == {32768, 40960, 65536}

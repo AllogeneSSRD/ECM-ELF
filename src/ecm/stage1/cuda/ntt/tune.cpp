@@ -108,7 +108,7 @@ const char* radix5_layout_name(const Plan& plan) {
 void print_measurement(const Measurement& m, unsigned target) {
     const auto& p = m.plan;
     const auto shape = tune_shape_descriptor(p);
-    ecm_ts_fprintf(stdout, "%u %u %s %uc %.0f iter/s %ubit %.3f/%u ms %u %u %s\n",
+    ecm_ts_fprintf(stdout, "%u %u %s %uc %.0f iter/s %u %.3f/%u ms %u %u %s\n",
         p.length, p.max_exp, shape.c_str(), m.batch, m.throughput()*m.steps, p.dataflow,
         m.group_ms(), target, m.steps, m.steps / m.blocks, radix5_layout_name(p));
 }
@@ -1441,15 +1441,22 @@ struct WindowSearch {
                        p,w,grid.find_percent,best.batch,best.plan.window);
         matrix.header_pending = true;
         auto selected = best;
-        // Batch throughput need not be monotone. Check the smaller batches
-        // in ascending order, reusing compatible fine timings for interiors.
-        for (unsigned batch=grid.batch.first; batch<peak.batch; ++batch) {
-            const auto score = batch == 1 ? single : matrix.sample(options,batch,SamplePhase::Fine);
+        const double fraction = grid.find_percent / 100.0;
+        auto first = grid.batch.first;
+        if (first == 1) {
+            if (single.rate > best.rate) best = single;
+            if (single.rate > fraction * best.rate) selected = single;
+            else ++first;
+        }
+        // The selected endpoint qualifies. If a midpoint raises the peak,
+        // it also becomes the new qualifying endpoint. Earlier failures
+        // remain failures because the threshold can only increase.
+        while (first < selected.batch) {
+            const auto batch = first + (selected.batch - first) / 2;
+            const auto score = matrix.sample(options,batch,SamplePhase::Fine);
             if (score.rate > best.rate) best = score;
-            if (score.rate > (grid.find_percent / 100.0) * best.rate) {
-                selected = score;
-                break;
-            }
+            if (score.rate > fraction * best.rate) selected = score;
+            else first = batch + 1;
         }
         found = {{Single,single},{Capacity,capacity},{Fastest,best},{Economical,selected}};
     }
