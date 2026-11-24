@@ -3,6 +3,8 @@
 #include "context.h"
 
 #include "s4.h"
+#include "two_axis.h"
+#include <map>
 
 struct MulCost {
     long S = 0;
@@ -19,6 +21,15 @@ struct MulCost {
 };
 
 struct S4Ctx {
+    struct TwoAxisPlan {
+        size_t ma, mb, span, staging_output;
+        bool host;
+        stage2_two_axis::FoldWorkspace* workspace;
+    };
+    std::vector<TwoAxisPlan> two_axis_plans;
+    size_t two_axis_bytes=0, two_axis_peak=0;
+    unsigned long long two_axis_muls[BC_NCAT]{}, two_axis_checked[BC_NCAT]{};
+    size_t release_two_axis();
     S4Reduce *red = nullptr;
     unsigned long long *d_out = nullptr;
     size_t d_out_cap = 0;
@@ -72,9 +83,16 @@ struct PolyLayer : ecm_stage2::ModulusContext {
     /* statistics */
     unsigned long long ntt_calls = 0, muls = 0, slot_checks = 0;
     ecm_stage2::NttLengthCounts ntt_lengths;
+    struct TransformCounts { unsigned long long pairs=0, forward=0, inverse=0; };
+    struct PhaseCounts {
+        std::map<unsigned,TransformCounts> flat, coefficients, polynomial;
+    };
+    PhaseCounts phase_counts[BC_NCAT];
     unsigned long long short_batch_changed=0;
     void count_ntt(unsigned long long n,unsigned long long pairs,unsigned long long chunks,
-                   unsigned long long reused_forwards=0);
+                   unsigned long long reused_forwards,int category);
+    void count_two_axis(const stage2_two_axis::FoldWorkspace& plan,int category,size_t ma,size_t mb,
+                        size_t first,size_t count);
     void print_ntt_lengths()const;
     /* slice S4: batched multiplies are ONE launch for `nbatch` poly multiplies, so the launch
        count is reported separately from the multiply count (which keeps the S3 numbers
@@ -176,6 +194,13 @@ struct FlatInputStats {
     unsigned long long temp_peak_bytes = 0, control_peak_bytes = 0;
     double t_prepare = 0.0;
 };
+
+struct TwoAxisCheck {
+    size_t coefficients=0, read_bytes=0;
+};
+TwoAxisCheck verify_two_axis_product(const PolyLayer &L, const unsigned long long* a, size_t ma,
+    const unsigned long long* b, size_t mb, const unsigned long long* output, size_t first, size_t count,
+    bool device, bool reverse_b);
 
 bool poly_is_one(const unsigned long long *p, size_t W);
 

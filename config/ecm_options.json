@@ -2641,6 +2641,21 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_ntt_two_axis",
+      "toml_key": "ntt_two_axis",
+      "field": "ntt_two_axis",
+      "type": "bool",
+      "default": true,
+      "domain": "[false|true|0|1]",
+      "fx": "Stage2_two_axis_NTT",
+      "parser": "strict",
+      "description": [
+        "Enable two-axis NTT for eligible CUDA Stage2 products in the F and G trees, Newton inverse, H fold, and descent. Eligibility requires a Mersenne carrier, a supported shape, and available device memory. Single-axis NTT handles other products and legacy cost profiles. CLI --two-axis-ntt 0|1 overrides this key. The setting is inactive on OpenCL.",
+        "统一控制 CUDA Stage2 的 F 树、G 树、Newton 倒数、H fold 和下降是否使用双轴 NTT。双轴路径要求梅森承载、受支持的形状和可用显存。其余乘积及旧成本配置使用单轴。命令行 --two-axis-ntt 0|1 优先。此选项在 OpenCL 上不生效。"
+      ]
+    },
+    {
+      "owner": "stage2",
       "key": "stage1_tune_profile",
       "toml_key": "tune_stage1_cost_file",
       "field": "stage1_profile",

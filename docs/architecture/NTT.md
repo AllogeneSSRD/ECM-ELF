@@ -156,7 +156,9 @@ Stage2 将 S-bit 系数放入足够宽的 Kronecker 槽。最大 operand 含 A �
 
 驻留 H fold 可通过 `NTT_S4_FOLD_SPECTRUM_MIB` 为固定 F 缓存一个频谱。其键包含变换长度、digit 位数、槽宽和实际 F 系数数目。命中时跳过 F 的打包和正变换，逆变换读取该只读频谱。该缓存与通用工作区独立，超预算或显存不足时按普通乘法处理，在进入下降阶段前释放。[CUDA NTT 环境变量](../usage/ENVIRONMENT_CUDA_NTT.md#多项式分块卷积与归约)
 
-驻留 H fold 可通过 `NTT_S4_FOLD_TWO_AXIS_MIB` 启用梅森承载的双轴 NTT。它用短加权系数轴和独立的线性多项式轴完成设备乘法，直接写回 S4 owner 的规范 64 位 limb。固定计划的线性空间按两个最多 P+1 项的输入建立，低积只写所需系数。双轴工作区按曲线单独准入与复用，优先于单轴 F 频谱。F/G 树、Newton 逆和下降继续使用常规多项式层。双轴乘法由 `stage2_fold_two_axis` 单独计数，单轴 `ntt_count_table` 覆盖常规多项式层。[CUDA NTT 环境变量](../usage/ENVIRONMENT_CUDA_NTT.md#多项式分块卷积与归约)
+`[stage2] ntt_two_axis` 默认开启，统一控制 CUDA Stage2 的五个双轴阶段。驻留 H fold 用短加权系数轴和独立的线性多项式轴完成设备乘法，直接写回 S4 owner 的规范 64 位 limb。固定计划的线性空间按两个最多 P+1 项的输入建立，低积只写所需系数。双轴工作区按曲线单独准入与复用，优先于单轴 F 频谱。
+
+F/G 树、Newton 倒数和下降的形状准入共享一个预算，H fold 使用独立预算。F 树与倒数使用现有主机系数，G 根树和缩放下降可直接消费驻留系数。下降方向反转的 sibling 在打包时反读，逆转置写紧凑输出窗口。若有效线性积有 `full` 项，窗口为 `[first,end)`，多项式轴长度只需覆盖两个输入、`end` 和 `full−first`。这样循环回卷落在窗口之外。F 树、倒数及 G/fold 循环结束时释放该阶段缓存。双曲线调度为符合梅森承载条件的候选预留两项双轴预算。[CUDA NTT 环境变量](../usage/ENVIRONMENT_CUDA_NTT.md#多项式分块卷积与归约)
 
 独立生产程序默认使用pack/zero融合：`pack_zero=true`，可用false或`--pack-zero 0`关闭；共享及 Worker TOML 用法见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#pack_zero)。普通上传、resident gather及reverse-B按最终digit地址一次覆盖完整工作区，融合有效digit写入与所有补零；无需额外设备数据数组，不改变数学NTT或carry/归约。驱动把解析值传入曲线及tune子进程，底层探针仍使用显式`NTT_S4_PACK_ZERO=0|1`。索引合同、两卡450条正式曲线、复测和默认资格统一见[准备与同步](../performance/STAGE2_PREPARATION.md#packzero-融合路径)，共享内核位于[s4_input_pack.cuh](../../src/ecm/stage2/cuda/device/pack.cuh)。
 
@@ -219,6 +221,8 @@ NTT pool 保留最大工作区容量，shape 小缓冲/表按键缓存。非导�
 开启后每条曲线结束输出 `ntt_count_table` 表，按长度升序列出 length、log2、convolutions、forward、inverse、total。每个 batch 成员独立计数。一次卷积计一个逆向，正向从每次两次减去该长度上复用的频谱数。Graph 重放和物理分块沿用同样的计数规则。表显式开启后在 quiet 控制台也输出，正常日志中保留一份。
 
 加权后端继续按等价的全长卷积请求计入长度表，另用 `weighted_ntt` 记录实际执行的加权卷积数。
+
+同一开关输出 `ntt_phase_row`，分别按 `f_tree`、`g_tree`、`fold`、`descent` 和 `inv` 列出单轴实际长度及双轴两条轴的次数。双轴两条轴的 `products` 都指这些乘积，统计乘积总数时取其中一列。系数轴计打包的有效输入行和实际逆变换的输出行。多项式轴以逻辑全长计每条频率行，包含 radix-3 组合长度。旧格式 `ntt_count_table` 及其工作量汇总覆盖单轴。分阶段日志与 CUDA kernel 启动次数分别统计。
 
 兼容行 `ntt_length_counts: log2_length:num_of_ntt` 按 k 升序列出 **L=2ᵏ 的独立数学变换数**；debug 另输出按长度的卷积数。消费旧直方图的分析工具仍可读取此行，新运行需要显式开启上述选项。
 

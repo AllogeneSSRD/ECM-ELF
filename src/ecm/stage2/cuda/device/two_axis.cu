@@ -10,6 +10,7 @@ struct FoldWorkspace {
     FuseCtx y{}, x{};
     Word* data = nullptr;
     Word *a = nullptr, *b = nullptr, *input = nullptr;
+    Word* staging = nullptr;
     Word *twiddle = nullptr, *inverse_weights = nullptr;
     const mersenne::WeightedDigit* digits = nullptr;
     const mersenne::WeightedLimb* spans = nullptr;
@@ -36,9 +37,12 @@ static void inverse_rows(Word* data, unsigned length, int bits, const Word* tabl
     ntt_tile_pass<true, true>(row, shared, length, bits, table);
 }
 
-FoldWorkspace* create(unsigned p, unsigned max_coefficients, size_t limit, const char*& fallback) {
+static FoldWorkspace* create_shape(unsigned p, unsigned ma, unsigned mb, unsigned first, unsigned output_rows,
+                                   bool host, size_t limit, const char*& fallback) {
     fallback = "shape";
-    if (!p || !max_coefficients || max_coefficients > 32768) return nullptr;
+    if (!p || !ma || !mb || ma > 32768 || mb > 32768) return nullptr;
+    const unsigned overlap = std::min(ma, mb);
+    const auto required = output_rows ? window_span(ma,mb,first,output_rows) : ma + mb - 1;
     auto state = std::make_unique<FoldWorkspace>();
     auto& s = *state;
     s.p = p;
@@ -49,20 +53,21 @@ FoldWorkspace* create(unsigned p, unsigned max_coefficients, size_t limit, const
         const unsigned ly = 1u << ybits;
         if (ly > p || (p + ly - 1) / ly > 31) continue;
         const auto bound = mersenne::weighted_unsigned_bound(p, ly);
-        if (bound && *bound <= (GL_P - 1) / max_coefficients) {
+        if (bound && *bound <= (GL_P - 1) / overlap) {
             s.ly = ly;
             break;
         }
     }
     if (!s.ly) return nullptr;
     unsigned xbits = 3;
-    for (; (1u << xbits) < 2 * max_coefficients - 1; ++xbits) {}
+    for (; (1u << xbits) < required; ++xbits) {}
     s.lx = 1u << xbits;
-    const bool radix3 = xbits > 3 && (s.lx / 4) * 3 >= 2 * max_coefficients - 1;
+    const bool radix3 = xbits > 3 && (s.lx / 4) * 3 >= required;
     if (radix3) xbits -= 2;
     s.k = 1u << xbits;
     if (radix3) s.lx = 3 * s.k;
-    const size_t matrix = size_t(s.lx) * s.ly, input = size_t(max_coefficients) * s.ly;
+    const size_t matrix = size_t(s.lx) * s.ly, input = size_t(mb) * s.ly;
+    const size_t staging_words = host ? size_t(ma + mb + output_rows) * s.words : 0;
     const size_t twiddles = radix3 ? 4 * size_t(s.k) : 0;
     const size_t digit_words = s.ly * sizeof(mersenne::WeightedDigit) / sizeof(Word);
     const size_t span_words = s.limbs * sizeof(mersenne::WeightedLimb) / sizeof(Word);
@@ -74,7 +79,7 @@ FoldWorkspace* create(unsigned p, unsigned max_coefficients, size_t limit, const
     FuseCtx yplan{}, xplan{};
     fuse_describe(yplan, s.ly, ybits, yroot, yinv, true, &yopts);
     fuse_describe(xplan, s.k, xbits, s.x_root, s.x_inv, true);
-    const size_t data_words = 2 * matrix + input + twiddles + s.ly + digit_words + span_words;
+    const size_t data_words = 2 * matrix + input + twiddles + s.ly + digit_words + span_words + staging_words;
     s.allocated = (data_words + fuse_planned_base_words(yplan) + fuse_planned_table_words(yplan) +
                    fuse_planned_base_words(xplan) + fuse_planned_table_words(xplan)) * sizeof(Word);
     fallback = "budget";
@@ -98,6 +103,7 @@ FoldWorkspace* create(unsigned p, unsigned max_coefficients, size_t limit, const
     s.inverse_weights = s.twiddle + twiddles;
     auto* digit_data = s.inverse_weights + s.ly;
     auto* span_data = digit_data + digit_words;
+    if (host) s.staging = span_data + span_words;
     s.digits = reinterpret_cast<const mersenne::WeightedDigit*>(digit_data);
     s.spans = reinterpret_cast<const mersenne::WeightedLimb*>(span_data);
     const auto weights = mersenne::weighted_tables(p, s.ly, inv(s.ly * (radix3 ? 3ull : 1ull)));
@@ -121,10 +127,17 @@ FoldWorkspace* create(unsigned p, unsigned max_coefficients, size_t limit, const
     fuse_init(s.y, s.ly, ybits, yroot, yinv, true, &yopts);
     fuse_init(s.x, s.k, xbits, s.x_root, s.x_inv, true);
     ntt_fuse_cache_tables(s.x, s.x_root, s.x_inv);
-    CK(cudaFuncSetAttribute(pack_forward, cudaFuncAttributeMaxDynamicSharedMemorySize, s.ly * sizeof(Word)));
-    CK(cudaFuncSetAttribute(inverse_rows, cudaFuncAttributeMaxDynamicSharedMemorySize, s.ly * sizeof(Word)));
     fallback = "none";
     return state.release();
+}
+
+FoldWorkspace* create(unsigned p, unsigned max_coefficients, size_t limit, const char*& fallback) {
+    return create_shape(p, max_coefficients, max_coefficients, 0, 0, false, limit, fallback);
+}
+
+FoldWorkspace* create_product(unsigned p, unsigned ma, unsigned mb, unsigned first, unsigned count,
+                              bool host, size_t limit, const char*& fallback) {
+    return create_shape(p, std::min(ma, first + count), std::min(mb, first + count), first, count, host, limit, fallback);
 }
 
 void release(FoldWorkspace*& workspace) {
@@ -133,17 +146,26 @@ void release(FoldWorkspace*& workspace) {
 }
 
 size_t bytes(const FoldWorkspace& workspace) { return workspace.allocated; }
+unsigned coefficient_length(const FoldWorkspace& workspace) { return workspace.ly; }
+unsigned polynomial_length(const FoldWorkspace& workspace) { return workspace.lx; }
+Word* host_staging(FoldWorkspace& workspace) { return workspace.staging; }
 
-void multiply(FoldWorkspace& s, const Word* a, unsigned ma, const Word* b, unsigned mb, Word* out, unsigned count) {
-    // Only coefficients below count can affect the requested low product.
-    ma = std::min(ma, count);
-    mb = std::min(mb, count);
+void multiply(FoldWorkspace& s, const Word* a, unsigned ma, const Word* b, unsigned mb, Word* out, unsigned count,
+              unsigned first, bool reverse_b) {
+    // Input indices at or above the end of the output window cannot contribute.
+    const unsigned b_rows = mb;
+    ma = std::min(ma, first + count);
+    mb = std::min(mb, first + count);
     const bool radix3 = s.lx != s.k;
     const dim3 threads(32, 8), forward_grid((s.ly + 31) / 32, (s.k + 31) / 32);
-    const dim3 inverse_grid((std::min(s.k, count) + 31) / 32, (s.ly + 31) / 32);
+    const unsigned inverse_columns = first ? s.k : std::min(s.k, count);
+    const dim3 inverse_grid((inverse_columns + 31) / 32, (s.ly + 31) / 32);
     const size_t shared = s.ly * sizeof(Word);
+    CK(cudaFuncSetAttribute(pack_forward, cudaFuncAttributeMaxDynamicSharedMemorySize, int(shared)));
+    CK(cudaFuncSetAttribute(inverse_rows, cudaFuncAttributeMaxDynamicSharedMemorySize, int(shared)));
     pack_forward<<<ma, FUSE_TILE_THREADS, shared>>>(a, s.b, s.words, s.ly, s.y.k, s.digits, s.y.tblF);
-    pack_forward<<<mb, FUSE_TILE_THREADS, shared>>>(b, s.input, s.words, s.ly, s.y.k, s.digits, s.y.tblF);
+    pack_forward<<<mb, FUSE_TILE_THREADS, shared>>>(b, s.input, s.words, s.ly, s.y.k, s.digits, s.y.tblF,
+                                                  reverse_b ? b_rows : 0);
     auto forward = [&](const Word* from, Word* to, unsigned rows) {
         if (radix3)
             transpose_forward<true><<<forward_grid, threads>>>(from, to, s.ly, s.k, rows, s.ly, s.twiddle, s.cube);
@@ -159,9 +181,9 @@ void multiply(FoldWorkspace& s, const Word* a, unsigned ma, const Word* b, unsig
     ntt_forward_fused(s.b, s.x, s.x_root, batch);
     ntt_inverse_fused(s.a, s.b, s.x, s.x_inv, s.x_scale, batch);
     if (radix3)
-        transpose_inverse<true><<<inverse_grid, threads>>>(s.a, s.b, s.ly, s.k, count, s.ly, s.twiddle + 2 * s.k, s.cube2);
+        transpose_inverse<true><<<inverse_grid, threads>>>(s.a, s.b, s.ly, s.k, count, s.ly, s.twiddle + 2 * s.k, s.cube2, first);
     else
-        transpose_inverse<false><<<inverse_grid, threads>>>(s.a, s.b, s.ly, s.k, count, s.ly, nullptr, 0);
+        transpose_inverse<false><<<inverse_grid, threads>>>(s.a, s.b, s.ly, s.k, count, s.ly, nullptr, 0, first);
     inverse_rows<<<count, FUSE_TILE_THREADS, shared>>>(s.b, s.ly, s.y.k, s.y.tblI);
     const unsigned limb_blocks = (s.limbs + mersenne::weighted_limb_threads - 1) / mersenne::weighted_limb_threads;
     mersenne::weighted_limb_sums<<<dim3(limb_blocks, count), mersenne::weighted_limb_threads, s.limb_shared>>>(

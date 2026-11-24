@@ -161,6 +161,17 @@ void configure_weighted_ntt(const Options &o) {
     if(_putenv_s("NTT_S4_WEIGHTED",o.weighted_ntt?"1":""))
         throw std::runtime_error("cannot configure weighted Stage2 NTT");
 }
+void configure_two_axis_ntt(const Options &o) {
+    const bool enabled=o.ntt_two_axis && !stage2_backend::opencl && o.cost_profile.empty() &&
+        o.tune!="ntt" && ecm_cuda_stage2_default_log_level()!=stage2_log::debug;
+    const auto budget=[enabled](const char* key,const char* default_value) {
+        if(enabled && std::getenv(key))return;
+        if(_putenv_s(key,enabled?default_value:""))
+            throw std::runtime_error("cannot configure two-axis Stage2 NTT");
+    };
+    budget("NTT_S4_FOLD_TWO_AXIS_MIB","1024");
+    budget("NTT_S4_TWO_AXIS_MIB","2048");
+}
 void configure_cuda_wait(int device) {
 #ifndef ECM_STAGE2_OPENCL
     const char *value=std::getenv("NTT_CUDA_WAIT_MODE");

@@ -56,8 +56,16 @@ size_t S4Ctx::output_release()
     return bytes;
 }
 
+size_t S4Ctx::release_two_axis() {
+    for(auto &entry:two_axis_plans)stage2_two_axis::release(entry.workspace);
+    two_axis_plans.clear();
+    const auto bytes=two_axis_bytes;
+    two_axis_bytes=0;
+    return bytes;
+}
+
 size_t S4Ctx::release_buffers() {
-    const auto bytes=raw_release()+output_release()+8*d_pack_cap*(unsigned(d_packA!=nullptr)+unsigned(d_packB!=nullptr));
+    const auto bytes=release_two_axis()+raw_release()+output_release()+8*d_pack_cap*(unsigned(d_packA!=nullptr)+unsigned(d_packB!=nullptr));
     if(d_packA)CK(cudaFree(d_packA));
     if(d_packB)CK(cudaFree(d_packB));
     d_packA=d_packB=nullptr;d_pack_cap=0;
@@ -66,6 +74,7 @@ size_t S4Ctx::release_buffers() {
 
 S4Ctx::~S4Ctx()
 {
+    release_two_axis();
     if (d_out) cudaFree(d_out);
     if (d_rawA) cudaFree(d_rawA);
     if (d_rawB) cudaFree(d_rawB);

@@ -46,9 +46,27 @@ unsigned long long MulCost::tot_bits() const
 }
 
 void PolyLayer::count_ntt(unsigned long long n,unsigned long long pairs,unsigned long long chunks,
-                          unsigned long long reused_forwards)
+                          unsigned long long reused_forwards,int category)
 {
     ntt_lengths.add(n,pairs,chunks,reused_forwards);
+    if(!ntt_lengths.enabled || category<0 || category>=BC_NCAT)return;
+    auto &v=phase_counts[category].flat[unsigned(n)];
+    v.pairs+=pairs;v.forward+=2*pairs-reused_forwards;v.inverse+=pairs;
+}
+
+void PolyLayer::count_two_axis(const stage2_two_axis::FoldWorkspace& plan,int category,size_t ma,size_t mb,
+                               size_t first,size_t count)
+{
+    if(!ntt_lengths.enabled)return;
+    const auto ly=stage2_two_axis::coefficient_length(plan);
+    auto &coefficients=phase_counts[category].coefficients[ly];
+    ++coefficients.pairs;
+    coefficients.forward+=std::min(ma,first+count)+std::min(mb,first+count);
+    coefficients.inverse+=count;
+    auto &polynomial=phase_counts[category].polynomial[stage2_two_axis::polynomial_length(plan)];
+    ++polynomial.pairs;
+    polynomial.forward+=2ull*ly;
+    polynomial.inverse+=ly;
 }
 
 void PolyLayer::print_ntt_lengths()const
@@ -75,6 +93,16 @@ void PolyLayer::print_ntt_lengths()const
     std::printf("ntt_work: scope=curve_polynomial convolutions=%llu transforms=%llu s4_chunks=%llu elements=%.6e logical_radix2_butterflies=%.6e short_batch_changed=%llu\n",
         pairs,transforms,chunks,elements,butterflies,short_batch_changed);
     stage2_log::print(stage2_log::debug,"ntt_convolution_counts: log2_length:num_of_conv %s\n",convs.c_str());
+    for(int phase=0;phase<BC_NCAT;++phase) {
+        const auto print=[&](const auto &axis,const char* name) {
+            for(const auto &[length,v]:axis)
+                std::printf("ntt_phase_row: phase=%s axis=%s length=%u products=%llu forward=%llu inverse=%llu\n",
+                    kBatchedCat[phase],name,length,v.pairs,v.forward,v.inverse);
+        };
+        print(phase_counts[phase].flat,"flat");
+        print(phase_counts[phase].coefficients,"coefficients");
+        print(phase_counts[phase].polynomial,"polynomial");
+    }
     std::fflush(stdout);
 }
 
@@ -124,7 +152,7 @@ std::vector<unsigned long long> poly_mul_modN(
     L.t_ext += st.t_ext;
     L.t_xchk += st.t_xchk;
     ++L.ntt_calls;
-    L.count_ntt(st.N,1,1);
+    L.count_ntt(st.N,1,1,0,cat>=0?cat:L.cat);
     ++L.muls;
     {
         const int c = (cat >= 0) ? cat : L.cat;       /* explicit, else the layer's current one */
@@ -175,6 +203,130 @@ std::vector<unsigned long long> poly_mul_modN(
     }
     mpz_clear(t);
     return out;
+}
+
+TwoAxisCheck verify_two_axis_product(const PolyLayer &L,const unsigned long long* a,size_t ma,
+    const unsigned long long* b,size_t mb,const unsigned long long* output,size_t first,size_t count,
+    bool device,bool reverse_b)
+{
+    const size_t samples=count<=64 ? count : 3, w=L.W;
+    TwoAxisCheck result{};
+    mpz_t x,y,expected,actual;
+    mpz_inits(x,y,expected,actual,nullptr);
+    std::vector<unsigned long long> left,right,dest;
+    for(size_t s=0;s<samples;++s) {
+        const size_t pos=samples<=1 ? 0 : s*(count-1)/(samples-1);
+        const size_t i=first+pos, lo=i>=mb ? i-mb+1 : 0, hi=std::min(i,ma-1);
+        const size_t terms=hi-lo+1;
+        auto load=[&](const unsigned long long* ptr,size_t words,std::vector<unsigned long long>& buf) {
+            if (!device) return ptr;
+            buf.resize(words);
+            CK(stage2_wait::copy(buf.data(),ptr,words*8,cudaMemcpyDeviceToHost));
+            result.read_bytes+=words*8;
+            return static_cast<const unsigned long long*>(buf.data());
+        };
+        const auto* lhs=load(a+lo*w,terms*w,left);
+        const size_t b_start=reverse_b ? mb-1-(i-lo) : i-hi;
+        const auto* rhs=load(b+b_start*w,terms*w,right);
+        mpz_set_ui(expected,0);
+        for(size_t j=0;j<terms;++j) {
+            words_to_mpz(x,lhs+j*w,w);
+            words_to_mpz(y,rhs+(reverse_b?j:terms-1-j)*w,w);
+            mpz_addmul(expected,x,y);
+        }
+        mpz_mod(expected,expected,L.N);
+        words_to_mpz(actual,load(output+pos*w,w,dest),w);
+        if(mpz_cmp(expected,actual)!=0) {
+            std::fprintf(stderr,"FATAL: Stage2 two-axis GMP mismatch ma=%zu mb=%zu first=%zu index=%zu reverse_b=%d\n",
+                ma,mb,first,i,(int)reverse_b);
+            std::exit(3);
+        }
+        ++result.coefficients;
+    }
+    mpz_clears(x,y,expected,actual,nullptr);
+    return result;
+}
+
+static bool try_two_axis_product(PolyLayer &L,const unsigned long long* wa,const unsigned long long* wb,
+    size_t ma,size_t mb,size_t nbatch,std::vector<unsigned long long> &out,int category,NttMulStats *st,
+    size_t first,size_t count,const S4DeviceBatch *resident)
+{
+    static const auto mib=fuse_env_ull("NTT_S4_TWO_AXIS_MIB",0);
+    static const auto phases=fuse_env_ull("NTT_S4_TWO_AXIS_PHASES",27);
+    static const auto minimum=fuse_env_ull("NTT_S4_TWO_AXIS_MIN_COEFFS",4096);
+    if(!mib || mib>SIZE_MAX>>20 || !L.carrier_exponent || category<0 || category>=BC_NCAT ||
+       category==BC_FOLD || !(phases&(1ull<<category)) || !count || nbatch>8 ||
+       std::min(std::max(ma,mb),first+count)<minimum || ma>32768 || mb>32768) return false;
+    static const bool audit=fuse_env_ull("NTT_REQUEST_AUDIT",0)!=0;
+    if(audit || g_s4_carry_trace || g_s4_carry_test_bad || g_s4_final_readback) return false;
+    static const bool check=fuse_env_ull("NTT_S4_TWO_AXIS_CHECK",0)!=0;
+    auto &C=*L.s4;
+    const bool host=resident==nullptr;
+    if(host && ma>mb) {
+        std::swap(ma,mb);
+        std::swap(wa,wb);
+    }
+    const size_t limit=size_t(mib)<<20;
+    const size_t a_rows=std::min(ma,first+count), b_rows=std::min(mb,first+count);
+    const size_t span=stage2_two_axis::window_span(a_rows,b_rows,first,count);
+    const size_t output_rows=host ? count : 0;
+    const double begin=now_s();
+    auto found=std::find_if(C.two_axis_plans.begin(),C.two_axis_plans.end(),[&](const auto &entry) {
+        return entry.ma==a_rows && entry.mb==b_rows && entry.span==span &&
+            entry.staging_output==output_rows && entry.host==host;
+    });
+    if(found==C.two_axis_plans.end()) {
+        const char* status=nullptr;
+        auto* workspace=stage2_two_axis::create_product(L.carrier_exponent,unsigned(ma),unsigned(mb),
+            unsigned(first),unsigned(count),host,limit-C.two_axis_bytes,status);
+        stage2_log::print(stage2_log::debug,
+            "stage2_two_axis_admission: phase=%s ma=%zu mb=%zu first=%zu count=%zu device=%d status=%s\n",
+            kBatchedCat[category],ma,mb,first,count,(int)!host,status);
+        if(workspace) {
+            C.two_axis_bytes+=stage2_two_axis::bytes(*workspace);
+            C.two_axis_peak=std::max(C.two_axis_peak,C.two_axis_bytes);
+        }
+        C.two_axis_plans.push_back({a_rows,b_rows,span,output_rows,host,workspace});
+        found=C.two_axis_plans.end()-1;
+    }
+    if(!found->workspace)return false;
+    auto &plan=*found->workspace;
+    const size_t w=L.W;
+    const bool reverse_b=resident && resident->reverse_b;
+    for(size_t i=0;i<nbatch;++i) {
+        const unsigned long long *a,*b;
+        unsigned long long* dest;
+        if(host) {
+            auto* staged=stage2_two_axis::host_staging(plan);
+            const size_t stride=std::max(ma,mb)*w;
+            a=staged;b=staged+a_rows*w;dest=staged+(a_rows+b_rows)*w;
+            CK(stage2_wait::copy(staged,wa+i*stride,a_rows*w*8,cudaMemcpyHostToDevice));
+            CK(stage2_wait::copy(staged+a_rows*w,wb+i*stride,b_rows*w*8,cudaMemcpyHostToDevice));
+        } else {
+            const auto* map=resident->host_meta;
+            a=resident->src+map[i];b=resident->src+map[nbatch+i];dest=resident->dst+map[2*nbatch+i];
+        }
+        stage2_two_axis::multiply(plan,a,unsigned(ma),b,unsigned(mb),dest,unsigned(count),unsigned(first),reverse_b);
+        if(host)CK(stage2_wait::copy(out.data()+i*count*w,dest,count*w*8,cudaMemcpyDeviceToHost));
+        if(check) {
+            const size_t stride=std::max(ma,mb)*w;
+            const auto verified=host ? verify_two_axis_product(L,wa+i*stride,ma,wb+i*stride,mb,
+                out.data()+i*count*w,first,count,false,false) :
+                verify_two_axis_product(L,a,ma,b,mb,dest,first,count,true,reverse_b);
+            C.two_axis_checked[category]+=verified.coefficients;
+        }
+        L.count_two_axis(plan,category,ma,mb,first,count);
+        L.cost.add(category,ma,mb);
+    }
+    // The resident tree can immediately refill its pinned metadata after this call.
+    if(!host)CK(cudaStreamSynchronize(nullptr));
+    C.two_axis_muls[category]+=nbatch;
+    L.muls+=nbatch;
+    L.slot_checks+=nbatch*count;
+    const double elapsed=now_s()-begin;
+    L.ntt_seconds+=elapsed;
+    if(st){*st=NttMulStats{};st->t_total_call=elapsed;}
+    return true;
 }
 
 void poly_mul_batch_modN(
@@ -229,6 +381,7 @@ void poly_mul_batch_modN(
                    resident->src_words>C.raw_capacity(resident->src) || resident->dst_words>C.raw_capacity(resident->dst))) {
         std::fprintf(stderr,"%s: FATAL: resident frontier is not owned raw staging\n",NTT_PROBE_NAME);std::exit(3);
     }
+    if(try_two_axis_product(L,wa,wb,ma,mb,nbatch,out,cat>=0?cat:L.cat,st_out,first,count,resident))return;
     const size_t original_P=std::max(ma,mb);
     const auto* fixed_b=resident ? resident->fixed_b : nullptr;
     const auto initial_spectrum_hits=fixed_b ? fixed_b->hits : 0;
@@ -692,7 +845,7 @@ void poly_mul_batch_modN(
     }
     ++L.ntt_launches;
     L.ntt_calls += nbatch;
-    L.count_ntt(qN,nbatch,nbatch/chunk+(nbatch%chunk!=0),fixed_b ? fixed_b->hits-initial_spectrum_hits : 0);
+    L.count_ntt(qN,nbatch,nbatch/chunk+(nbatch%chunk!=0),fixed_b ? fixed_b->hits-initial_spectrum_hits : 0,memory_category);
     L.muls += nbatch;
     L.t_fwd += st.t_fwd;
     L.t_inv += st.t_inv;

@@ -40,6 +40,7 @@ struct CurveProcessRequest {
     uint64_t owner_mb=0;
     bool pack_zero=0;
     bool weighted_ntt=false;
+    bool ntt_two_axis=true;
     std::string prediction_policy{};
     double ratio_adjust=0;
     std::string receipt{};

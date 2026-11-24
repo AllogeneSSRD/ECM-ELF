@@ -1036,6 +1036,15 @@ target = "gpu"  # string: [cpu|gpu]
 # 。没有缓存根表或直接设备打包的调用使用全长路径。OpenCL 不启用该 TOML 预设。命令行 --weighted-ntt
 # 0|1 优先。
 
+# ntt_two_axis = true  # bool: [false|true|0|1]
+# Enable two-axis NTT for eligible CUDA Stage2 products in the F and G trees, Newton inverse, H
+# fold, and descent. Eligibility requires a Mersenne carrier, a supported shape, and available
+# device memory. Single-axis NTT handles other products and legacy cost profiles. CLI --two-axis-ntt
+# 0|1 overrides this key. The setting is inactive on OpenCL.
+# 统一控制 CUDA Stage2 的 F 树、G 树、Newton 倒数、H fold 和下降是否使用双轴 NTT。双轴路径要求梅森承
+# 载、受支持的形状和可用显存。其余乘积及旧成本配置使用单轴。命令行 --two-axis-ntt 0|1 优先。此选项在
+# OpenCL 上不生效。
+
 # tune_stage1_cost_file = ""  # string: <path>
 # Checked completed CUDA Stage1 cost anchors, used after explicit seconds/curve and CSV. Matches
 # batch, modulus type and exponent; B1 and missing widths scale by B1 and the dispatched container

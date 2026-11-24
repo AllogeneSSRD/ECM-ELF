@@ -131,12 +131,13 @@ std::vector<std::vector<unsigned long long>> build_tree_flat(
             std::vector<unsigned long long> wa(nbatch * P * W, 0ull), wb(nbatch * P * W, 0ull);
             for (size_t s = 0; s < nbatch; ++s) {
                 const size_t i = g.second[s];
-                /* the operand lengths are the CHILDREN's own (the group key is normalised to
-                   (min,max) for the shape, so it must NOT be used to size the copies) */
-                const size_t na = deg[2 * i] + 1, nb2 = deg[2 * i + 1] + 1;
-                std::copy(t[2 * i].begin(), t[2 * i].begin() + (long)(na * W),
+                // Keep the slot order consistent with the normalized shape.
+                const size_t left=2*i, right=left+1;
+                const bool swap=deg[left]>deg[right];
+                const size_t a=swap?right:left,b=swap?left:right;
+                std::copy(t[a].begin(), t[a].begin() + (long)(ma * W),
                           wa.begin() + (long)(s * P * W));
-                std::copy(t[2 * i + 1].begin(), t[2 * i + 1].begin() + (long)(nb2 * W),
+                std::copy(t[b].begin(), t[b].begin() + (long)(mb * W),
                           wb.begin() + (long)(s * P * W));
             }
             std::vector<unsigned long long> res;

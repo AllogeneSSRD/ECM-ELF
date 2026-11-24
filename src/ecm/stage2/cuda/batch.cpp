@@ -155,6 +155,7 @@ BatchedRun run_batched(
         finv = cp_inv_series(revF, P + 1, L);
         L.cat = -1;
     }
+    if(L.s4) L.s4->release_two_axis();
     R.t_inv = now_s() - ti0;
     stage2_memory::snapshot("after_inverse");
     if(L.s4 && fuse_env_ull("NTT_REQUEST_AUDIT",0))
@@ -686,6 +687,7 @@ BatchedRun run_batched(
         c0=c1;
     }
     giant_loop.finish();
+    if(L.s4) L.s4->release_two_axis();
     stage2_two_axis::release(device_fold.two_axis);
     device_fold.f_spectrum.release();
     R.t_post_loop=now_s();

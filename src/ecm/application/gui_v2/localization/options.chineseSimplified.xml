@@ -13,7 +13,7 @@
       <Item id="option_stage1_handoff_mode" name="Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接收方。off 只保留存档，prime95 交给 Prime95。" />
       <Item id="option_stage1_handoff_unsupported" name="Prime95 协议不支持该存档时使用的后备方式。" />
       <Item id="option_shared_worktodo" name="共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2 和 ECMSTAGE2N 交给 Stage2。同一 worker 同时由一个进程消费队列。" />
-      <Item id="option_shared_b2_ratio" name="GPU Stage2 在队列及直接读档时将 B2 设为存档 B1 与非零比例的乘积。设为 0 时由其他设置选择 B2。乘积超出范围会报错。" />
+      <Item id="option_shared_b2_ratio" name="命令行、任务行和 b2 配置均未提供非零 B2 时，非零比例使用存档 B1 × ratio 作为上界。适用于队列及 GPU 直接读档。乘积超出范围会报错。" />
       <Item id="option_stage1_auto_stage2" name="Stage1 无因子完成后写入完成记录并生成 ECMSTAGE2 任务。目标为同一队列且未指定接收 worker 时，原位替换任务行。其他情况按 handoff_worktodo_file 和 handoff_workers 投递。" />
       <Item id="option_stage1_auto_stage2_workers" name="Stage2 接收 worker，可填 1..1000000 内的编号或闭区间。逗号分隔的每项可加位宽切片，如 2[:4096], 3[4096:]。按实际余因子位宽匹配，包含起点、排除终点。省略方括号、[]、[:] 都匹配任意位宽。选匹配候选中任务最少者，并列取较小编号。无匹配时保留源任务。同队列 auto 使用 worker_count 或已有分区，候选须读取该队列并允许 Stage2。外部队列 auto 优先采用已有分区。留空保留当前 worker。目标不可写时保留待投递记录。" />
       <Item id="option_stage1_auto_stage2_worktodo" name="auto_stage2=1 时的目标队列。留空使用当前 worker 生效的 shared worktodo_file；可填写绝对文件路径，或相对 ecm.toml 所在目录的文件名/路径。投递行中的 save 使用绝对路径。完成去重读取本 TOML 中接收 worker 的 stage2_finished；worker 分区可覆盖。" />
@@ -152,6 +152,7 @@
       <Item id="option_stage2_stage2_low_cpu_wait" name="可选低CPU策略：CUDA设备阻塞调度（4）配合事件退避轮询；同步读回保持原路径，可能增加耗时。&#10;默认false：自动调度（0）和原生事件等待。命令行--low-cpu-wait 0|1优先，FIFO回收独立生效。&#10;显式配置设置NTT_CUDA_WAIT_MODE、NTT_HOST_EVENT_WAIT，并关闭NTT_HOST_READBACK_WAIT。&#10;未配置时保留专家环境覆盖；读回前休眠可单独实验。" />
       <Item id="option_stage2_stage2_pack_zero" name="每个操作数用一个 GPU 内核完成 digit 打包和补零，覆盖连续输入、设备驻留 gather 及反向输入。其余形状使用原打包路径。命令行 --pack-zero 优先于本键。旧 .cprof 成本配置默认使用 false，显式配置时也须设为 false。" />
       <Item id="option_stage2_stage2_weighted_ntt" name="生产 CUDA 后端可启用的多项式卷积。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用 pack_zero。没有缓存根表或直接设备打包的调用使用全长路径。OpenCL 不启用该 TOML 预设。命令行 --weighted-ntt 0|1 优先。" />
+      <Item id="option_stage2_stage2_ntt_two_axis" name="统一控制 CUDA Stage2 的 F 树、G 树、Newton 倒数、H fold 和下降是否使用双轴 NTT。双轴路径要求梅森承载、受支持的形状和可用显存。其余乘积及旧成本配置使用单轴。命令行 --two-axis-ntt 0|1 优先。此选项在 OpenCL 上不生效。" />
       <Item id="option_stage2_stage1_tune_profile" name="已核验的完整 CUDA Stage1 成本锚点，优先级低于显式秒/曲线和 CSV。匹配批次、模数类型和指数模式；B1 与缺失位宽按 B1 和容器位宽平方估算。设备及运行时复用遵守 tune_ignore；此文件不启动 Stage1。" />
       <Item id="option_stage2_stage2_auto_min_b2" name="Auto B2 搜索下界；0 为 B1+1。未测值允许估算，显式任务 B2 优先。" />
       <Item id="option_stage2_stage2_auto_max_b2" name="Auto B2 搜索上界；0 为 2.6e12。未测值允许估算，显式任务 B2 优先。" />

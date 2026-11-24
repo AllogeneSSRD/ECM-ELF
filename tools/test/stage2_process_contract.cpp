@@ -68,6 +68,7 @@ int main(int argc,char **argv) {
         r.save=out/"point with spaces.save";r.results=out/"internal.jsonl";
         r.record={47,98432,7};r.console_budget={128,32};r.b2=40000;r.d=210;r.batch=16;r.device=9999;r.worker=2;
         r.carrier_exponent=127;r.has_carrier=true;r.short_batch_tune=true;r.pack_zero=true;r.weighted_ntt=true;
+        r.ntt_two_axis=false;
         r.tune_runtime=true;r.runtime_samples=10;r.runtime_remaining=3;r.runtime_prepare_cache=true;
         r.runtime_prepare_hints="prepare";r.runtime_route_hints="route";
         r.tune_profile="profile with spaces.toml";r.tune_ignore="gpu,driver";
@@ -104,6 +105,7 @@ int main(int argc,char **argv) {
                     std::string("wire:--short-calibration\nwire:0"),std::string("wire:--record-offset\nwire:47"),
                     std::string("wire:--record-hash\nwire:98432"),std::string("wire:--device\nwire:9999"),
                     std::string("wire:--weighted-ntt\nwire:1"),
+                    std::string("wire:--two-axis-ntt\nwire:0"),
                     std::string("wire:--known-factor\nwire:101"),std::string("wire:--known-factor\nwire:103"),
                     std::string("fixture stderr tail"),std::string("fixture stdout tail")})
                 require(log.find(value)!=log.npos,"wire quoting/options or final drain changed");
@@ -179,7 +181,7 @@ int main(int argc,char **argv) {
         require(SetEvent(publish.value)!=0,"cannot resume fixture publication");
         require(WaitForSingleObject(pipeline.handle(),5000)==WAIT_OBJECT_0,"fixture worker did not finish");
         require(pipeline.poll().value_or(-1)==0,"pipeline fixture failed");
-        std::cout<<"{\"passed\":true,\"processes\":6,\"wire_checks\":47,\"cuda_devices\":0,\"engine_links\":0}\n";
+        std::cout<<"{\"passed\":true,\"processes\":6,\"wire_checks\":48,\"cuda_devices\":0,\"engine_links\":0}\n";
         return 0;
     }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}
 }

@@ -57,12 +57,12 @@ __global__ void transpose_forward(const Word* input, Word* output, unsigned ly,
 template<bool Radix3>
 __global__ void transpose_inverse(const Word* input, Word* output, unsigned ly,
                                   unsigned k, unsigned output_rows, unsigned frequencies,
-                                  const Word* twiddle, Word zeta) {
+                                  const Word* twiddle, Word zeta, unsigned first = 0) {
     constexpr unsigned planes = Radix3 ? 3 : 1;
     __shared__ Word tile[planes][32][33];
     const unsigned j = blockIdx.x * 32 + threadIdx.x;
     const unsigned frequency = blockIdx.y * 32 + threadIdx.y;
-    const unsigned used = min(k, output_rows);
+    const unsigned used = first ? k : min(k, output_rows);
     for (unsigned offset = 0; offset < 32; offset += 8) {
         if (j >= used || frequency + offset >= frequencies) continue;
         const auto* row = input + size_t(frequency + offset) * planes * k + j;
@@ -83,17 +83,19 @@ __global__ void transpose_inverse(const Word* input, Word* output, unsigned ly,
         if (col_out >= frequencies || row_out + offset >= used) continue;
         for (unsigned plane = 0; plane < planes; ++plane) {
             const unsigned row = plane * k + row_out + offset;
-            if (row < output_rows)
-                output[size_t(row) * ly + col_out] = tile[plane][threadIdx.x][threadIdx.y + offset];
+            if (row >= first && row - first < output_rows)
+                output[size_t(row - first) * ly + col_out] = tile[plane][threadIdx.x][threadIdx.y + offset];
         }
     }
 }
 
 __global__ __launch_bounds__(FUSE_TILE_THREADS)
 void pack_forward(const Word* input, Word* output, unsigned words, unsigned length,
-                  unsigned bits, const mersenne::WeightedDigit* digits, const Word* table) {
+                  unsigned bits, const mersenne::WeightedDigit* digits, const Word* table,
+                  unsigned reverse_rows = 0) {
     extern __shared__ Word shared[];
-    const auto* row = input + size_t(blockIdx.x) * words;
+    const unsigned row_index = reverse_rows ? reverse_rows - 1 - blockIdx.x : blockIdx.x;
+    const auto* row = input + size_t(row_index) * words;
     for (unsigned i = threadIdx.x; i < length; i += blockDim.x) {
         const auto digit = digits[i];
         const unsigned limb = digit.bit / 64, offset = digit.bit % 64;

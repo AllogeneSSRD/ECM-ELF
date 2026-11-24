@@ -1241,6 +1241,19 @@ static std::optional<ParallelRoute> admit_parallel_route(Options o,const Record 
     const auto peak=u64(plan_scalar(memory,"peak_bytes"),"curve memory peak");
     const auto headroom=std::max(uint64_t(256)<<20,peak/8);
     if(!required || required>UINT64_MAX-headroom)return std::nullopt;
+    auto reservation=required+headroom;
+    if(shape.carrier && o.ntt_two_axis) {
+        // Giant-tree and fold workspaces can coexist. Each concurrent worker
+        // needs room for its optional CUDA allocations in addition to the
+        // regular route reservations.
+        for(const char* key:{"NTT_S4_FOLD_TWO_AXIS_MIB","NTT_S4_TWO_AXIS_MIB"}) {
+            const char* value=std::getenv(key);
+            if(!value)continue;
+            const auto mib=ecm_stage2::cost::integer(value);
+            if(mib>((UINT64_MAX-reservation)>>20))return std::nullopt;
+            reservation+=mib<<20;
+        }
+    }
     const auto baby=u64(plan_scalar(memory,"baby_headroom_bytes"),"pre-F-tree memory requirement");
     const auto initial=u64(plan_scalar(memory,"initial_peak_bytes"),"initial memory peak");
     const auto preparation=std::max(baby,initial);
@@ -1270,7 +1283,7 @@ static std::optional<ParallelRoute> admit_parallel_route(Options o,const Record 
     o.runtime_prepare_cache=false;o.runtime_prepare_hints.clear();o.runtime_route_hints.clear();
     o.queue_workspace_lease=o.parallel_workspace==2?2:0;
     return ParallelRoute{std::move(o),shape,std::move(condition),key.str(),device,
-        required+headroom,preparation+parallel_memory_margin};
+        reservation,preparation+parallel_memory_margin};
 }
 #endif
 
@@ -1284,6 +1297,7 @@ std::optional<ParallelRoute> prepare_parallel_route(Options o,const Record &r,bo
     const bool fixed_d=o.has_d && o.d;
     if(o.parallel==ParallelMode::paired)o.tune_runtime=false;
     configure_weighted_ntt(o);
+    configure_two_axis_ntt(o);
     configure_short_ntt_batches(o);
     const auto selection=select_tuned(o,r);
     const bool measured=selection.find("\"source\":")!=selection.npos && plan_scalar(selection,"source")=="\"measured\"";
@@ -2484,6 +2498,7 @@ std::string select_auto(Options &o,const Record &r,bool apply) {
     require("NTT_S4_SHORT_PRODUCT",0,0);
     require("NTT_S4_FOLD_SPECTRUM_MIB",0,0);
     require("NTT_S4_FOLD_TWO_AXIS_MIB",0,0);
+    require("NTT_S4_TWO_AXIS_MIB",0,0);
     require("NTT_S4_BATCH_MB",64,64);require("NTT_DEVICE_GLEAF_MAX_MB",512,512);
     require("NTT_GIANT_CHAIN_BLOCK",64,64);require("NTT_GIANT_CHAIN_MIN",profile.chain_min,profile.chain_min);
     require("NTT_GIANT_CHAIN_SMALL_BLOCK",0,0); // Not covered by current v2 cost profiles.

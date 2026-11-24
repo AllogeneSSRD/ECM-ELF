@@ -152,6 +152,7 @@ inline constexpr bool stage2_stage2_short_ntt_batch_tune=false;
 inline constexpr bool stage2_stage2_low_cpu_wait=false;
 inline constexpr bool stage2_stage2_pack_zero=true;
 inline constexpr bool stage2_stage2_weighted_ntt=false;
+inline constexpr bool stage2_stage2_ntt_two_axis=true;
 inline constexpr char stage2_stage1_tune_profile[]="";
 inline constexpr uint64_t stage2_stage2_auto_min_b2=0;
 inline constexpr uint64_t stage2_stage2_auto_max_b2=0;

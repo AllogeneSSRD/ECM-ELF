@@ -189,7 +189,8 @@ Stage2 与 Stage1 共用 `[shared]` 的 `worktodo_file`、`finished_file` 和 `l
 - `real_shape`：B1/B2、算术位宽、D/P、baby/giant 数及 G 批次数。
 - `mem`：设备 free/total、reserve 和 arena cap；预计最大变换及树顶形状。
 - 曲线结束的 `arena=a/b fold=a/b`：a 为实际完整 NTT 池峰值或启用 fold owner 占用；fold 回退时 a=0。b 保留读取的 TOML 值，可能与 CLI/环境覆盖后的有效预算不同。
-- `ntt_length_counts=1`（默认 0，CLI `--ntt-counts` 可覆盖）在曲线结束时输出各长度的卷积、正向和逆向次数，并保留 `ntt_length_counts` 兼容行。正向列扣除复用的频谱。`ntt_work` 的工作量和计数边界见 [NTT](../architecture/NTT.md#实际运行的长度与运算量)。
+- `ntt_length_counts=1`（默认 0，CLI `--ntt-counts` 可覆盖）在曲线结束时输出各长度的卷积、正向和逆向次数，并保留 `ntt_length_counts` 兼容行。正向列扣除复用的频谱。分阶段的 `ntt_phase_row` 同时记录单轴和双轴各轴。工作量和计数边界见 [NTT](../architecture/NTT.md#实际运行的长度与运算量)。
+- `[stage2] ntt_two_axis = true` 是 CUDA 默认值，统一控制 F 树、G 树、Newton 倒数、H fold 和下降。设为 `false` 可在这五个阶段使用原有单轴路径。命令行 `--two-axis-ntt 0|1` 优先。[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_ntt_two_axis)
 - `stage2_full_wall.total`：完整引擎 init+main，排除 Stage1 与自动 D 扫描。外层 result/curve_done 还含进程和发布结果等开销。
 - 运行时调优摘要只有成功补充缺失算术位宽/执行区间摘要时输出，包含位宽、算术家族、D/B2与实测/预测比值。默认采集已执行的干净完整曲线，可用`tune_runtime_enabled=false`关闭；完整规则见[运行补充](../architecture/AUTO_B2.md#正常运行补充缺失位宽)。
 

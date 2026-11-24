@@ -139,6 +139,9 @@ CPoly cp_inv_series(const CPoly &a,size_t k,PolyLayer &L)
     }
     while (g.size() < k) {
         const size_t nxt = std::min(2 * g.size(), k);
+        // Newton precision only grows. Retire the previous level before
+        // making room for the two products at the new precision.
+        if(L.cat==BC_FINV && L.s4) L.s4->release_two_axis();
         const CPoly at(a.begin(), a.begin() + (long)std::min(a.size(), nxt));
         CPoly ag = cp_mul(at, g, L, nxt);
         cp_resize(ag, nxt, W);                        /* mod X^nxt */
@@ -446,40 +449,6 @@ std::vector<unsigned long long> FoldDeviceState::read(size_t offset,size_t count
     stats->d2h_bytes+=v.size()*8;stats->t_readback+=now_s()-begin;return v;
 }
 
-static void check_two_axis(FoldDeviceState& state, size_t a, size_t ma, size_t b, size_t mb,
-                           const unsigned long long* out, size_t count)
-{
-    // Small checks cover the whole low product. Wide checks include both
-    // endpoints and an interior sum with many distinct coefficient pairs.
-    const size_t samples=count<=64 ? count : 3;
-    const auto w=state.W;
-    mpz_t x,y,expected,actual;
-    mpz_inits(x,y,expected,actual,nullptr);
-    std::vector<unsigned long long> result(w);
-    for(size_t s=0;s<samples;++s) {
-        const size_t i=samples<=1 ? 0 : s*(count-1)/(samples-1);
-        const size_t lo=i>=mb ? i-mb+1 : 0, hi=std::min(i,ma-1);
-        const size_t terms=hi-lo+1;
-        auto lhs=state.read(a+lo*w,terms), rhs=state.read(b+(i-hi)*w,terms);
-        mpz_set_ui(expected,0);
-        for(size_t j=0;j<terms;++j) {
-            words_to_mpz(x,lhs.data()+j*w,w);
-            words_to_mpz(y,rhs.data()+(terms-1-j)*w,w);
-            mpz_addmul(expected,x,y);
-        }
-        mpz_mod(expected,expected,state.layer->N);
-        CK(stage2_wait::copy(result.data(),out+i*w,w*8,cudaMemcpyDeviceToHost));
-        state.stats->d2h_bytes+=w*8;
-        words_to_mpz(actual,result.data(),w);
-        if (mpz_cmp(expected,actual)!=0) {
-            std::fprintf(stderr,"FATAL: Stage2 two-axis GMP mismatch ma=%zu mb=%zu index=%zu\n",ma,mb,i);
-            std::exit(3);
-        }
-        ++state.stats->two_axis_checked;
-    }
-    mpz_clears(x,y,expected,actual,nullptr);
-}
-
 void FoldDeviceState::mul(size_t a,size_t ma,size_t b,size_t mb,size_t dest,size_t count,NttFixedSpectrum *fixed)
 {
     if (two_axis_limit && !two_axis) {
@@ -496,7 +465,12 @@ void FoldDeviceState::mul(size_t a,size_t ma,size_t b,size_t mb,size_t dest,size
         const double begin=now_s();
         auto* out=memory.data[1]+dest;
         stage2_two_axis::multiply(*two_axis,memory.data[0]+a,unsigned(ma),memory.data[0]+b,unsigned(mb),out,unsigned(count));
-        if(two_axis_check)check_two_axis(*this,a,ma,b,mb,out,count);
+        if(two_axis_check) {
+            const auto checked=verify_two_axis_product(*layer,memory.data[0]+a,ma,memory.data[0]+b,mb,out,0,count,true,false);
+            stats->two_axis_checked+=checked.coefficients;
+            stats->d2h_bytes+=checked.read_bytes;
+        }
+        layer->count_two_axis(*two_axis,BC_FOLD,ma,mb,0,count);
         flat->t_multiply+=now_s()-begin;
         ++flat->muls;++stats->muls;++stats->two_axis_muls;
         stats->avoided_h2d_bytes+=8ull*(ma+mb)*W;

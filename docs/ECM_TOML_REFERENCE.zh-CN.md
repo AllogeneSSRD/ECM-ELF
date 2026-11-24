@@ -1286,6 +1286,18 @@ ntt_length_counts = false
 
 生产 Stage2 每条曲线结束时输出 NTT 长度计数表：1 开启，0 关闭采集与输出。统计数学变换次数，每次卷积含两个正向与一个逆向；包含多项式初始化及主计算，不含 Stage1 或底层独立算术自检。Edwards/Montgomery 通用，不增加设备计数或额外同步。CLI --ntt-counts 覆盖选定 worker 的 TOML。
 
+<a id="stage2_ntt_two_axis"></a>
+
+### ntt_two_axis
+
+```toml
+ntt_two_axis = true
+```
+
+类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] ntt_two_axis` · 级别 `高级`。
+
+统一控制 CUDA Stage2 的 F 树、G 树、Newton 倒数、H fold 和下降是否使用双轴 NTT。双轴路径要求梅森承载、受支持的形状和可用显存。其余乘积及旧成本配置使用单轴。命令行 --two-axis-ntt 0|1 优先。此选项在 OpenCL 上不生效。
+
 <a id="stage2_opencl_point_chunk"></a>
 
 ### opencl_point_chunk

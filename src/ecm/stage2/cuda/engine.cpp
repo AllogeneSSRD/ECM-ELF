@@ -495,6 +495,7 @@ int run_real(
         stage2_log::phase("Build baby-point F tree");
         stage2_memory::snapshot("before_ftree");
         Ft = build_tree_flat(L, leaf, Fdeg, Fpad, fs, BC_FTREE);
+        if(L.s4) L.s4->release_two_axis();
         s4_oracle_drain(red);    /* include final F-tree validation in its phase timer */
         fdeg = Fdeg[1];
         if(real_dump && *real_dump) {
@@ -664,9 +665,15 @@ int run_real(
             (int)BR.fold_flat.enabled,BR.fold_flat.folds,BR.fold_flat.muls,BR.fold_flat.sub_coeffs,BR.fold_flat.peak_bytes,
             BR.fold_flat.t_prepare,BR.fold_flat.t_multiply,BR.fold_flat.t_subtract,BR.fold_flat.t_bridge);
         const auto &fd=BR.fold_device;
-        if (fuse_env_ull("NTT_S4_FOLD_TWO_AXIS_MIB",0))
+        if (L.carrier_exponent && fuse_env_ull("NTT_S4_FOLD_TWO_AXIS_MIB",0))
             stage2_log::print(stage2_log::phases,"stage2_fold_two_axis: status=%s muls=%llu bytes=%llu gmp_checked=%llu\n",
                 fd.two_axis_status,fd.two_axis_muls,fd.two_axis_bytes,fd.two_axis_checked);
+        if (L.carrier_exponent && fuse_env_ull("NTT_S4_TWO_AXIS_MIB",0)) {
+            stage2_log::print(stage2_log::phases,"stage2_two_axis_workspace: peak_bytes=%zu\n",s4.two_axis_peak);
+            for(int phase=0;phase<BC_NCAT;++phase) if(phase!=BC_FOLD)
+                stage2_log::print(stage2_log::phases,"stage2_two_axis_phase: phase=%s muls=%llu gmp_checked=%llu\n",
+                    kBatchedCat[phase],s4.two_axis_muls[phase],s4.two_axis_checked[phase]);
+        }
         stage2_log::print(stage2_log::phases, "real_batched_folddevice: requested=%d enabled=%d fallback=%s folds=%llu muls=%llu sub_coeffs=%llu peak_bytes=%llu h2d_bytes=%llu d2h_bytes=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu checked_words=%llu setup=%.6f upload=%.6f reverse=%.6f subtract=%.6f readback=%.6f reuse=%u layout_bytes=%llu saved_bytes=%llu\n",
             (int)fd.requested,(int)fd.enabled,fd.fallback.c_str(),fd.folds,fd.muls,fd.sub_coeffs,fd.peak_bytes,
             fd.h2d_bytes,fd.d2h_bytes,fd.avoided_h2d_bytes,fd.avoided_d2h_bytes,fd.checked_words,

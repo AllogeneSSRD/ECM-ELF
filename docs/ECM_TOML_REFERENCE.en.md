@@ -1285,6 +1285,18 @@ Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] ntt_lengt
 
 Print a per-curve NTT length count table at the end of production Stage2: 1 enables; 0 disables collection and output. Counts mathematical transforms (two forwards and one inverse per convolution), including polynomial initialization and main work, excluding Stage1 and independent arithmetic selftests. Shared by Edwards and Montgomery; no GPU counters or extra synchronization. CLI --ntt-counts overrides the selected worker TOML.
 
+<a id="stage2_ntt_two_axis"></a>
+
+### ntt_two_axis
+
+```toml
+ntt_two_axis = true
+```
+
+Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] ntt_two_axis` · Level `advanced`.
+
+Enable two-axis NTT for eligible CUDA Stage2 products in the F and G trees, Newton inverse, H fold, and descent. Eligibility requires a Mersenne carrier, a supported shape, and available device memory. Single-axis NTT handles other products and legacy cost profiles. CLI --two-axis-ntt 0|1 overrides this key. The setting is inactive on OpenCL.
+
 <a id="stage2_opencl_point_chunk"></a>
 
 ### opencl_point_chunk

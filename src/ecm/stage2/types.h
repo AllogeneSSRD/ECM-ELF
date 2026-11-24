@@ -113,6 +113,7 @@ struct Options {
     bool short_batch_tune=false;
     bool pack_zero=ecm_config::defaults::stage2_stage2_pack_zero;
     bool weighted_ntt=ecm_config::defaults::stage2_stage2_weighted_ntt;
+    bool ntt_two_axis=ecm_config::defaults::stage2_stage2_ntt_two_axis;
     bool tune_runtime=ecm_config::defaults::stage2_stage2_tune_runtime;
     ParallelMode parallel=ParallelMode(ecm_config::defaults::stage2_stage2_parallel);
     unsigned parallel_workspace=ecm_config::defaults::stage2_stage2_parallel_workspace;

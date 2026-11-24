@@ -132,6 +132,7 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
     arg(L"--short-ntt-batch-tune",o.short_batch_tune?1:0);
     arg(L"--pack-zero",o.pack_zero?1:0);
     if(o.weighted_ntt)arg(L"--weighted-ntt",1);
+    arg(L"--two-axis-ntt",o.ntt_two_axis?1:0);
     arg(L"--tune-runtime",o.tune_runtime?1:0);
     if(o.fixed_queue_route)cmd+=L" --fixed-queue-route";
     if(o.queue_requested_b2)arg(L"--queue-requested-b2",o.queue_requested_b2);
@@ -292,7 +293,8 @@ void CurveProcess::Impl::line(const std::string &text,bool error,std::ofstream &
        (gui_detail || error || (stage2_log::enabled(stage2_log::phases)&&(milestone||tune_update)) ||
        ((stage2_log::enabled(stage2_log::curve)||o.gui_events)&&(result || text.rfind("stage2_relocation:",0)==0)) ||
        stage2_log::enabled(stage2_log::batches) ||
-       (o.ntt_counts && (text.rfind("ntt_count_",0)==0 || text.rfind("ntt_length_counts:",0)==0 || text.rfind("ntt_work:",0)==0)) ||
+       (o.ntt_counts && (text.rfind("ntt_count_",0)==0 || text.rfind("ntt_length_counts:",0)==0 ||
+                         text.rfind("ntt_phase_row:",0)==0 || text.rfind("ntt_work:",0)==0)) ||
        text.find("WARNING")!=text.npos)){
         if(tagged)console_line(text,error);
         else (error?std::cerr:std::cout)<<text<<std::endl;
