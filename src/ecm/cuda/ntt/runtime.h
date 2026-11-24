@@ -63,6 +63,7 @@ struct NttShape;
 struct NttShapeCacheEntry;
 struct NttPassResult;
 struct NttReduceHook;
+enum class NttRightSpectrum { None, Build, Reuse };
 struct NttInputHook;
 extern FuseBaseStats g_fuse_base;
 unsigned int ntt_gl_reduce_requested_mode();
@@ -177,7 +178,8 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                                     std::vector<unsigned long long> *hfb,
                                     std::vector<unsigned long long> *hPre,
                                     std::vector<unsigned long long> *hPost,
-                                    bool need_hout = true, bool defer_res = false, NttArena *arena=nullptr);
+                                    bool need_hout = true, bool defer_res = false, NttArena *arena=nullptr,
+                                    NttRightSpectrum right_spectrum=NttRightSpectrum::None);
 void ntt_pass_read_marks(NttPassResult &r, double *t_fwd, double *t_inv, double *t_chk,
                          double *t_combined);
 bool ntt_hook_window(const NttReduceHook *hook, unsigned long long slots,
@@ -577,11 +579,27 @@ struct NttReduceHook {
     unsigned long long first = 0, count = ~0ull;
 };
 
+// One immutable operand owned by the caller, including its zero padding.
+struct NttFixedSpectrum {
+    unsigned long long *data = nullptr;
+    size_t capacity = 0, limit = 0;
+    unsigned long long n = 0, slot_words = 0, coefficients = 0;
+    int bpw = 0;
+    unsigned long long builds = 0, hits = 0;
+    NttFixedSpectrum() = default;
+    NttFixedSpectrum(const NttFixedSpectrum&) = delete;
+    NttFixedSpectrum& operator=(const NttFixedSpectrum&) = delete;
+    ~NttFixedSpectrum();
+    void release();
+};
+
 struct NttInputHook {
     void *ctx = nullptr;
     int (*run)(void *ctx, const NttShape &shape, unsigned long long nbatch,
                unsigned long long *dA, unsigned long long *dB) = nullptr;
     bool accepts_weighted = false;
+    NttFixedSpectrum *fixed_b = nullptr;
+    unsigned long long fixed_b_coefficients = 0;
 };
 
 NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,

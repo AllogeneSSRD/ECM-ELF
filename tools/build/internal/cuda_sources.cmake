@@ -131,6 +131,7 @@ set(ECM_STAGE2_ENGINE_SOURCES
     src/ecm/stage2/cuda/product.cpp
     src/ecm/stage2/cuda/tree.cpp
     src/ecm/stage2/cuda/remainder.cpp
+    src/ecm/stage2/cuda/device/two_axis.cu
     src/ecm/stage2/cuda/s4.cpp
     src/ecm/stage2/cuda/factors.cpp
     src/ecm/stage2/cuda/checks.cpp

@@ -103,6 +103,8 @@ FoldDeviceState::~FoldDeviceState()
 
 void FoldDeviceState::release()
 {
+    stage2_two_axis::release(two_axis);
+    f_spectrum.release();
     memory.release();
     if(map){CK(cudaFree(map));map=nullptr;}
     if(length){CK(cudaFree(length));length=nullptr;}

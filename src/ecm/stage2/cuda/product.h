@@ -73,7 +73,8 @@ struct PolyLayer : ecm_stage2::ModulusContext {
     unsigned long long ntt_calls = 0, muls = 0, slot_checks = 0;
     ecm_stage2::NttLengthCounts ntt_lengths;
     unsigned long long short_batch_changed=0;
-    void count_ntt(unsigned long long n,unsigned long long pairs,unsigned long long chunks);
+    void count_ntt(unsigned long long n,unsigned long long pairs,unsigned long long chunks,
+                   unsigned long long reused_forwards=0);
     void print_ntt_lengths()const;
     /* slice S4: batched multiplies are ONE launch for `nbatch` poly multiplies, so the launch
        count is reported separately from the multiply count (which keeps the S3 numbers
@@ -155,6 +156,7 @@ struct S4DeviceBatch {
     size_t src_words=0,dst_words=0,nbatch=0;
     const S4ResidentOwner *owner=nullptr; // nullptr = the original exclusive raw frontier lease
     bool reverse_b=false; // scaled sibling input stays in ordinary host order
+    NttFixedSpectrum *fixed_b=nullptr; // private to one immutable resident operand
 };
 
 struct S4GatherPack {

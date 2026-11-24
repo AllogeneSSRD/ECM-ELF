@@ -152,6 +152,12 @@ Stage2 将 S-bit 系数放入足够宽的 Kronecker 槽。最大 operand 含 A �
 
 工作量约为三次 O(L log₂L) 变换加 O(L) pointwise/carry、pack 和系数归约。每 butterfly 的访存/指令取决于融合层数、shared 布局和根缓存；该渐近式不能直接换算 GPU 周期数。
 
+驻留 fold 或下降可通过 `NTT_S4_SHORT_PRODUCT=1` 用输出窗口上界 `first+count` 裁掉两端输入中更高次的系数。有效操作数长度为 `ma`、`mb` 时，线性 NTT 以 `ceil((ma+mb)/2)` 作为对称槽规划的长度，保留完整的有效输入和零填充。每个卷积槽的叠加项上界仍然安全，结果继续交给原有 carry 和 S4。只有较小的槽需求跨过变换或 digit 选型边界时，NTT 才会缩短。
+
+驻留 H fold 可通过 `NTT_S4_FOLD_SPECTRUM_MIB` 为固定 F 缓存一个频谱。其键包含变换长度、digit 位数、槽宽和实际 F 系数数目。命中时跳过 F 的打包和正变换，逆变换读取该只读频谱。该缓存与通用工作区独立，超预算或显存不足时按普通乘法处理，在进入下降阶段前释放。[CUDA NTT 环境变量](../usage/ENVIRONMENT_CUDA_NTT.md#多项式分块卷积与归约)
+
+驻留 H fold 可通过 `NTT_S4_FOLD_TWO_AXIS_MIB` 启用梅森承载的双轴 NTT。它用短加权系数轴和独立的线性多项式轴完成设备乘法，直接写回 S4 owner 的规范 64 位 limb。固定计划的线性空间按两个最多 P+1 项的输入建立，低积只写所需系数。双轴工作区按曲线单独准入与复用，优先于单轴 F 频谱。F/G 树、Newton 逆和下降继续使用常规多项式层。双轴乘法由 `stage2_fold_two_axis` 单独计数，单轴 `ntt_count_table` 覆盖常规多项式层。[CUDA NTT 环境变量](../usage/ENVIRONMENT_CUDA_NTT.md#多项式分块卷积与归约)
+
 独立生产程序默认使用pack/zero融合：`pack_zero=true`，可用false或`--pack-zero 0`关闭；共享及 Worker TOML 用法见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#pack_zero)。普通上传、resident gather及reverse-B按最终digit地址一次覆盖完整工作区，融合有效digit写入与所有补零；无需额外设备数据数组，不改变数学NTT或carry/归约。驱动把解析值传入曲线及tune子进程，底层探针仍使用显式`NTT_S4_PACK_ZERO=0|1`。索引合同、两卡450条正式曲线、复测和默认资格统一见[准备与同步](../performance/STAGE2_PREPARATION.md#packzero-融合路径)，共享内核位于[s4_input_pack.cuh](../../src/ecm/stage2/cuda/device/pack.cuh)。
 
 ## Carry 的完整 digit 检查
@@ -210,17 +216,17 @@ NTT pool 保留最大工作区容量，shape 小缓冲/表按键缓存。非导�
 
 生产 Stage2 通过 `ntt_length_counts=1` 开启按长度计数，默认 0，关闭时不采集或输出长度表；CLI `--ntt-counts 0|1` 覆盖选定 worker 的 TOML。Edwards/Montgomery 使用相同入口。实验引擎不支持此选项，开启时报错。
 
-开启后每条曲线结束输出 `ntt_count_table` 表，按长度升序列出 length、log2、convolutions、forward、inverse、total。每个 batch 成员独立计数，每次卷积含两个正向与一个逆向，因此 forward=2·convolutions、inverse=convolutions、total=3·convolutions。Graph 重放和物理分块不改变数学变换数；它不是 CUDA kernel 启动数。表显式开启后在 quiet 控制台也输出，正常日志中保留一份。
+开启后每条曲线结束输出 `ntt_count_table` 表，按长度升序列出 length、log2、convolutions、forward、inverse、total。每个 batch 成员独立计数。一次卷积计一个逆向，正向从每次两次减去该长度上复用的频谱数。Graph 重放和物理分块沿用同样的计数规则。表显式开启后在 quiet 控制台也输出，正常日志中保留一份。
 
 加权后端继续按等价的全长卷积请求计入长度表，另用 `weighted_ntt` 记录实际执行的加权卷积数。
 
 兼容行 `ntt_length_counts: log2_length:num_of_ntt` 按 k 升序列出 **L=2ᵏ 的独立数学变换数**；debug 另输出按长度的卷积数。消费旧直方图的分析工具仍可读取此行，新运行需要显式开启上述选项。
 
-同一张表的 `ntt_work` 汇总卷积数、数学变换数、S4分块数及下列逻辑工作量。对各长度的卷积数 cₖ：
+同一张表的 `ntt_work` 汇总卷积数、数学变换数、S4 分块数及下列逻辑工作量。设长度 2ᵏ 的 `total` 列为 tₖ。
 
-- transforms=3·Σcₖ。
-- elements=3·Σ(cₖ·2ᵏ)：全部正向/逆向处理的元素总数。
-- logical_radix2_butterflies=(3/2)·Σ(cₖ·2ᵏ·k)：等价 radix2 蝶形数量；融合 radix 实际指令数不等于此数。
+- transforms=Σtₖ。
+- elements=Σ(tₖ·2ᵏ)，为全部正向和逆向处理的元素总数。
+- logical_radix2_butterflies=Σ(tₖ·2ᵏ·k)/2，为等价的 radix-2 蝶形数。
 
 计数包含经过多项式层的 F/G 树、inverse、fold和下降请求；不包含底层算术自检内部独立发起的变换，也不含 Stage1。每个生产 worker 进程处理一条曲线，多曲线 save 逐条输出各自的表，每条都包含本曲线初始化，不是整份 save 的累计表。缓存工作区容量、batch×length 与单条长度分别记录，不能互相替代。
 

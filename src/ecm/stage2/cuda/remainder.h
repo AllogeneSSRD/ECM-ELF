@@ -3,6 +3,7 @@
 #include "product.h"
 
 #include "plain_scale.h"
+#include "two_axis.h"
 
 struct FoldFlatStats {
     bool enabled=false;
@@ -26,6 +27,9 @@ struct FoldDeviceStats {
     std::string fallback="none";
     unsigned long long folds=0,muls=0,sub_coeffs=0,peak_bytes=0,h2d_bytes=0,d2h_bytes=0;
     unsigned long long avoided_h2d_bytes=0,avoided_d2h_bytes=0,checked_words=0;
+    unsigned long long spectrum_builds=0,spectrum_hits=0,spectrum_peak_bytes=0;
+    unsigned long long two_axis_muls=0,two_axis_bytes=0,two_axis_checked=0;
+    const char* two_axis_status="off";
     bool root_requested=false;
     unsigned long long root_device_trees=0,root_device_words=0,root_checked_words=0;
     unsigned long long root_h2d_avoided=0,root_d2h_avoided=0,root_digest_words=0,root_digest[2]={0,0};
@@ -35,6 +39,10 @@ struct FoldDeviceStats {
 
 struct FoldDeviceState {
     S4ResidentOwner memory;
+    NttFixedSpectrum f_spectrum;
+    stage2_two_axis::FoldWorkspace* two_axis=nullptr;
+    size_t two_axis_limit=0;
+    bool two_axis_check=false;
     unsigned long long *map=nullptr,*length=nullptr,*modulus=nullptr,*digest=nullptr;
     PolyLayer *layer=nullptr;FoldDeviceStats *stats=nullptr;FoldFlatStats *flat=nullptr;
     size_t P=0,W=0,hcount=0,gcount=0,f=0,inv=0,h=0,g=0,reverse=0,t=0,q=0,qb=0;
@@ -50,7 +58,7 @@ struct FoldDeviceState {
     void accept_device_root(const unsigned long long *src,size_t count,bool seed_root);
     void seed(const std::vector<unsigned long long> &H);
     std::vector<unsigned long long> read(size_t offset,size_t count);
-    void mul(size_t a,size_t ma,size_t b,size_t mb,size_t dest,size_t count);
+    void mul(size_t a,size_t ma,size_t b,size_t mb,size_t dest,size_t count,NttFixedSpectrum *fixed=nullptr);
     void reverse_copy(size_t src,size_t top,size_t count);
     void step(const std::vector<unsigned long long> &G);
     void step_loaded(size_t ng,const std::vector<unsigned long long> *host_G=nullptr);

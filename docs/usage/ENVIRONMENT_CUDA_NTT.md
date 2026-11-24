@@ -65,6 +65,10 @@
 | `NTT_S4_PACK_DIRECT`、`NTT_S4_FLAT_DIRECT` | 1 | 启用设备直接打包及 flat 输入直通。生产固定。 |
 | `NTT_S4_HOSTPACK` | 0 | 使用旧 CPU 打包路径作对照。生产固定。 |
 | `NTT_S4_OUTPUT_WINDOW`、`NTT_S4_CHUNK_OUTPUT` | 1 | 只写当前所需系数窗口，按 chunk 暂存输出。生产固定。 |
+| `NTT_S4_SHORT_PRODUCT` | 0 | 设为 1，驻留 fold/下降的连续输出窗口可按实际有效输入长度选取完整线性 NTT。反向 gather 和全量主机输出沿用普通选长。 |
+| `NTT_S4_FOLD_SPECTRUM_MIB` | 0 | 为每条曲线的 H fold 设定固定 F 频谱缓存上限。单位为 MiB，0 关闭。缓存单独分配，须至少保留 1024 MiB 的当前空闲显存，fold 结束时释放。空间不足时沿用普通卷积。 |
+| `NTT_S4_FOLD_TWO_AXIS_MIB` | 0 | 为 CUDA 驻留 H fold 的双轴 NTT 设置独立 MiB 预算。要求显式选中的梅森承载、Goldilocks 精确性合格并保留至少 1024 MiB 当前空闲显存。准入后整个 H fold 使用双轴工作区，进入下降前释放。形状、预算或分配未通过时沿用原路径。 |
+| `NTT_S4_FOLD_TWO_AXIS_CHECK` | 0 | 设为 1 时对双轴产物独立做 GMP 校验。至多 64 个输出时全量校验，更大的乘积抽查首、中、尾。诊断会读取设备系数并计入运行墙钟。 |
 | `NTT_S4_FINAL_READBACK` | 0 | 延后到末端集中读回输出。生产固定。 |
 | `NTT_S4_KEEPHOUT` | 0 | 在已有归约 hook 时也装配并读回普通卷积输出，供对照。 |
 | `NTT_S4_ASYNC`、`NTT_S4_DEFER_CARRY` | 1 | 启用异步 S4 与延后读回进位检查。 |

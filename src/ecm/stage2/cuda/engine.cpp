@@ -664,10 +664,17 @@ int run_real(
             (int)BR.fold_flat.enabled,BR.fold_flat.folds,BR.fold_flat.muls,BR.fold_flat.sub_coeffs,BR.fold_flat.peak_bytes,
             BR.fold_flat.t_prepare,BR.fold_flat.t_multiply,BR.fold_flat.t_subtract,BR.fold_flat.t_bridge);
         const auto &fd=BR.fold_device;
+        if (fuse_env_ull("NTT_S4_FOLD_TWO_AXIS_MIB",0))
+            stage2_log::print(stage2_log::phases,"stage2_fold_two_axis: status=%s muls=%llu bytes=%llu gmp_checked=%llu\n",
+                fd.two_axis_status,fd.two_axis_muls,fd.two_axis_bytes,fd.two_axis_checked);
         stage2_log::print(stage2_log::phases, "real_batched_folddevice: requested=%d enabled=%d fallback=%s folds=%llu muls=%llu sub_coeffs=%llu peak_bytes=%llu h2d_bytes=%llu d2h_bytes=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu checked_words=%llu setup=%.6f upload=%.6f reverse=%.6f subtract=%.6f readback=%.6f reuse=%u layout_bytes=%llu saved_bytes=%llu\n",
             (int)fd.requested,(int)fd.enabled,fd.fallback.c_str(),fd.folds,fd.muls,fd.sub_coeffs,fd.peak_bytes,
             fd.h2d_bytes,fd.d2h_bytes,fd.avoided_h2d_bytes,fd.avoided_d2h_bytes,fd.checked_words,
             fd.t_setup,fd.t_upload,fd.t_reverse,fd.t_subtract,fd.t_readback,fd.reuse,fd.layout_bytes,fd.saved_bytes);
+        if (fd.spectrum_builds || fd.spectrum_hits)
+            stage2_log::print(stage2_log::phases,
+                "stage2_fold_spectrum: builds=%llu hits=%llu peak_bytes=%llu\n",
+                fd.spectrum_builds,fd.spectrum_hits,fd.spectrum_peak_bytes);
         stage2_log::print(stage2_log::phases, "real_batched_rootfold: requested=%d trees=%llu words=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu checked_words=%llu digest_words=%llu digest_sum=%016llx digest_xor=%016llx digest_kind=mixsum_xor_v1 t_handoff=%.6f\n",
             (int)fd.root_requested,fd.root_device_trees,fd.root_device_words,fd.root_h2d_avoided,fd.root_d2h_avoided,
             fd.root_checked_words,fd.root_digest_words,fd.root_digest[0],fd.root_digest[1],fd.root_t_handoff);

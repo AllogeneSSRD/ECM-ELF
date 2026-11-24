@@ -366,6 +366,17 @@ bool FoldDeviceState::init(
     f=layout.f;inv=layout.inv;h=layout.h;g=layout.g;reverse=layout.reverse;
     t=layout.t;q=layout.q;qb=layout.qb;
     if(!descent_only)upload(f,F);
+    const auto spectrum_mib=fuse_env_ull("NTT_S4_FOLD_SPECTRUM_MIB",0);
+    if (spectrum_mib<=SIZE_MAX>>20) f_spectrum.limit=size_t(spectrum_mib)<<17;
+    const auto two_axis_mib=fuse_env_ull("NTT_S4_FOLD_TWO_AXIS_MIB",0);
+    if (two_axis_mib && !descent_only) {
+        st.two_axis_status="carrier";
+        if (L.carrier_exponent && two_axis_mib<=SIZE_MAX>>20) {
+            two_axis_limit=size_t(two_axis_mib)<<20;
+            two_axis_check=fold_device_flag("NTT_S4_FOLD_TWO_AXIS_CHECK");
+            st.two_axis_status="pending";
+        }
+    }
     upload(inv,inverse);
     std::vector<unsigned long long> hn(W);mpz_to_words(hn,W,L.N);
     CK(stage2_wait::copy(modulus,hn.data(),W*8,cudaMemcpyHostToDevice));st.h2d_bytes+=W*8;
@@ -435,16 +446,77 @@ std::vector<unsigned long long> FoldDeviceState::read(size_t offset,size_t count
     stats->d2h_bytes+=v.size()*8;stats->t_readback+=now_s()-begin;return v;
 }
 
-void FoldDeviceState::mul(size_t a,size_t ma,size_t b,size_t mb,size_t dest,size_t count)
+static void check_two_axis(FoldDeviceState& state, size_t a, size_t ma, size_t b, size_t mb,
+                           const unsigned long long* out, size_t count)
 {
+    // Small checks cover the whole low product. Wide checks include both
+    // endpoints and an interior sum with many distinct coefficient pairs.
+    const size_t samples=count<=64 ? count : 3;
+    const auto w=state.W;
+    mpz_t x,y,expected,actual;
+    mpz_inits(x,y,expected,actual,nullptr);
+    std::vector<unsigned long long> result(w);
+    for(size_t s=0;s<samples;++s) {
+        const size_t i=samples<=1 ? 0 : s*(count-1)/(samples-1);
+        const size_t lo=i>=mb ? i-mb+1 : 0, hi=std::min(i,ma-1);
+        const size_t terms=hi-lo+1;
+        auto lhs=state.read(a+lo*w,terms), rhs=state.read(b+(i-hi)*w,terms);
+        mpz_set_ui(expected,0);
+        for(size_t j=0;j<terms;++j) {
+            words_to_mpz(x,lhs.data()+j*w,w);
+            words_to_mpz(y,rhs.data()+(terms-1-j)*w,w);
+            mpz_addmul(expected,x,y);
+        }
+        mpz_mod(expected,expected,state.layer->N);
+        CK(stage2_wait::copy(result.data(),out+i*w,w*8,cudaMemcpyDeviceToHost));
+        state.stats->d2h_bytes+=w*8;
+        words_to_mpz(actual,result.data(),w);
+        if (mpz_cmp(expected,actual)!=0) {
+            std::fprintf(stderr,"FATAL: Stage2 two-axis GMP mismatch ma=%zu mb=%zu index=%zu\n",ma,mb,i);
+            std::exit(3);
+        }
+        ++state.stats->two_axis_checked;
+    }
+    mpz_clears(x,y,expected,actual,nullptr);
+}
+
+void FoldDeviceState::mul(size_t a,size_t ma,size_t b,size_t mb,size_t dest,size_t count,NttFixedSpectrum *fixed)
+{
+    if (two_axis_limit && !two_axis) {
+        two_axis=stage2_two_axis::create(layer->carrier_exponent,unsigned(P+1),two_axis_limit,stats->two_axis_status);
+        two_axis_limit=0;
+        if(two_axis)stats->two_axis_bytes=stage2_two_axis::bytes(*two_axis);
+    }
+    if (two_axis) {
+        if (!ma || !mb || ma>P+1 || mb>P+1 || !count || count>ma+mb-1 ||
+            a+ma*W>memory.words[0] || b+mb*W>memory.words[0] || dest+count*W>memory.words[1]) {
+            std::fprintf(stderr,"FATAL: Stage2 two-axis resident product bounds\n");
+            std::exit(3);
+        }
+        const double begin=now_s();
+        auto* out=memory.data[1]+dest;
+        stage2_two_axis::multiply(*two_axis,memory.data[0]+a,unsigned(ma),memory.data[0]+b,unsigned(mb),out,unsigned(count));
+        if(two_axis_check)check_two_axis(*this,a,ma,b,mb,out,count);
+        flat->t_multiply+=now_s()-begin;
+        ++flat->muls;++stats->muls;++stats->two_axis_muls;
+        stats->avoided_h2d_bytes+=8ull*(ma+mb)*W;
+        stats->avoided_d2h_bytes+=8ull*count*W;
+        return;
+    }
     unsigned long long metadata[3]={(unsigned long long)a,(unsigned long long)b,(unsigned long long)dest};
     CK(stage2_wait::copy(map,metadata,24,cudaMemcpyHostToDevice));stats->h2d_bytes+=24;
     S4DeviceBatch batch{memory.data[0],map,memory.data[1],metadata,memory.words[0],memory.words[1],1,&memory};
+    if (fixed && fixed->limit) batch.fixed_b=fixed;
     std::vector<unsigned long long> unused;
     const double begin=now_s();poly_mul_batch_modN(*layer,nullptr,nullptr,ma,mb,1,unused,BC_FOLD,nullptr,0,count,&batch);
     flat->t_multiply+=now_s()-begin;++flat->muls;++stats->muls;
     stats->avoided_h2d_bytes+=16ull*std::max(ma,mb)*W;
     stats->avoided_d2h_bytes+=8ull*(g_s4_output_window?count:2*std::max(ma,mb)-1)*W;
+    if (batch.fixed_b) {
+        stats->spectrum_builds=fixed->builds;
+        stats->spectrum_hits=fixed->hits;
+        stats->spectrum_peak_bytes=std::max(stats->spectrum_peak_bytes,8ull*fixed->capacity);
+    }
 }
 
 void FoldDeviceState::reverse_copy(size_t src,size_t top,size_t count)
@@ -480,7 +552,7 @@ void FoldDeviceState::step_loaded(size_t ng,const std::vector<unsigned long long
         reverse_copy(t,nT-1,k);mul(reverse,k,inv,k,q,k);
         // Reverse reads all k<=P+1 q coefficients before qb overwrites q.
         // Oracle slots hold independent digit/result snapshots.
-        reverse_copy(q,k-1,k);mul(reverse,k,f,P+1,qb,P);
+        reverse_copy(q,k-1,k);mul(reverse,k,f,P+1,qb,P,&f_spectrum);
         const double begin=now_s();CK(cudaMemsetAsync(length,0,8));
         ecm_launch_fold_subtract_kernel(EcmCudaLaunch{(unsigned)((P+127)/128),128}, memory.data[1]+t,memory.data[1]+qb,
             modulus,(int)W,P,memory.data[0]+h,length);CK(cudaGetLastError());

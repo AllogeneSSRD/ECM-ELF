@@ -1188,7 +1188,8 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                                     std::vector<unsigned long long> *hfb,
                                     std::vector<unsigned long long> *hPre,
                                     std::vector<unsigned long long> *hPost,
-                                    bool need_hout, bool defer_res, NttArena *arena)
+                                    bool need_hout, bool defer_res, NttArena *arena,
+                                    NttRightSpectrum right_spectrum)
 {
     stage2_trace::Range trace("NTT.submit");
     // Physical batch after chunking. Keep the existing submit range for
@@ -1235,7 +1236,7 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     const uintptr_t addr_a=(uintptr_t)dA,addr_b=(uintptr_t)dB;
     const auto distance=addr_a>addr_b ? addr_a-addr_b : addr_b-addr_a;
     int short_mode=0;
-    if (requested_short && !dump && fc.warp_tail && (fc.k==10 || fc.k==11) &&
+    if (right_spectrum==NttRightSpectrum::None && requested_short && !dump && fc.warp_tail && (fc.k==10 || fc.k==11) &&
         (fc.t==10 || fc.t==11) && dA && dB && !(addr_a%16) && !(addr_b%16) &&
         distance>=N*nbatch*sizeof(unsigned long long)) {
         if (requested_short==1) short_mode=1;
@@ -1251,7 +1252,8 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
         stats.min_batch=stats.min_batch ? std::min(stats.min_batch,nbatch) : nbatch;
         stats.max_batch=std::max(stats.max_batch,nbatch);
     }
-    if(arena && arena->short_graph.enabled && !dump && arena->workspace_pool && arena->workspace.dA && arena->workspace.dB) {
+    if(right_spectrum==NttRightSpectrum::None && arena && arena->short_graph.enabled && !dump &&
+       arena->workspace_pool && arena->workspace.dA && arena->workspace.dB) {
         const size_t required=(size_t)N*(size_t)nbatch;
         const auto contains=[&](const unsigned long long *base,const unsigned long long *value) {
             const auto start=(uintptr_t)base,address=(uintptr_t)value;
@@ -1272,7 +1274,8 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
         if(graph) CK(cudaGraphLaunch(graph->forward,0));
         else {
             ntt_forward_fused(dA, fc, sh.omega, nbatch, 0, weighted);
-            ntt_forward_fused(dB, fc, sh.omega, nbatch, 0, weighted);
+            if (right_spectrum!=NttRightSpectrum::Reuse)
+                ntt_forward_fused(dB, fc, sh.omega, nbatch, 0, weighted);
         }
         if (dump && nbatch == 1 && hfa && hfb) {
             hfa->assign(N, 0);
@@ -1640,6 +1643,19 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
     return rc;
 }
 
+NttFixedSpectrum::~NttFixedSpectrum()
+{
+    release();
+}
+
+void NttFixedSpectrum::release()
+{
+    if (data) CK(cudaFree(data));
+    data=nullptr;
+    capacity=0;
+    n=0;
+}
+
 int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned long long nbatch,
                            const unsigned long long *dAin, const unsigned long long *dBin,
                            NttMulStats *st, NttArena *arena, const NttReduceHook *hook,
@@ -1702,6 +1718,36 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         CK(cudaMalloc(&dOut, (size_t)(out_slots * nbatch) * sizeof(unsigned long long)));
         CK(cudaMalloc(&dRes, 2 * (size_t)nbatch * sizeof(unsigned long long)));
     }
+    auto right_spectrum=NttRightSpectrum::None;
+    auto* fixed_b=input && nbatch==1 && ab ? input->fixed_b : nullptr;
+    if (fixed_b && N<=fixed_b->limit && input->fixed_b_coefficients) {
+        if (fixed_b->capacity<N) {
+            fixed_b->release();
+            size_t free_bytes=0,total_bytes=0;
+            CK(cudaMemGetInfo(&free_bytes,&total_bytes));
+            // This optional cache is outside the arena. Leave room for the
+            // rest of the fold and for the subsequent remainder tree.
+            constexpr size_t reserve=1ull<<30;
+            const size_t bytes=size_t(N)*sizeof(*fixed_b->data);
+            if (free_bytes>=reserve && bytes<=free_bytes-reserve) {
+                const auto status=cudaMalloc(&fixed_b->data,bytes);
+                if (status==cudaErrorMemoryAllocation) {
+                    cudaGetLastError();
+                    fixed_b->data=nullptr;
+                } else {
+                    CK(status);
+                    fixed_b->capacity=N;
+                }
+            }
+        }
+        if (fixed_b->capacity>=N) {
+            const bool hit=fixed_b->n==N && fixed_b->bpw==sh.bpw && fixed_b->slot_words==sh.slot_words &&
+                fixed_b->coefficients==input->fixed_b_coefficients;
+            right_spectrum=hit ? NttRightSpectrum::Reuse : NttRightSpectrum::Build;
+            if (!hit) fixed_b->n=0;
+            dB=fixed_b->data;
+        }
+    }
     const double tcopy0 = now_s();
     if (input) {
         if (input->accepts_weighted && fuse_env_ull("NTT_S4_WEIGHTED",0) &&
@@ -1713,7 +1759,8 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
                 sh.pack_weights={fc.tblF+N/2-1,nullptr,0};
             }
         }
-        const int rc = input->run ? input->run(input->ctx, sh, nbatch, dA, dB) : 2;
+        const int rc = input->run ? input->run(input->ctx, sh, nbatch, dA,
+            right_spectrum==NttRightSpectrum::Reuse ? nullptr : dB) : 2;
         if (rc) {
 
             if (own) { cudaFree(dA); cudaFree(dB); cudaFree(dQ); cudaFree(dOut); cudaFree(dRes); }
@@ -1761,7 +1808,8 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         const unsigned long long m = ((nbatch - s0) < max_y) ? (nbatch - s0) : max_y;
         NttPassResult rr = ntt_run_passes(sh, fc, dA + s0 * N, dB + s0 * N, dQ + s0 * N,
                                           dOut + s0 * out_slots, dRes + 2 * s0, m, 0,
-                                          nullptr, nullptr, nullptr, nullptr, want_hout, true, ab ? arena : nullptr);
+                                          nullptr, nullptr, nullptr, nullptr, want_hout, true, ab ? arena : nullptr,
+                                          right_spectrum);
         sub[(size_t)ci] = rr;
         if (!rr.hOut.empty())
             std::copy(rr.hOut.begin(), rr.hOut.end(), r.hOut.begin() + (long)(s0 * out_slots));
@@ -1790,6 +1838,15 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
             ntt_pass_read_marks(sub[(size_t)ci], &r.t_fwd, &r.t_inv, &r.t_check_kernel,
                                 ab && arena ? &arena->short_graph.fused_seconds : nullptr);
         if (!defer) r.t_check_d2h += now_s() - tr0;
+    }
+    if (right_spectrum==NttRightSpectrum::Build) {
+        fixed_b->n=N;
+        fixed_b->bpw=sh.bpw;
+        fixed_b->slot_words=sh.slot_words;
+        fixed_b->coefficients=input->fixed_b_coefficients;
+        ++fixed_b->builds;
+    } else if (right_spectrum==NttRightSpectrum::Reuse) {
+        ++fixed_b->hits;
     }
     if (st) {
         st->P = P; st->S = S; st->N = N; st->k = sh.k; st->bpw = sh.bpw;

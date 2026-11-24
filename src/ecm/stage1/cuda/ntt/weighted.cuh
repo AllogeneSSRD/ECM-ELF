@@ -127,7 +127,7 @@ inline unsigned weighted_limb_smem(const std::vector<WeightedLimb>& limbs) {
     return capacity * sizeof(WeightedWord);
 }
 
-__global__ __launch_bounds__(weighted_limb_threads)
+static __global__ __launch_bounds__(weighted_limb_threads)
 void weighted_limb_sums(WeightedWord* out, const WeightedWord* coefficients,
     const WeightedWord* inverse_weights, const WeightedDigit* digits, const WeightedLimb* spans,
     unsigned p, unsigned words, unsigned length) {

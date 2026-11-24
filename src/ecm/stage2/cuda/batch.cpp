@@ -686,6 +686,8 @@ BatchedRun run_batched(
         c0=c1;
     }
     giant_loop.finish();
+    stage2_two_axis::release(device_fold.two_axis);
+    device_fold.f_spectrum.release();
     R.t_post_loop=now_s();
     R.phase_boundaries.loop_end=R.t_post_loop;
     stage2_log::print(stage2_log::debug,

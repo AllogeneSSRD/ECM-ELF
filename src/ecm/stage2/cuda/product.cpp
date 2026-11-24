@@ -45,33 +45,35 @@ unsigned long long MulCost::tot_bits() const
     return t;
 }
 
-void PolyLayer::count_ntt(unsigned long long n,unsigned long long pairs,unsigned long long chunks)
+void PolyLayer::count_ntt(unsigned long long n,unsigned long long pairs,unsigned long long chunks,
+                          unsigned long long reused_forwards)
 {
-    ntt_lengths.add(n,pairs,chunks);
+    ntt_lengths.add(n,pairs,chunks,reused_forwards);
 }
 
 void PolyLayer::print_ntt_lengths()const
 {
     if(!ntt_lengths.enabled)return;
-    std::string counts,convs;unsigned long long pairs=0,chunks=0;double elements=0,butterflies=0;
+    std::string counts,convs;unsigned long long pairs=0,chunks=0,transforms=0;double elements=0,butterflies=0;
     // Explicit opt-in output is independent of the progress log level.
     std::printf("ntt_count_table: scope=curve_polynomial includes=initialization excludes=arithmetic_selftests,stage1\n");
     std::printf("ntt_count_columns: length log2 convolutions forward inverse total\n");
     for(size_t k=0;k<ntt_lengths.entries.size();++k) {
         const auto &v=ntt_lengths.entries[k];if(!v.convolutions)continue;
+        const auto forward=2ull*v.convolutions-v.reused_forwards;
+        const auto total=forward+v.convolutions;
         std::printf("ntt_count_row: %12llu %2zu %12llu %12llu %12llu %12llu\n",
-            1ull<<k,k,(unsigned long long)v.convolutions,2ull*v.convolutions,
-            (unsigned long long)v.convolutions,3ull*v.convolutions);
+            1ull<<k,k,(unsigned long long)v.convolutions,forward,(unsigned long long)v.convolutions,total);
         if(!counts.empty()){counts+=' ';convs+=' ';}
-        counts+=std::to_string(k)+":"+std::to_string(3*v.convolutions);
+        counts+=std::to_string(k)+":"+std::to_string(total);
         convs+=std::to_string(k)+":"+std::to_string(v.convolutions);
-        pairs+=v.convolutions;chunks+=v.chunks;
-        const double work=3.*double(v.convolutions)*double(1ull<<k);
+        pairs+=v.convolutions;chunks+=v.chunks;transforms+=total;
+        const double work=double(total)*double(1ull<<k);
         elements+=work;butterflies+=work*double(k)/2.;
     }
     std::printf("ntt_length_counts: log2_length:num_of_ntt %s\n",counts.c_str());
     std::printf("ntt_work: scope=curve_polynomial convolutions=%llu transforms=%llu s4_chunks=%llu elements=%.6e logical_radix2_butterflies=%.6e short_batch_changed=%llu\n",
-        pairs,3*pairs,chunks,elements,butterflies,short_batch_changed);
+        pairs,transforms,chunks,elements,butterflies,short_batch_changed);
     stage2_log::print(stage2_log::debug,"ntt_convolution_counts: log2_length:num_of_conv %s\n",convs.c_str());
     std::fflush(stdout);
 }
@@ -191,7 +193,6 @@ void poly_mul_batch_modN(
 {
     stage2_trace::Range trace("S4.request");
     const size_t W = L.W;
-    const size_t P = (ma > mb) ? ma : mb;
     const size_t full_nc=ma+mb-1;
     if(count==(size_t)-1) count=full_nc;
     if(first>full_nc || count>full_nc-first) {
@@ -227,6 +228,23 @@ void poly_mul_batch_modN(
                    (resident->dst!=C.d_rawA && resident->dst!=C.d_rawB) ||
                    resident->src_words>C.raw_capacity(resident->src) || resident->dst_words>C.raw_capacity(resident->dst))) {
         std::fprintf(stderr,"%s: FATAL: resident frontier is not owned raw staging\n",NTT_PROBE_NAME);std::exit(3);
+    }
+    const size_t original_P=std::max(ma,mb);
+    const auto* fixed_b=resident ? resident->fixed_b : nullptr;
+    const auto initial_spectrum_hits=fixed_b ? fixed_b->hits : 0;
+    size_t P=original_P;
+    if (resident && resident->owner && (cat==BC_FOLD || cat==BC_DESCENT) && g_s4_output_window &&
+        count && !host_output && !resident->reverse_b && fuse_env_ull("NTT_S4_SHORT_PRODUCT",0)) {
+        // Terms beyond the last requested coefficient cannot contribute.
+        ma=std::min(ma,first+count);
+        mb=std::min(mb,first+count);
+        // The symmetric shape needs space for both actual operands together.
+        // Its term bound remains safe since at most min(ma,mb) slots overlap.
+        P=(ma+mb+1)/2;
+        if (P<original_P)
+            stage2_log::print(stage2_log::phases,
+                "stage2_ntt_short_product: phase=%d ma=%zu mb=%zu first=%zu count=%zu old_p=%zu packed_p=%zu\n",
+                cat,ma,mb,first,count,original_P,P);
     }
     const unsigned long long out_slots = 2 * P - 1; // FULL shape and canonical assertion
     const unsigned long long output_slots=g_s4_output_window ? count : out_slots;
@@ -435,16 +453,18 @@ void poly_mul_batch_modN(
         if(resident) {
             if(host_pack) {std::fprintf(stderr,"%s: FATAL: resident multiply cannot use host packing\n",NTT_PROBE_NAME);std::exit(3);}
             S4GatherPack pack{resident,&C,(size_t)s0,ma,mb,(unsigned long long)P,qN,qsw,(int)L.S,qbpw,(int)W};
-            const bool pack_weighted=stage2_pack::supported(qN,qsw,ma,(int)L.S,qbpw,(int)W) &&
+            const bool pack_weighted=std::max(ma,mb)<=qN/2/qsw &&
+                                     stage2_pack::supported(qN,qsw,ma,(int)L.S,qbpw,(int)W) &&
                                      stage2_pack::supported(qN,qsw,mb,(int)L.S,qbpw,(int)W);
-            NttInputHook input{&pack,s4_gather_final_input,pack_weighted};
+            NttInputHook input{&pack,s4_gather_final_input,pack_weighted,resident->fixed_b,mb};
+            const auto hits=resident->fixed_b ? resident->fixed_b->hits : 0;
             const double tp=C.t_packdev;
             r1=ntt_poly_mul_batch_dev(P,(int)L.S,L.device,m,nullptr,nullptr,&st,L.arena,&h2,
                 nullptr,qbpw,defer_this,&input);
             // Input pack remains a direct engine write; no temporary packed inputs or D2D.
             if(!r1) {++C.input_direct;C.input_avoided_bytes+=16ull*m*qN;}
             C.packed_peak_bytes=std::max(C.packed_peak_bytes,16ull*m*qN);
-            C.pack_launches+=2;
+            C.pack_launches+=resident->fixed_b && hits!=resident->fixed_b->hits ? 1 : 2;
             C.t_h2d_raw+=C.t_packdev-tp;
             if(!r1 && st.carry_deferred) {
                 carry_pending=true;carry_pending_m=m;++carry_pending_chunks;
@@ -672,7 +692,7 @@ void poly_mul_batch_modN(
     }
     ++L.ntt_launches;
     L.ntt_calls += nbatch;
-    L.count_ntt(qN,nbatch,nbatch/chunk+(nbatch%chunk!=0));
+    L.count_ntt(qN,nbatch,nbatch/chunk+(nbatch%chunk!=0),fixed_b ? fixed_b->hits-initial_spectrum_hits : 0);
     L.muls += nbatch;
     L.t_fwd += st.t_fwd;
     L.t_inv += st.t_inv;
@@ -852,25 +872,30 @@ int s4_gather_final_input(
        stage2_pack::supported(p.N,p.sw,p.mb,p.bits,p.bpw,p.W)) {
         stage2_pack::launch<true>(p.batch->src,p.batch->meta+p.s0,m,p.ma,p.W,p.bits,p.bpw,p.sw,p.N,a,sh.pack_weights);
         const auto *offsets=p.batch->meta+p.batch->nbatch+p.s0;
-        if(p.batch->reverse_b)
-            stage2_pack::launch<true,true>(p.batch->src,offsets,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b,sh.pack_weights);
-        else stage2_pack::launch<true>(p.batch->src,offsets,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b,sh.pack_weights);
-        stage2_pack::account(m,p.N,true);stage2_pack::account(m,p.N,true,p.batch->reverse_b);
+        stage2_pack::account(m,p.N,true);
+        if (b) {
+            if(p.batch->reverse_b)
+                stage2_pack::launch<true,true>(p.batch->src,offsets,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b,sh.pack_weights);
+            else stage2_pack::launch<true>(p.batch->src,offsets,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b,sh.pack_weights);
+            stage2_pack::account(m,p.N,true,p.batch->reverse_b);
+        }
         p.C->t_packdev+=now_s()-start;return 0;
     }
     if(sh.pack_weights.fine)return 3;  // Weighted spectra require the fused packer.
     CK(cudaMemsetAsync(a,0,(size_t)m*sh.N*8));
-    CK(cudaMemsetAsync(b,0,(size_t)m*sh.N*8));
     ecm_launch_s4_pack_gather_kernel(EcmCudaLaunch{(unsigned int)((m*p.ma+255)/256),256}, p.batch->src,
         p.batch->meta+p.s0,m,p.ma,p.W,p.bits,p.bpw,p.sw,p.N,a);
     CK(cudaGetLastError());
-    if(p.batch->reverse_b)
-        ecm_launch_s4_pack_gather_reverse_kernel(EcmCudaLaunch{(unsigned int)((m*p.mb+255)/256),256}, p.batch->src,
-            p.batch->meta+p.batch->nbatch+p.s0,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
-    else
-        ecm_launch_s4_pack_gather_kernel(EcmCudaLaunch{(unsigned int)((m*p.mb+255)/256),256}, p.batch->src,
-            p.batch->meta+p.batch->nbatch+p.s0,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
-    CK(cudaGetLastError());
+    if (b) {
+        CK(cudaMemsetAsync(b,0,(size_t)m*sh.N*8));
+        if(p.batch->reverse_b)
+            ecm_launch_s4_pack_gather_reverse_kernel(EcmCudaLaunch{(unsigned int)((m*p.mb+255)/256),256}, p.batch->src,
+                p.batch->meta+p.batch->nbatch+p.s0,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
+        else
+            ecm_launch_s4_pack_gather_kernel(EcmCudaLaunch{(unsigned int)((m*p.mb+255)/256),256}, p.batch->src,
+                p.batch->meta+p.batch->nbatch+p.s0,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
+        CK(cudaGetLastError());
+    }
     p.C->t_packdev+=now_s()-start;
     return 0;
 }

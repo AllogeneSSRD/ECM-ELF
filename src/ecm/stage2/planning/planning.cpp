@@ -2481,6 +2481,9 @@ std::string select_auto(Options &o,const Record &r,bool apply) {
     require("NTT_FUSE_MID_COOP",0,0);
     require("NTT_FUSE_JOINT",0,0);
     require("NTT_S4_PACK_ZERO",0,0);
+    require("NTT_S4_SHORT_PRODUCT",0,0);
+    require("NTT_S4_FOLD_SPECTRUM_MIB",0,0);
+    require("NTT_S4_FOLD_TWO_AXIS_MIB",0,0);
     require("NTT_S4_BATCH_MB",64,64);require("NTT_DEVICE_GLEAF_MAX_MB",512,512);
     require("NTT_GIANT_CHAIN_BLOCK",64,64);require("NTT_GIANT_CHAIN_MIN",profile.chain_min,profile.chain_min);
     require("NTT_GIANT_CHAIN_SMALL_BLOCK",0,0); // Not covered by current v2 cost profiles.
