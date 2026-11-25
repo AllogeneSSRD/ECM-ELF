@@ -452,16 +452,28 @@ static void stage1_details(const fs::path& root) {
     }
     const auto execution=ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=ntt ntt_type=weighted "
         "B1=1024 iter_total=1500 ntt_bits=127 ntt_length=32 ntt_bpw=24 naf=0 ntt_shape=1:3:4:5:1:2,3:3,2 "
-        "ntt_forward_pass_bits=2+3").stage1;
+        "ntt_forward_pass_bits=2+3 ntt_max_radix_bits=4").stage1;
     const auto compact=ecmgui_v2::ui::stage1_execution(execution,false);
     {ecmgui::WorkerView worker;
      worker.progress=ecmgui::parse_line("GPU: [bar] 50.0%  500, +100 bits (~1.20 s/curve) elapsed 1s remaining 1s iter_per_s=1000").progress;
      assert(ecmgui_v2::ui::worker_progress(worker,false).iterations=="1000");
      worker.stage2=true;assert(ecmgui_v2::ui::worker_progress(worker,false).iterations=="--");}
-    assert(compact.find("CUDA/NTT 127 bits | B1=1024 | iter=1500 | NTT: 32 1:3:4:5:1:2,3:3,2 NAF=0")!=compact.npos &&
+    assert(compact.find("CUDA/NTT 127 bits | B1=1024 | iter=1500 | NTT: 32 1:3:2+3:3+2:0 NAF=0 | Graph=5")!=compact.npos &&
            compact.find("bpw=")==compact.npos && compact.find('\n')==compact.npos &&
            compact.find("ntt_forward_pass_bits")==compact.npos);
-    assert(ecmgui_v2::ui::stage1_execution(execution,false,true).find("ntt_forward_pass_bits=2+3")!=compact.npos);
+    const auto legacy_details = ecmgui_v2::ui::stage1_execution(execution,false,true);
+    assert(legacy_details.find("NTT shape=1:3:2+3:3+2:0 | Graph=5")!=legacy_details.npos);
+    assert(legacy_details.find("ntt_forward_pass_bits=2+3")!=legacy_details.npos &&
+           legacy_details.find("ntt_max_radix_bits")==legacy_details.npos);
+    for (const std::string_view sample : {"1:12:r5+1+12:12+1+r5:3", "weighted/t12/w1/r5+1+12/12+1+r5/pfa-coalesced+outer/inv-fused"}) {
+        const auto mixed = ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=ntt ntt_type=weighted "
+            "ntt_length=40960 ntt_shape=" + std::string(sample) + " ntt_graph_bits=0").stage1;
+        const auto mixed_details = ecmgui_v2::ui::stage1_execution(mixed,false,true);
+        assert(mixed_details.find("NTT shape=1:12:r5+1+12:12+1+r5:3 | Graph=0") != mixed_details.npos);
+    }
+    const auto unknown_pfa = ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=ntt "
+        "ntt_length=40960 ntt_shape=1:12:4:16:1:r5,1,12:12,1,r5").stage1;
+    assert(unknown_pfa.details.at("ntt_shape") == "1:12:r5+1+12:12+1+r5:?");
     const auto memory = ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=ntt ntt_type=weighted "
         "ntt_length=1024 ntt_memory_per_curve_bytes=41867520 ntt_memory_config_mib=6144 "
         "ntt_memory_device_bytes=8388608000 ntt_naf_memory_mb=4096 max_curves_in_memory=98").stage1;

@@ -535,7 +535,8 @@ def main():
     assert execution["ntt_bits"] == "4003" and execution["ntt_type"] == "linear"
     assert execution["ntt_length"] == "512" and execution["naf"] == "0"
     assert execution["ntt_forward_pass_bits"] == "1+8" and execution["ntt_inverse_pass_bits"] == "8+1"
-    assert execution["ntt_shape"] == "0:8:2:16:1:1,8:8,1" and execution["chain"] == "ladder"
+    assert execution["ntt_shape"] == "0:8:1+8:8+1:0" and execution["chain"] == "ladder"
+    assert execution["ntt_graph_bits"] == "16" and "ntt_max_radix_bits" not in execution
     n = (1 << 4003) - 1
     assert saved_points(work / "out.save", 4003, 128) == {
         s: stage1(s, 128, n, torsion=12)["x"] for s in range(4294967311, 4294967315)}

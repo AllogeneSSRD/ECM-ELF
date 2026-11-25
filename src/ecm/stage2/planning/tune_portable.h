@@ -8,8 +8,11 @@
 #include "d_search.h"
 #include "../giant_tree.h"
 #include <chrono>
+#include <array>
 #include <charconv>
 #include <ctime>
+#include <optional>
+#include <string_view>
 #include "ecm/platform/program_version.h"
 #include "ecm/stage1/ntt_sizes.h"
 
@@ -125,8 +128,10 @@ inline std::string text(const Fields &f,const char *key) {
 }
 inline Word optional_uint(const Fields &f,const char *key,Word fallback=0){return f.count(key)?uint(f,key):fallback;}
 inline double optional_real(const Fields &f,const char *key,double fallback=0){return f.count(key)?real(f,key):fallback;}
-template<size_t N> inline bool matrix_row_less(const Fields &a,const Fields &b,const MatrixSortKey (&keys)[N]) {
+template<size_t N> inline bool matrix_row_less(const Fields &a,const Fields &b,const MatrixSortKey (&keys)[N],
+                                              std::string_view omitted={}) {
     for(const auto &key:keys) {
+        if(omitted==key.name)continue;
         if(key.kind==MatrixSortKind::optional_string && (!a.count(key.name) || !b.count(key.name))) {
             if(a.count(key.name)!=b.count(key.name))return !a.count(key.name);
         } else if(key.kind==MatrixSortKind::string || key.kind==MatrixSortKind::optional_string) {
@@ -315,13 +320,44 @@ inline bool stage1_dominates(const Fields& a,const Fields& b) {
         optional_uint(a,"naf_memory_bytes")<=optional_uint(b,"naf_memory_bytes") &&
         real(a,"iter_per_s")>=real(b,"iter_per_s");
 }
+inline std::optional<std::array<unsigned,3>> stage1_release(const Fields& row) {
+    if(!row.count("program_version") || !row.count("naf_memory_bytes"))return {};
+    const auto version=text(row,"program_version");
+    std::array<unsigned,3> numbers{};
+    auto begin=version.data();
+    const auto end=begin+version.size();
+    for(size_t i=0;i<numbers.size();++i) {
+        const auto result=std::from_chars(begin,end,numbers[i]);
+        if(result.ec!=std::errc{})return {};
+        if(i+1==numbers.size()) {
+            if(result.ptr!=end)return {};
+        } else {
+            if(result.ptr==end || *result.ptr!='.')return {};
+            begin=result.ptr+1;
+        }
+    }
+    return numbers;
+}
+inline int stage1_release_order(const Fields& a,const Fields& b) {
+    if(!a.count("naf_memory_bytes") || !b.count("naf_memory_bytes"))return 0;
+    const auto left=stage1_release(a),right=stage1_release(b);
+    if(left==right)return 0;
+    return left>right ? 1 : -1;
+}
+inline bool stage1_supersedes(const Fields& a,const Fields& b) {
+    if(const int order=stage1_release_order(a,b))return order>0;
+    return stage1_dominates(a,b);
+}
 inline void merge_stage1_history(Fields& old,const Fields& sample,bool observation) {
+    if(optional_uint(sample,"explicit_batch"))old["explicit_batch"]="1";
+    // A different release can change allocation and timing. Only user intent
+    // survives replacing an old release's measurement.
+    if(stage1_release_order(old,sample))return;
     const auto observations=[](const Fields& r) {
         return optional_uint(r,"runtime_observations",is_runtime_stage1_ntt(r) ? uint(r,"repeats") : 0);
     };
     const Word a=observations(old), b=observations(sample);
     if(a || b)old["runtime_observations"]=std::to_string(observation ? std::min<Word>(1000000000,a+b) : std::max(a,b));
-    if(optional_uint(sample,"explicit_batch"))old["explicit_batch"]="1";
     if(!old.count("sample_target_ms") || !sample.count("sample_target_ms"))return;
     auto coverage=group_coverage(old);
     for(const auto& entry:group_coverage(sample))
@@ -345,6 +381,58 @@ inline void merge_stage1_history(Fields& old,const Fields& sample,bool observati
         }
         old["tested_groups"]=quoted(out.str());
     }
+}
+
+inline bool stage1_auto_graph(const Fields& row) {
+    if(!row.count("batch_scope") || !row.count("batch_search"))return false;
+    const auto scope=text(row,"batch_scope");
+    std::istringstream options(scope.substr(0,scope.find(':')));
+    std::array<std::string,7> fields;
+    for(auto& field:fields)if(!std::getline(options,field,'/'))return false;
+    // scope stores curve, NAF, profile, tile, outer, Graph and warp tail.
+    return options.eof() && fields[2]=="0" && fields[5]=="-1";
+}
+
+inline bool compact_stage1_graphs(std::vector<Fields>& rows) {
+    const auto less=[&](size_t a,size_t b) {
+        for(const auto* key:{"batch_scope","batch_search","benchmark_kind"}) {
+            const auto left=rows[a].find(key),right=rows[b].find(key);
+            if((left==rows[a].end())!=(right==rows[b].end()))return left==rows[a].end();
+            if(left!=rows[a].end() && left->second!=right->second)return left->second<right->second;
+        }
+        return matrix_row_less(rows[a],rows[b],ntt_row_order,"graph_bits");
+    };
+    std::map<size_t,std::vector<size_t>,decltype(less)> groups(less);
+    for(size_t i=0;i<rows.size();++i)if(stage1_auto_graph(rows[i]))groups[i].push_back(i);
+    std::vector<bool> removed(rows.size());
+    size_t count=0;
+    for(const auto& entry:groups) {
+        const auto& indices=entry.second;
+        if(indices.size()<2)continue;
+        for(const auto i:indices) {
+            const auto& row=rows[i];
+            if(optional_uint(row,"batch_roles") || optional_uint(row,"explicit_batch"))continue;
+            const auto graph=uint(row,"graph_bits");
+            const auto coverage=group_coverage(row);
+            for(const auto j:indices) {
+                const auto& peer=rows[j];
+                const auto other_graph=uint(peer,"graph_bits");
+                if(graph==other_graph || !stage1_dominates(peer,row))continue;
+                if(!std::all_of(coverage.begin(),coverage.end(),[&](const auto& sample){
+                    return tested_ms(peer,sample.first.first,sample.first.second)>=sample.second;
+                }))continue;
+                // Break exact ties without removing both interchangeable Graphs.
+                if(graph<other_graph && stage1_dominates(row,peer) && group_coverage(peer)==coverage)continue;
+                removed[i]=true;
+                ++count;
+                break;
+            }
+        }
+    }
+    if(!count)return false;
+    size_t index=0;
+    rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const Fields&){return removed[index++];}),rows.end());
+    return true;
 }
 inline bool measured(const Fields &sample){return required(sample,"source")=="\"measured\"";}
 inline bool runtime_observation(const Fields &sample) {
@@ -680,6 +768,7 @@ struct Profile {
     Fields metadata;
     std::map<Word,Fields> conditions;
     std::vector<Fields> samples,ntt,stage1_ntt,parallel;
+    bool stage1_compacted=false;
     // The CPU Stage2 worker owns these rows. CUDA never uses them as evidence.
     std::string cpu_stage2_tables;
     Word revision=0;
@@ -789,13 +878,13 @@ struct Profile {
             auto& positions=(*index)[sample];
             for(auto i:positions) {
                 auto& old=stage1_ntt[i];
-                if(!stage1_dominates(old,sample))continue;
+                if(!stage1_supersedes(old,sample))continue;
                 merge_stage1_history(old,sample,observation);
                 return;
             }
             positions.erase(std::remove_if(positions.begin(),positions.end(),[&](size_t i){
                 auto& old=stage1_ntt[i];
-                if(!stage1_dominates(sample,old))return false;
+                if(!stage1_supersedes(sample,old))return false;
                 merge_stage1_history(sample,old,observation);
                 old.clear();
                 return true;
@@ -810,12 +899,12 @@ struct Profile {
         // Compare recorded requirements independently. Legacy rows with an unknown
         // dictionary footprint are only comparable to other such rows.
         for(auto& old:stage1_ntt) {
-            if(!same(old) || !stage1_dominates(old,sample))continue;
+            if(!same(old) || !stage1_supersedes(old,sample))continue;
             merge_stage1_history(old,sample,observation);
             return;
         }
         stage1_ntt.erase(std::remove_if(stage1_ntt.begin(),stage1_ntt.end(),[&](const Fields& old) {
-            if(!same(old) || !stage1_dominates(sample,old))return false;
+            if(!same(old) || !stage1_supersedes(sample,old))return false;
             merge_stage1_history(sample,old,observation);
             return true;
         }),stage1_ntt.end());
@@ -1015,6 +1104,7 @@ struct Profile {
         auto& stage1_rows=normalized.stage1_ntt;
         stage1_rows.erase(std::remove_if(stage1_rows.begin(),stage1_rows.end(),
             [](const Fields& row){return row.empty();}),stage1_rows.end());
+        normalized.stage1_compacted=stage1_rows.size()!=out.stage1_ntt.size();
         for(auto s:out.parallel){s["condition"]=std::to_string(remap.at(uint(s,"condition")));normalized.update_parallel(std::move(s),false);}
         normalized.revision=out.revision;return normalized;
     }
@@ -1061,6 +1151,7 @@ struct Profile {
         for(const auto &s:samples){auto row=compact_sample(s);groups[uint(s,"target_bits")].push_back(std::move(row));}
         for(auto &g:groups)emit("width."+std::to_string(g.first),std::move(g.second),false);
         auto ntt_rows=stage1_ntt;
+        compact_stage1_graphs(ntt_rows);
         for(auto s:ntt){
             hydrate(s,conditions.at(uint(s,"condition")),true);validate_ntt_summary(s);
             s["ntt_type"]=quoted(stage2_ntt_type);ntt_rows.push_back(std::move(s));

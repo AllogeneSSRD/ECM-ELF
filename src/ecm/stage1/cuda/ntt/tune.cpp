@@ -6,6 +6,7 @@
 #include "../../edwards/ntt_dictionary.h"
 #include <set>
 #include "ecm/stage1/ntt_sizes.h"
+#include "ecm/stage1/ntt_shape_text.h"
 #include "../../../cuda/ntt/runtime.h"
 #include "../../edwards/memory.h"
 #include "../../../../io/files.h"
@@ -99,19 +100,19 @@ unsigned linear_exponent_limit(unsigned length, unsigned bpw) {
     return lo * bpw;
 }
 
-const char* radix5_layout_name(const Plan& plan) {
-    if (!ecm_stage1::stage1_ntt_radix5(plan.length)) return "-";
-    if (plan.dataflow & Radix5ForwardOuter) return "pfa-coalesced+outer";
-    if (plan.dataflow & CoalescedRadix5) return "pfa-coalesced";
-    return plan.dataflow & PfaRadix5 ? "pfa-direct" : "twiddle";
+ecm_stage1::NttPfaCode pfa_code(const Plan& plan) {
+    using Code = ecm_stage1::NttPfaCode;
+    if (plan.dataflow & Radix5ForwardOuter) return Code::FusedOuter;
+    if (plan.dataflow & CoalescedRadix5) return Code::Coalesced;
+    return plan.dataflow & PfaRadix5 ? Code::Direct : Code::None;
 }
 
 void print_measurement(const Measurement& m, unsigned target) {
     const auto& p = m.plan;
     const auto shape = tune_shape_descriptor(p);
-    ecm_ts_fprintf(stdout, "%u %u %s %uc %.0f iter/s %u %.3f/%u ms %u %u %s\n",
-        p.length, p.max_exp, shape.c_str(), m.batch, m.throughput()*m.steps, p.dataflow,
-        m.group_ms(), target, m.steps, m.steps / m.blocks, radix5_layout_name(p));
+    ecm_ts_fprintf(stdout, "%u %u %s %uc %.0f iter/s %u %u %.3f/%u ms %u %u\n",
+        p.length, p.max_exp, shape.c_str(), m.batch, m.throughput()*m.steps, p.window, p.dataflow,
+        m.group_ms(), target, m.steps, m.steps / m.blocks);
 }
 
 Stage1NttOptions fixed_plan(Stage1NttOptions o, const Plan& plan) {
@@ -723,7 +724,7 @@ struct Score {
 enum BatchRole : unsigned { Single = 1, Capacity = 2, Fastest = 4, Economical = 8 };
 
 void table_header() {
-    ecm_ts_fprintf(stdout,"length max_exp ntt_type batch iter/s dataflow actual/target steps/group steps/block radix5_layout\n");
+    ecm_ts_fprintf(stdout,"length max_exp ntt_shape batch iter/s graph_steps dataflow actual/target steps/group steps/block\n");
 }
 
 void round_header(unsigned p, unsigned window, const char* phase) {
@@ -761,12 +762,12 @@ void report_batches(const std::map<BatchRole,Score>& scores, const Score& old95,
         rate << std::fixed << std::setprecision(0) << s.rate;
         rows.push_back({label,std::to_string(s.plan.length),std::to_string(s.plan.max_exp),
                         tune_shape_descriptor(s.plan),std::to_string(s.batch)+"c",rate.str(),
-                        std::to_string(s.plan.dataflow),radix5_layout_name(s.plan)});
+                        std::to_string(s.plan.window),std::to_string(s.plan.dataflow)});
         for (size_t i=0; i<widths.size(); ++i)
             widths[i] = std::max(widths[i],int(rows.back()[i].size()));
     }
     for (const auto& row : rows)
-        ecm_log_accent(EcmLogAccent::BatchResult,"%-*s %*s %*s %-*s %*s %*s iter/s dataflow=%s radix5_layout=%s\n",
+        ecm_log_accent(EcmLogAccent::BatchResult,"%-*s %*s %*s %-*s %*s %*s iter/s graph_steps=%s dataflow=%s\n",
             widths[0],row[0].c_str(),widths[1],row[1].c_str(),widths[2],row[2].c_str(),
             widths[3],row[3].c_str(),widths[4],row[4].c_str(),widths[5],row[5].c_str(),row[6].c_str(),row[7].c_str());
 }
@@ -942,7 +943,8 @@ public:
             }
             if (at == db.stage1_ntt.end()) status = "superseded";
             else previous = real(*at,"iter_per_s");
-            if (at != db.stage1_ntt.end() && !pt::stage1_dominates(*at,fresh)) {
+            if (at != db.stage1_ntt.end() && !pt::stage1_supersedes(*at,fresh)) {
+                const bool newer = pt::stage1_release_order(fresh,*at)>0;
                 fresh["condition"] = at->at("condition");
                 if (!scope.empty()) {
                     fresh["batch_scope"] = at->at("batch_scope");
@@ -959,8 +961,8 @@ public:
                     history_ = std::move(retained);
                 }
                 ecm_io::write_atomic(path,db.serialize());
-                if (test.rate > previous) best = test;
-                status = test.rate > previous ? "updated" : "retained";
+                if (newer || test.rate > previous) best = test;
+                status = newer || test.rate > previous ? "updated" : "retained";
                 accent = EcmLogAccent::Improved;
             }
         }
@@ -1126,9 +1128,9 @@ public:
                                        ecm_stage2::tune::real(row,"median_ms"))};
                 }
                 if (previous && best.rate && hits_.insert(selected).second)
-                    ecm_ts_fprintf(stdout,"stage1_ntt_reuse: length=%u batch=%u dataflow=%u tile=%u "
-                        "outer=%u graph=%u target_ms=%u iter_per_s=%.0f radix5_layout=%s\n",plan.length,batch,plan.dataflow,
-                        plan.tile,plan.outer_max,plan.window,target,best.rate,radix5_layout_name(plan));
+                    ecm_ts_fprintf(stdout,"stage1_ntt_reuse: length=%u batch=%u ntt_shape=%s "
+                        "graph_steps=%u dataflow=%u target_ms=%u iter_per_s=%.0f\n",plan.length,batch,
+                        tune_shape_descriptor(plan).c_str(),plan.window,plan.dataflow,target,best.rate);
                 return best;
             };
             if (!remeasurement && !fresh) {
@@ -1491,7 +1493,7 @@ struct WindowSearch {
                 auto& best = cached.at(Fastest);
                 const double previous = best.rate;
                 matrix.recheck(best,scope.str(),search.str());
-                if (best.rate > previous)
+                if (best.rate != previous)
                     matrix.restore_batches(scope.str(),search.str(),cached,capacity);
             }
             report_batches(cached,old95,matrix.measured95(),p,w);
@@ -1578,12 +1580,8 @@ bool tune_windows(const Device& device, const ecm_stage1::Stage1Request& request
 } // namespace
 
 std::string tune_shape_descriptor(const Plan& plan) {
-    auto forward = plan.forward, inverse = plan.inverse;
-    std::replace(forward.begin(), forward.end(), '+', ',');
-    std::replace(inverse.begin(), inverse.end(), '+', ',');
-    return std::to_string(unsigned(plan.weighted)) + ':' + std::to_string(plan.tile) + ':' +
-           std::to_string(plan.outer_max) + ':' + std::to_string(plan.window) + ':' +
-           std::to_string(unsigned(plan.warp_tail)) + ':' + forward + ':' + inverse;
+    return ecm_stage1::ntt_shape_text(plan.weighted, std::to_string(plan.tile),
+                                     plan.forward, plan.inverse, pfa_code(plan));
 }
 
 int tune_command(const ecm_stage1::Stage1Options& task, double b1, const ecm_stage1::NttTuneGrid& grid,
@@ -1601,12 +1599,14 @@ int tune_command(const ecm_stage1::Stage1Options& task, double b1, const ecm_sta
         if (!path.empty() && std::filesystem::is_regular_file(path)) {
             ecm_io::FileLock lock(path);
             auto profile=load(path);
-            if (!profile.stage1_ntt.empty() && pt::optional_uint(profile.metadata,"format")<pt::format)
+            const bool graph_compacted=pt::compact_stage1_graphs(profile.stage1_ntt);
+            if (!profile.stage1_ntt.empty() && (graph_compacted || profile.stage1_compacted ||
+                    pt::optional_uint(profile.metadata,"format")<pt::format))
                 ecm_io::write_atomic(path,profile.serialize());
         }
         const auto device = device_info(task.execution.device_index, task.execution.ntt.memory_mib);
-        ecm_ts_fprintf(stdout,"ntt_type = convolution:tile_bits:max_radix_bits:graph_bits:"
-                               "warp_tail:forward_pass_bits:inverse_pass_bits (0=linear, 1=weighted)\n");
+        ecm_ts_fprintf(stdout,"ntt_shape = convolution:tile_layers:forward:inverse:pfa\n");
+        ecm_ts_fprintf(stdout,"convolution 0=linear 1=weighted; pfa 0=none 1=direct 2=coalesced 3=coalesced+outer\n");
         std::vector<unsigned> windows;
         if (!edwards) windows = {0};
         else if (grid.naf.first) {

@@ -1,5 +1,7 @@
 #include "log_parse.h"
+#include "ecm/stage1/ntt_shape_text.h"
 
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -73,6 +75,52 @@ bool contains(const std::string &s, const char *needle) {
     return s.find(needle) != std::string::npos;
 }
 
+void normalize_stage1_ntt_shape(Stage1Execution& execution) {
+    const auto shape = execution.details.find("ntt_shape");
+    if (shape == execution.details.end()) return;
+
+    std::string_view rest(shape->second);
+    const bool slash = rest.find('/') != rest.npos;
+    const char delimiter = slash ? '/' : ':';
+    const auto count = std::count(rest.begin(), rest.end(), delimiter) + 1;
+    if (slash ? (count < 5 || count > 7) : count != 7) return;
+
+    std::array<std::string_view, 7> fields{};
+    for (auto& field : fields) {
+        const auto end = rest.find(delimiter);
+        field = rest.substr(0, end);
+        if (field.empty()) return;
+        if (end == rest.npos) break;
+        rest.remove_prefix(end + 1);
+    }
+    using Code = ecm_stage1::NttPfaCode;
+    const auto type = fields[0];
+    const bool weighted = type == (slash ? "weighted" : "1");
+    if (!weighted && type != (slash ? "linear" : "0")) return;
+    auto tile = fields[1];
+    const auto forward = fields[slash ? 3 : 5], inverse = fields[slash ? 4 : 6];
+    auto pfa = forward.find("r5") != forward.npos ? Code::Unknown : Code::None;
+    if (slash) {
+        if (tile.size() < 2 || tile.front() != 't' || fields[2].size() < 2 || fields[2].front() != 'w') return;
+        tile.remove_prefix(1);
+        execution.details.try_emplace("ntt_warp_tail", fields[2].substr(1));
+        const auto layout = fields[5];
+        if (layout == "twiddle") pfa = Code::None;
+        else if (layout == "pfa-direct") pfa = Code::Direct;
+        else if (layout == "pfa-coalesced") pfa = Code::Coalesced;
+        else if (layout == "pfa-coalesced+outer") pfa = Code::FusedOuter;
+    } else {
+        // Older colon records included outer_max, graph and warp before the pass sequences.
+        execution.details.try_emplace("ntt_graph_bits", fields[3]);
+        execution.details.try_emplace("ntt_warp_tail", fields[4]);
+    }
+    auto forward_layers = std::string(forward), inverse_layers = std::string(inverse);
+    std::replace(forward_layers.begin(), forward_layers.end(), ',', '+');
+    std::replace(inverse_layers.begin(), inverse_layers.end(), ',', '+');
+    shape->second = ecm_stage1::ntt_shape_text(weighted, tile, forward_layers, inverse_layers, pfa);
+    execution.details.try_emplace("ntt_type", weighted ? "weighted" : "linear");
+}
+
 bool parse_stage1_execution(const std::string& line, Stage1Execution& out) {
     constexpr std::string_view prefix = "Stage1 execution:";
     if (line.compare(0, prefix.size(), prefix) != 0)
@@ -98,6 +146,7 @@ bool parse_stage1_execution(const std::string& line, Stage1Execution& out) {
         !((parsed.curve == "ed" && parsed.param == "e") ||
           (parsed.curve == "mont" && (parsed.param == "m0" || parsed.param == "m2" || parsed.param == "m3"))))
         return false;
+    if (parsed.backend == "ntt") normalize_stage1_ntt_shape(parsed);
     out = std::move(parsed);
     return true;
 }

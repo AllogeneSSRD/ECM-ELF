@@ -112,6 +112,7 @@ inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bo
         if(const auto length=field("ntt_length");!length.empty())append("NTT: "+length);
         if(const auto shape=field("ntt_shape");!shape.empty())line+=" "+shape;
         if(const auto naf=field("naf");!naf.empty())line+=" NAF="+naf;
+        append_field("ntt_graph_bits", "Graph");
         return line;
     }
     if (backend == "cgbn" || backend == "opencl" || backend == "cuda-thread") {
@@ -130,9 +131,10 @@ inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bo
         append_field("ntt_length", "L");
         append_field("ntt_bpw", "bpw");
         if (const auto shape = field("ntt_shape"); !shape.empty())
-            append(std::string(text("worker.stage1_ntt_type", zh)) + "=" + shape);
+            append(std::string(text("worker.stage1_ntt_shape", zh)) + "=" + shape);
         else
             append_field("ntt_type", text("worker.stage1_ntt_type", zh));
+        append_field("ntt_graph_bits", "Graph");
     } else if (backend == "cpu") {
         if (const auto impl = field("cpu_impl"); !impl.empty())
             append(impl == "ifma" ? "IFMA SIMD" : impl == "scalar" ? "GMP scalar" :
@@ -153,6 +155,7 @@ inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bo
 
     static constexpr std::string_view shown[] = {
         "cpu_impl", "kernel_weight", "tpi", "ntt_type", "ntt_bits", "ntt_length", "ntt_bpw", "ntt_shape",
+        "ntt_graph_bits", "ntt_max_radix_bits",
         "naf", "algorithm", "chain", "prac", "ntt_memory_per_curve_bytes", "ntt_memory_config_mib",
         "ntt_memory_device_bytes", "ntt_naf_memory_mb", "max_curves_in_memory"
     };

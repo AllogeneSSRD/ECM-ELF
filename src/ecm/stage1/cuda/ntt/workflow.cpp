@@ -49,7 +49,7 @@ void log_ntt_execution(const ExecutionOptions& opt, size_t modulus_bits, size_t 
             << " ntt_length=" << plan.length << " ntt_bpw=" << plan.bpw
             << " naf=" << naf_window << " ntt_batch=" << batch << " ntt_digits=" << plan.digits
             << " ntt_resume=" << resume << " ntt_shape=" << ecm_mersenne_ntt::tune_shape_descriptor(plan)
-            << " ntt_tile_bits=" << plan.tile << " ntt_max_radix_bits=" << plan.outer_max
+            << " ntt_tile_bits=" << plan.tile
             << " ntt_graph_bits=" << plan.window << " ntt_warp_tail=" << unsigned(plan.warp_tail)
             << " ntt_forward_pass_bits=" << plan.forward << " ntt_inverse_pass_bits=" << plan.inverse
             << " ntt_bpw_avg=" << std::fixed << std::setprecision(6) << double(modulus_bits) / plan.digits

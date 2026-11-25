@@ -42,7 +42,7 @@ gpu_algorithm = "ntt[16384:], cgbn[]"
 Stage1 在控制台和启用的文件日志中用 `Stage1 execution:` 行记录当前计算采用的曲线、参数化和后端。后端完成选型后再输出，包含恢复检查点、资源限制和调优结果生效后的实际值。
 
 - CGBN 输出内核容器位宽 `kernel_weight`、每个大整数的线程数 `tpi` 和适用的启动形状。Edwards 输出实际 NAF 窗口，Montgomery 输出所用点乘链，PRAC 路径同时输出实际搜索宽度 `prac`。
-- NTT 输出本批模数位宽 `ntt_bits`、卷积类型 `ntt_type`、变换长度 `ntt_length`、平均 digit 位宽 `ntt_bpw_avg`、最大 digit 位宽 `ntt_bpw_max`、系数上界 `ntt_u` 和 Goldilocks 域模数 `ntt_q`。旧字段 `ntt_bpw` 等于 `ntt_bpw_max`。`ntt_shape` 沿用调优输出的冒号分隔顺序，包括卷积类型、tile、radix、Graph、warp 尾层和正逆向各趟的层数。Edwards 的 `naf=0` 表示 x-only。
+- NTT 输出本批模数位宽 `ntt_bits`、卷积类型 `ntt_type`、变换长度 `ntt_length`、平均 digit 位宽 `ntt_bpw_avg`、最大 digit 位宽 `ntt_bpw_max`、系数上界 `ntt_u` 和 Goldilocks 域模数 `ntt_q`。旧字段 `ntt_bpw` 等于 `ntt_bpw_max`。`ntt_shape` 与调优输出共用五段形状编码。`ntt_graph_bits` 和 `ntt_warp_tail` 分别记录 Graph 步数上限和 warp 尾处理状态。调试行 `stage1_ntt_plan` 另列 outer 上限。Edwards 的 `naf=0` 表示 x-only。[NTT 形状编码](TUNE.md#ntt-形状编码)
 - CPU 输出实际选中的实现和线程数，以及适用的 NAF 窗口或 PRAC 搜索宽度。OpenCL 输出实际内核形状和工作组；由驱动自行决定的工作组显示为 `auto`。
 
 GUI v2 从 Worker 输出读取这些数据，详情里的预计交接另按 Worker 的有效配置显示。见 [GUI v2 Worker 详情](GUI_V2.md)。

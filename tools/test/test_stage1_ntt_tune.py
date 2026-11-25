@@ -64,13 +64,12 @@ matrix = [
     mirror = out / "screen.log"
     config = fixture.replace('log_file = ""', f'log_file = "{mirror.as_posix()}"')
     log = run("full", ["--tune", "ntt", "--bits", str(p)], cfg=config)
-    legend = ("ntt_type = convolution:tile_bits:max_radix_bits:graph_bits:"
-              "warp_tail:forward_pass_bits:inverse_pass_bits (0=linear, 1=weighted)")
-    header = "length max_exp ntt_type batch iter/s"
+    legend = "ntt_shape = convolution:tile_layers:forward:inverse:pfa"
+    header = "length max_exp ntt_shape batch iter/s graph_steps"
     assert log.index(legend) < log.index(header)
     lengths = [int(n) for n in re.findall(r"^(?:\[[^\n]*\] )?(?:(?:Best|95%) +)?(\d+) +\d+ +[01]:", log, re.M)]
     assert len(set(lengths)) == 2, lengths
-    best_lines = re.findall(r"Best +\d+ +\d+ +[01]:[\d:,]+ +\d+c +\d+ iter/s", log)
+    best_lines = re.findall(r"Best +\d+ +\d+ +[01]:\S+:[0-3] +\d+c +\d+ iter/s graph_steps=\d+", log)
     mirrored = mirror.read_text(encoding="utf-8")
     assert legend in mirrored and len(best_lines) == 3 and all(line in mirrored for line in best_lines)
     profile = tomllib.loads(database.read_text(encoding="utf-8"))
@@ -95,13 +94,13 @@ matrix = [
     assert "measured=1 " in hot and hot.count("stage1_ntt_recheck:") == 3
     assert ("status=updated" in hot) == (database.read_bytes() != snapshot)
     assert "source=tune" in run("full_cached", [*flags[:1], "1", *flags[2:]], expression=expression)
-    assert re.search(r"95% +\d+ +\d+ +[01]:[\d:,]+ +\d+c +\d+ iter/s", log)
+    assert re.search(r"95% +\d+ +\d+ +[01]:\S+:[0-3] +\d+c +\d+ iter/s graph_steps=\d+", log)
     print("PASS full tune CLI, measured 95% batch and production selection", flush=True)
 
     direct = run("direct", ["--tune", "ntt,length=8"],
                  cfg=fixture + "ntt_window_bits = 0\nntt_length = 8\n")
-    assert re.search(r"Best +8 +\d+ +[01]:\d+:\d+:0:", direct)
-    assert set(re.findall(r"8 +\d+ +([01]):\d+:\d+:0:", direct)) == {"0", "1"}
+    assert re.search(r"Best +8 +\d+ +[01]:\S+:0 +\d+c +\d+ iter/s graph_steps=0", direct)
+    assert set(re.findall(r"8 +\d+ +([01]):\S+:0 +\d+c +\d+ iter/s (?:graph_steps=)?0\b", direct)) == {"0", "1"}
     print("PASS both modes grouped at one length with direct submission", flush=True)
 
     p = 58631

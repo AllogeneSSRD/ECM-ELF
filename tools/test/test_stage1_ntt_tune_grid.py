@@ -53,10 +53,11 @@ def main():
                 assert re.fullmatch(prefix + r"=+", lines[i+1]), name
             if "stage1_ntt_round:" in line or "stage1_ntt_pfa_scan:" in line or "stage1_ntt_graph_scan:" in line or "stage1_ntt_find:" in line:
                 first_measurement = True
-            header = prefix + "length max_exp ntt_type batch iter/s dataflow actual/target steps/group steps/block radix5_layout"
+            header = prefix + "length max_exp ntt_shape batch iter/s graph_steps dataflow actual/target steps/group steps/block"
+            measurement = prefix + r"\d+ \d+ [01]:\d+:[r\d+]+:[r\d+]+:[0-3] \d+c "
             if re.fullmatch(header, line):
-                assert re.match(prefix + r"\d+ \d+ [01]:", lines[i+1]), name
-            if re.match(prefix + r"\d+ \d+ [01]:", line):
+                assert re.match(measurement, lines[i+1]), name
+            if re.match(measurement, line):
                 assert bool(re.fullmatch(header, lines[i-1])) == first_measurement, name
                 first_measurement = False
         return result.stdout
@@ -214,6 +215,48 @@ def main():
                   stdin="2^127-1\n", settings=f"ntt_profile = 1\nntt_memory_mib = {64*ntt}\nnaf_memory_mb = {naf}")
         assert f"p=127 naf={expected} source=tune" in log, log
 
+    def sampled(record, ntt, naf, rate):
+        row = footprint(record, ntt, naf, rate)
+        for key in ("median_ms", "total_device_ms", "stddev_seconds"):
+            row[key] *= record["iter_per_s"] / rate
+        return row
+
+    # A known newer allocation supersedes the same decision even with a higher
+    # footprint and lower rate. Numeric versions sort independently of row order.
+    earlier = sampled(dict(timed, program_version="0.73.9"), 2, 1, 500)
+    latest = sampled(dict(timed, program_version="0.73.10"), 4, 3, 300)
+    latest_fast = sampled(latest, 5, 4, 400)
+    change = [earlier, latest, latest_fast]
+    for label, records in (("forward", change), ("reverse", change[::-1])):
+        database = out / f"release_footprint_{label}.toml"
+        fields = list(dict.fromkeys(k for r in records for k in r))
+        write_matrix(text, fields, [[r.get(k, "") for k in fields] for r in records])
+        run(f"release_footprint_{label}", ["-tune", "length=32,naf=6,batch=1,time=0.01", "32"],
+            settings="ntt_profile = 1")
+        stored = [r for r in rows() if r["length"] == timed["length"]]
+        assert len(stored) == 2 and {r["program_version"] for r in stored} == {"0.73.10"}
+        assert {r["iter_per_s"] for r in stored} == {300, 400}
+
+    # A finished automatic search may omit only Graph variants with a faster,
+    # no-larger replacement and the same timing coverage. Pins and roles stay.
+    database = out / "graph_compaction.toml"
+    auto = dict(timed, batch_scope=f'edwards/6/0/0/0/-1/-1:0/{timed["length"]}/0',
+                batch_search="0/1/final-graph/repeat=2:2", batch_roles=0, sample_phase=2)
+    auto.pop("tested_groups", None)
+    auto.pop("explicit_batch", None)
+    winner = sampled(dict(auto, graph_bits=16, batch_roles=15), 4, 3, 300)
+    slower = sampled(dict(auto, graph_bits=8), 5, 3, 250)
+    lower_memory = sampled(dict(auto, graph_bits=32), 3, 2, 200)
+    coarse_anchor = sampled(dict(auto, graph_bits=4, sample_phase=1), 5, 4, 100)
+    pinned = sampled(dict(auto, graph_bits=64, explicit_batch=1), 5, 4, 100)
+    fixed = sampled(dict(auto, graph_bits=2, batch_scope=auto["batch_scope"].replace("/0/-1/", "/0/2/")), 5, 4, 100)
+    records = [slower, winner, lower_memory, coarse_anchor, pinned, fixed]
+    fields = list(dict.fromkeys(k for r in records for k in r))
+    write_matrix(text, fields, [[r.get(k, "") for k in fields] for r in records])
+    run("graph_compaction", ["-tune", "length=32,naf=6,batch=1,time=0.01", "32"], settings="ntt_profile = 1")
+    stored = [r for r in rows() if r["length"] == timed["length"]]
+    assert {r["graph_bits"] for r in stored} == {2, 4, 16, 32, 64}
+
     # The 1M release capped these three families, including forced 131072-point
     # weighted transforms. Loading a wide search must preserve their old scope.
     wide_rows = []
@@ -256,15 +299,14 @@ def main():
         offsets = [log.index(phase) for phase in phases]
         assert offsets == sorted(offsets)
         before = log[:offsets[2]]
-        assert "pfa-coalesced" in before and "pfa-direct" not in before and "twiddle" not in before
+        assert set(re.findall(r" 2560 \d+ 1:\S+:([0-3]) \d+c ", before)) == {"2"}
         scan = log[offsets[2]:offsets[3]]
         batch = re.search(r"batch=(\d+)", scan)[1]
-        measured = re.findall(r" (\d+)c [^\n]+ (twiddle|pfa-direct|pfa-coalesced)$", scan, re.M)
-        assert {(b,layout) for b,layout in measured} >= {(batch,"twiddle"),(batch,"pfa-direct")}
-        assert all(b == batch for b,_ in measured)
+        measured = re.findall(r" 2560 \d+ 1:\S+:([0-3]) (\d+)c \d+ iter/s \d+ (\d+) ", scan)
+        assert {layout for layout, _, _ in measured} >= {"0", "1"}
+        assert {b for _, b, _ in measured} == {batch}
         inverse_fusion = 1 << 24
-        flows = [int(flow) for flow in re.findall(r" iter/s (\d+) ", scan)]
-        assert sum(bool(flow & inverse_fusion) for flow in flows) == 1, scan
+        assert sum(bool(int(flow) & inverse_fusion) for _, _, flow in measured) == 1, scan
         assert f"batch={batch} " in log[offsets[3]:offsets[4]]
         assert re.search(r"measured=[1-9]\d* reused=0 ", log)
 
@@ -408,7 +450,7 @@ def main():
     assert "stage1_ntt_graph_scan:" not in cold
     compact = rows()
     def aligned_report(log):
-        pattern = r"(Single|Max|Best|95%) +(\d+) +(\d+) +(\S+) +(\d+)c +(\d+) iter/s dataflow=\d+"
+        pattern = r"(Single|Max|Best|95%) +(\d+) +(\d+) +(\S+) +(\d+)c +(\d+) iter/s graph_steps=\d+ dataflow=\d+"
         matches = list(re.finditer(pattern, log))
         assert [m[1] for m in matches] == ["Single", "Max", "Best", "95%"]
         columns = {(m.end(2)-m.start(), m.end(3)-m.start(), m.start(4)-m.start(),
@@ -506,7 +548,7 @@ def main():
         summaries = re.findall(r"stage1_ntt_tune: p=\d+ measured=(\d+) reused=(\d+)", log)
         assert len(summaries) == 2
         assert log.count("stage1_ntt_naf_sample:") == 1
-        assert log.count("length max_exp ntt_type batch iter/s") == (4 if name == "crossing_cold" else 2)
+        assert log.count("length max_exp ntt_shape batch iter/s") == (4 if name == "crossing_cold" else 2)
         assert re.findall(r"stage1_ntt_length_done: p=\d+ naf=6 length=(\d+) phase=fine", log) == ["256", "512"]
         assert "\x1b[" not in log
         if name == "crossing_cold":
@@ -632,7 +674,7 @@ def main():
         log = run(f"short_blocks_{curve}", ["--param", curve, "-tune",
             "ntt,length=4096,batch=32,time=0.01" + spec, "128"],
             settings="ntt_profile = 1\nntt_window_bits = 64")
-        samples = re.findall(r" iter/s (\d+) (\d+\.\d{3})/1 ms (\d+) (\d+) -$", log, re.M)
+        samples = re.findall(r" iter/s 64 (\d+) (\d+\.\d{3})/1 ms (\d+) (\d+)$", log, re.M)
         assert len(samples) == 2
         for _, actual, steps, block in samples:
             assert float(actual) > 0 and 0 < int(block) < 64 and int(steps) % int(block) == 0
@@ -659,8 +701,12 @@ def main():
     assert set(caps) == {6, 8, 10, 12} and caps[6] == caps[8] > caps[10] > caps[12] > 0, caps
     assert sorted(caps[w] for w in winners) == sorted(set(caps.values())), counters
     samples = rows()
-    scans = [(int(w), int(b)) for w, b in re.findall(r"stage1_ntt_graph_scan: p=3556 naf=(\d+) batch=(\d+)", log)]
-    assert len(scans) == len(winners) and {w for w, b in scans} == winners
+    scans = re.findall(r"stage1_ntt_graph_scan: p=3556 naf=(\d+) batch=(\d+)(.*?)(?=stage1_ntt_length_done:)",
+                       log, re.S)
+    assert len(scans) == len(winners) and {int(w) for w, _, _ in scans} == winners
+    for _, batch, section in scans:
+        measured_graphs = re.findall(r" (\d+)c \d+ iter/s (\d+) \d+ ", section)
+        assert set(measured_graphs) == {(batch, graph) for graph in ("4", "8", "32", "64")}
     for w, cap in caps.items():
         candidate = [r for r in samples if r["naf_window"] == w]
         measured = {r["batch"] for r in candidate}
@@ -668,7 +714,7 @@ def main():
         phases = {pair for r in candidate for pair in coverage(r)}
         assert phases == ({(1, 1), (2, 2)} if w in winners else {(1, 1)})
         scanned = {r["batch"] for r in candidate if r["graph_bits"] != 16}
-        assert scanned == {b for window, b in scans if window == w}
+        assert scanned <= {int(b) for window, b, _ in scans if int(window) == w}
     endpoints = {int(w): float(rate) for w, rate in re.findall(
         r"stage1_ntt_naf_screen: p=3556 naf=(\d+) capacity=\d+ iter_per_s=(\S+)", log)}
     assert max((6, 8), key=endpoints.get) in winners
@@ -687,9 +733,8 @@ def main():
     assert {(1, 1), (2, 3)} <= {pair for r in updated for pair in coverage(r)}
     wide = run("wide", ["-tune", "exp=900001,naf=6,batch=1,time=0.25", "16"],
                convolution="auto", settings="ntt_memory_mib = 128")
-    layouts = re.findall(r"^.*? 40960 \d+ \S+ \d+c [\d.]+ iter/s \d+ .* (\S+)$", wide, re.M)
-    split_layouts = {"twiddle", "pfa-direct", "pfa-coalesced"}
-    assert split_layouts <= set(layouts) <= split_layouts | {"pfa-coalesced+outer"}
+    layouts = set(re.findall(r" 40960 \d+ 1:\S+:([0-3]) \d+c ", wide))
+    assert {"0", "1", "2"} <= layouts <= {"0", "1", "2", "3"}
     assert "Best " in wide
     candidates = [r for r in rows() if r["reference_bits"] >= 720001]
     assert {r["length"] for r in candidates} == {32768, 40960, 65536}
@@ -697,7 +742,7 @@ def main():
     database = out / "forward_outer.toml"
     log = run("forward_outer", ["-tune", "ntt,length=5120,naf=6,batch=3,time=0.25", "128"],
               convolution="weighted", settings="ntt_tile = 9\nntt_outer_radix_limit = 3\nntt_window_bits = 16")
-    assert "pfa-coalesced+outer" in log
+    assert re.search(r" 5120 \d+ 1:\S+:3 +3c ", log)
     forward_outer = 1 << 25
     assert {bool(r["dataflow"] & forward_outer) for r in rows() if r["length"] == 5120} == {False, True}
     bare = run("bare", ["-tune", "--tune-seconds", "1"], settings="ntt_profile = 1")
