@@ -86,6 +86,16 @@ task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/confi
 
 共享选择、主机准备、CPU/GPU host workflow、Montgomery 构造/codec 和结果发布已提取；队列读写已集中于主机读写 Module；Montgomery 环境策略、私有执行合同和应用 PARI 已收口。实际设备同步、回读、资源管理继续依赖 CUDA。独立主机构建的真实依赖记录同时覆盖 task、标量与进度实现，不包含 CUDA SDK 头。
 
+### 迭代口径与算术计数
+
+`iter` 的单位由标量链决定。记 $M$ 为一次模乘，$S$ 为一次模平方。
+
+- **Edwards NAF** 的 `columns` 每步推进一列。每列先倍点，非零列再查表加点。原生 CUDA NTT 的零列为 $4M+3S$，非零列为 $12M+3S$。CPU 和 CGBN 使用各自的公式与字典，按对应计数换算。 [NAF 点算术与非零列换算](NAF.md#点字典与执行成本)
+- **Montgomery ladder／NTT x-only** 的 `bits` 每步推进一个标量位，常规步骤做一次差分加点和一次倍点。固定归一化差点时，逻辑成本为 $6M+4S$，其中曲线常数乘法计作一次 $M$。使用投影差点时为 $7M+4S$。初始化另计。Edwards 映射到 Montgomery x-only 后沿用这一口径。 [Montgomery 公式](../reference/ECM_MONTGOMERY_MATH.md#1-曲线与差分点) · [CUDA NTT 阶梯](../../src/ecm/stage1/cuda/ntt/ladder.cu#L1265)
+- **Montgomery PRAC** 的 CUDA 进度标为 `M-equiv`，按实际计划累计 $5D+6A$，其中 $D$ 是差分链倍点次数，$A$ 是差分加点次数。这是链计划以模乘和模平方等权计算的代价，单位与标量 bit 及 NAF 列不同。 [PRAC 成本模型](PRAC.md#搜索耗时与执行成本) · [CUDA 进度累计](../../src/ecm/stage1/montgomery/cuda/prac/runtime.cu#L248)
+
+CUDA NTT 的 `stage1_ntt_progress` 用共享游标计算单条活动曲线的列/s 或 bit/s。调优表的 `iter/s` 则以整批的曲线列数或曲线位数为分子。完整生产观测用有效曲线数乘已执行步数除以设备时间。比较日志、调优表或性能图时先对齐曲线数、单位和计时区间。 [生产进度](../../src/ecm/stage1/cuda/ntt/workflow.cpp#L701) · [生产观测](../../src/ecm/stage1/cuda/ntt/tune.cpp#L1961) · [调优采样](../usage/TUNE.md#采样与吞吐)
+
 ## CPU 执行与共享主机准备
 
 CPU 的 [Edwards workflow](../../src/ecm/stage1/edwards/cpu/workflow.cpp) 和 [Montgomery workflow](../../src/ecm/stage1/montgomery/cpu/workflow.cpp) 接收统一 Stage1Request、执行副本及借用的 Context，直接返回 ComputationResult。新计算不先编码 save 文本再解析；Edwards 只在恢复边界解码并校验兼容的 DONE_V1，空点记录转为 CompletedWithoutPoint。Montgomery 在释放局部数组前移动末点。共享 ISA 探测、CPU 绑定和进度显示位于 [cpu_runtime](../../src/ecm/stage1/cpu_runtime.cpp)；线程寿命、GMP 临时量及进度条由作用域管理，工作线程异常传回 workflow。普通基线 CXX 不继承 AVX512 编译设置。最终 save 和结果由 task 发布。

@@ -37,6 +37,7 @@ ECM-ELF 对 Edwards 构造同一个整数标量 $s=48\operatorname{lcm}(1,\ldots
 | CPU GMP 定长／IFMA | 仿射 $(x,y,dxy)$ | $4S+3M$ | 约 $8M$ |
 | CUDA CGBN HWCD | 投影 $(X,Y,Z,dT)$ | $4S+3M$ | $10M$ |
 | CUDA CGBN 2XY | 同一投影字典 | $3S+4M$ | $10M$ |
+| CUDA NTT 原生 2XY | 仿射 $(x,y,dxy,x+y)$ 的预变换频谱 | $3S+4M$ | $8M$ |
 
 $S$ 和 $M$ 分别代表一次模平方和模乘，表中未计模加减、坐标搬运及设备调度。HWCD 通过平方求 $2XY$。2XY 直接相乘，省掉一次平方及部分加减，多做一次模乘。CPU 和 GPU 在非零列为加点补算倍点的扩展坐标 $T$。CPU 仿射加点通常跳过输出 $T$，收尾或诊断需要完整点时另计。CGBN 每个非零列含补算 $T$ 的一次模乘和投影加点的九次模乘。切片末尾为零列时，CGBN 另补一次 $T$，供写回和快照保持 $XY=ZT$。见 [CPU GMP 点算术](../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp#L323)、[IFMA 主循环](../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp#L908)、[CGBN 倍点](../../src/ecm/stage1/edwards/cuda/naf.cuh#L38) 和 [缓存加点](../../src/ecm/stage1/edwards/cuda/point.cuh#L70)。
 
@@ -46,7 +47,45 @@ $S$ 和 $M$ 分别代表一次模平方和模乘，表中未计模加减、坐�
 
 CPU 建表做批量模逆以得到仿射项，GMP 每条曲线、IFMA 每个 lane 各处理自身分母，非单位分母需检查因子或走已有回退路径。CGBN 的字典留在投影坐标，预存 $dT$ 使每次加点省掉一乘。对 $m>1$，CGBN 建表中的点算术为一次完整倍点、一次 $2P$ 的 $dT$ 预乘、$m-1$ 次缓存加点及 $m$ 次写入字典前的预乘，合计 $4S+(10m-4)M$，另计 Montgomery 域转换。$w=2$ 只需基点一项，准备核跳过 $2P$ 的构造。见 [CUDA 字典核](../../src/ecm/stage1/edwards/cuda/naf.cuh#L6) 和 [CPU IFMA 建表](../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp#L767)。
 
-设 $A_w$ 为非零列数。对长标量，$A_w\approx L/(w+1)$。CGBN HWCD 循环约为 $4L_wS+(3L_w+10A_w)M$，加上上述片末修正。CPU 对应的乘法项约为 $3L_w+8A_w$。宽度每加一位，预计少做 $L/((w+1)(w+2))$ 次加点，字典多出 $2^{w-2}$ 项。配置里的 $w$ 控制编码宽度和表容量，不做 PRAC 那样的候选链搜索。见 [PRAC 搜索机制](PRAC.md#搜索强度与重现性)。
+原生 CUDA NTT 的 2XY 倍点先算 $X^2$、$Y^2$、$Z^2$ 和 $XY$，再做三个输出乘法。非零列额外算一个输出乘法以得到 $T$，再做 7 次字典混合加点乘法，其中 4 次使用预计算的字典频谱。字典已把曲线参数 $d$ 乘入，主循环使用该字典项完成乘法。频域融合可改变实际指令数和变换调度，这里按点公式统计逻辑模运算。 [NTT 倍点与加点](../../src/ecm/stage1/cuda/ntt/ladder.cu#L1289) · [字典构造](../../src/ecm/stage1/cuda/ntt/ladder.cu#L1472)
+
+### 按 NAF 列换算算术吞吐
+
+NAF 从低位编码。写入非零列时，当前奇数 $x$ 减去选出的带符号数字 $d$ 后可被 $2^w$ 整除，因此接下来至少有 $w-1$ 列零。走完这段必然的零列后，若把剩余整数的奇偶近似视为均匀，每多遇到一个偶数就再写一列零。找到下一个奇数前平均还会多写一列零。两个非零列的平均间隔于是约为 $1+(w-1)+1=w+1$ 列，长标量的非零占比近似为 $1/(w+1)$。实际比例取决于标量和窗口。 [CUDA 主机编码器](../../src/ecm/stage1/scalar.cpp#L394)
+
+模乘 $M$ 和模平方 $S$ 各计作 1 MAD。设 $L_w$ 为实际 NAF 列数，$A_w$ 为非零列数，$\rho=A_w/L_w$。
+
+- **w0 (无 NAF)** 使用 Montgomery x-only 阶梯，每 bit 固定为 $6M+4S=10$ MAD。最高位用于初始化，表中统计其余 bit 及其中的置位数。置位率不影响每 bit 的成本。 [阶梯成本](STAGE1.md#迭代口径与算术计数) · [生产 bit 计数](../../src/ecm/stage1/cuda/ntt/workflow.cpp#L366)
+- **原生 Edwards NAF** 每 iter 处理一列，平均成本为 $4M+3S+8\rho M$，即 $7+8\rho$ MAD/iter。w8 的 $\rho\approx 1/9$，因此约为 **7.89 MAD/iter**。每曲线主循环共计 $3L_w S+(4L_w+8A_w)M$。 [NTT 倍点与加点](../../src/ecm/stage1/cuda/ntt/ladder.cu#L1289)
+
+以 PRP 或 P−1 Stage1 主循环的一次模平方为 1 MAD，排除校验、建表等额外开销，**原生 Edwards NAF w8 每 iter 的逻辑模运算量约为一次模平方的 7.89 倍**。实测耗时还取决于模乘和模平方的相对成本、频谱复用与批量并行。
+
+将聚合的曲线·列/s 乘以平均 MAD/列，可得逻辑模运算/s。完整生产标量从 `stage1_ntt_edwards_naf` 读 `additions / columns`，tune 样本用 `sample_nonzero / block_steps`，组内重复同一块时比例相同。 [生产列统计](../../src/ecm/stage1/cuda/ntt/workflow.cpp#L637) · [调优块统计](../../src/ecm/stage1/cuda/ntt/tune.cpp#L448)
+
+下表使用 $B_1=1{,}000{,}000$ 的生产 Edwards 标量 $48\operatorname{lcm}(1,\ldots,B_1)$。最后一列以同一标量的 w0 主循环总运算量为 100%，按各窗口的 $7L_w+8A_w$ 除以 w0 总运算量。
+
+| NAF $w$ | 总列数或 bit 数 | 非零列或置位数 | 非零占比 | 平均 MAD/列或 bit | 总运算量（w0 = 100%） |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0（无 NAF） | 1,442,104 | 720,672 | 49.9736% | 10.0000 | 100.0000% |
+| 2 | 1,442,105 | 480,031 | 33.2868% | 9.6629 | 96.6295% |
+| 4 | 1,442,105 | 288,207 | 19.9852% | 8.5988 | 85.9882% |
+| 6 | 1,442,106 | 205,953 | 14.2814% | 8.1425 | 81.4252% |
+| 8 | 1,442,100 | 160,094 | 11.1014% | 7.8881 | 78.8809% |
+| 10 | 1,442,106 | 131,111 | 9.0916% | 7.7273 | 77.2734% |
+| 12 | 1,442,096 | 110,901 | 7.6903% | 7.6152 | 76.1518% |
+
+`naf_work` 接收整数 B1 和一个或多个窗口，调用生产标量构造器与 `EcmEdwardsNaf`，输出 CSV。总步数、非零数和总 MAD 以原始整数输出，占比和平均值由这些整数分别计算。工具只使用 CPU 和 GMP。 [计数工具源码](../../tools/stat/naf_work.cpp)
+
+```powershell
+cmake --build build_stage1_local --config Release --target naf_work
+.\build_stage1_local\naf_work.exe 1000000 0 2 4 6 8 10 12
+```
+
+对比不同窗口时采用各自的实际 $L_w$。CGBN HWCD 循环约为 $4L_wS+(3L_w+10A_w)M$，加上上述片末修正。CPU 对应的乘法项约为 $3L_w+8A_w$。在列数近似不变时，窗口从 $w$ 加一位，预计少做约 $L_w/((w+1)(w+2))$ 次加点，字典增加 $2^{w-2}$ 项。
+
+**M57097 生产算例。** RTX 4070 Ti、ECM-ELF 0.73.14、$B_1=5{,}200{,}000$、w10、2560 点加权 NTT、125 条曲线、Graph64。完整标量有 7,502,263 列，其中 681,864 列非零，占 9.089%。每条曲线共计 57,970,753 次逻辑模运算，平均 7.727 次/列。该批从第 274,578 列恢复，剩余 7,227,685 列的设备时间为 2,502.828 秒，整批约 360,976 曲线·列/s。这是一个恢复样本，设备主循环计时排除准备和读回，未采集功耗。换算该区间的精确逻辑模运算/s 时使用区间内的非零列数。 [生产日志摘录](../../data/experiments/stage1_m57097_iter/production_excerpt.log)
+
+LL 的一次递推以一次模平方为核心。PRP 每步推进一次模平方，另有块间校验。GPUOWL 独立 P−1 Stage1 每个指数位做一次平方，置位时还融合乘以 3，并有分块校验。对照这些程序时，按实际统计对象标明曲线·列/s、曲线·bit/s 或逻辑模运算/s。实测算术速度须核对模数、设备、并行和计时边界。 [GIMPS 的 LL 递推](https://www.mersenne.org/various/math.php) · [GPUOWL PRP 基准](../../.refactor/gpuowl/src/Gpu.cpp#L3221) · [GPUOWL P−1 主循环](../../.refactor/gpuowl/src/Gpu.cpp#L4810) · [同位宽模平方对照](../performance/STAGE1_MERSENNE_NTT.md#500-万位的生产吞吐与独立模平方)
 
 ## M16319 在字典归一化时检出因子
 

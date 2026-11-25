@@ -1732,7 +1732,7 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
         compare_resume |= resume_hints[mode] && !choices[mode];
 
     ecm_stage1::NttTuneGrid grid;
-    if (compare_resume) grid.group_ms = 20;
+    if (compare_resume) grid.group_ms = 100;
     TuneNafSamples naf_samples{uint64_t(request.b1), compare_resume ? resume_naf : nullptr};
     TuneMatrix matrix(device,request,p,window,db,naf_samples,grid);
     const bool covered = std::any_of(quality.begin(),quality.end(),[](unsigned q){return q != 0;});

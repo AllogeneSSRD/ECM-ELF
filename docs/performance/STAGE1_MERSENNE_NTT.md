@@ -60,6 +60,8 @@ RTX 4070 Ti，已知因子的 M3608153 余因子，B1=10000、NAF8、加权长�
 
 **同位宽的模平方。** p=4670003，单条余数链，ECM-ELF 加权长度 262144，Graph=16。预热 100 次，随后计时 1600 次连续设备平方，取三次墙钟中位数，扩容基线为 86.33 µs/平方，最终构建为 82.06 µs/平方。两侧六次的末点哈希一致。相同显卡和指数下，本地 PRPLL `v8.0-683-g481d11ae` 以单 worker、`TUNE_EXP=4670003,GRAPH_BATCH=16` 执行 `2:256:1:256:202`，三次独立 quick=10 调优得到 30.6、25.9、26.8 µs/iter，中位数 26.8。该行的 4672717 为形状支持上限。PRPLL 的 `timePRP` 计时包含平方及块间校验乘法，ECM-ELF 的独立平方计时包含打包、变换、平方和规范归约。此条件下的墙钟比约为 3.06；Edwards 的一列还包含多项坐标运算。两侧全程功耗读数分别为 39.5–65.2 W 和 10.8–39.6 W。平方探针 SHA-256 前缀为 `032151d3d27764e8`，PRPLL 为 `27a65e567515cef1`。[平方计时](../../data/experiments/stage1_ntt_5m/qa_squares.log) · [PRPLL 输入与结果](../../data/experiments/stage1_ntt_5m/square_owl_0/) · [本地 PRPLL 计时实现](../../.refactor/gpuowl/src/Gpu.cpp#L3216)
 
+按实际非零列占比将曲线·列/s 换算为逻辑模运算/s 的方法，以及 M57097 算例，见 [NAF 算术吞吐](../architecture/NAF.md#按-naf-列换算算术吞吐)。
+
 ## 混合长度的前向 outer 融合
 
 比较 0.73.12 的 `pfa-coalesced` 与 `pfa-coalesced+outer`。同一组固定指数、曲线数、NAF 窗口、tile、outer 和 Graph。探针从 sigma 26 起取第一个可用的 Edwards 种子并等量填充，使用 B1=128、Graph 上限 16、outer 上限 3。每种路径交替运行三次，每次测四遍主循环 CUDA event，取上中位值。下表为逐对吞吐比的中位数。设备时间覆盖 NAF 列循环，排除建表、初始化与回读。24 曲线样本用主机字典，其余用 GPU 字典。全部融合与分离样本的射影末点逐 limb 一致。
@@ -503,7 +505,7 @@ CUDA 13.3.73／sm89、MSVC 14.51.36231、驱动 610.88。GPU 利用率至少 50%
 
 ## Stage1 点公式的数据流
 
-生产 Edwards NTT 在曲线构造后映射到 Montgomery x 坐标，与 PARAM0 共用阶梯。每步有三批前向 `4+5+2`（复用松弛 `E` 时为 `4+4+2`），三批逆向 `4+4+2`。固定的 `A24` 和 `x(P)` 按曲线保留频谱，第二批的 `E` 跨第三批复用。
+Edwards NTT 的 x-only 路径在曲线构造后映射到 Montgomery x 坐标，与 PARAM0 共用阶梯。每步有三批前向 `4+5+2`（复用松弛 `E` 时为 `4+4+2`），三批逆向 `4+4+2`。固定的 `A24` 和 `x(P)` 按曲线保留频谱，第二批的 `E` 跨第三批复用。原生 Edwards NAF 按列执行自身的倍点和查表加点。 [迭代口径与算术计数](../architecture/STAGE1.md#迭代口径与算术计数)
 
 Prime95 31.06b01 的 `ecm.cpp` 约 2020–2160 行在原生 Edwards 公式中使用 `GWMUL_FFT_S*` 保留操作数，`gwmulmuladd5` 和 `gwmulmulsub5` 合并乘积，`GWMUL_STARTNEXTFFT` 让适用的多趟 GWNUM 计划在写出乘法结果时开始下一次 FFT。`gwnum/gwnum.h` 以 FFT 状态和未归一化加法的余量限制这些组合。对于本项目的单域 Goldilocks NTT，可迁移的是操作数生命周期、线性组合和边界融合。将未经进位的乘积频谱继续串乘会扩大整数系数，需重新证明精确性。
 

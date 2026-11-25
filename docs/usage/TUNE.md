@@ -55,7 +55,9 @@ Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，�
 
 例如 x-only 选中 64 步、窗口为 16 时，每块启动 4 个 Graph。若该块预热实测 0.8 ms，默认每组回放 125 块，即每曲线 8000 步。窗口是每个 Graph 的步数上限。x-only 的正数尾段可独立建图；所选块短于窗口时，测到的是该尾段。原生 NAF 的连续零列使用 1、2、4 等二次幂长度的 Graph，非零列直接执行倍点和点加。例如 186 列含 26 个非零列时，最短块约 7 列。若这 7 列耗时 160 ms，默认正式组只执行一块。100 ms 是每个正式组的软目标，调优命令的总耗时还包含初始化、试跑及核对。
 
-`sample_pool_steps` 是采样池列数，`block_steps` 是一块实际回放的列数，`timed_steps` 是每曲线每个正式组的列数，`repeats` 是正式组数。原生 Edwards 保存完整标量列数 `naf_columns`、一轮的非零列数 `sample_nonzero` 和所有正式组的 CUDA event 总时间 `total_device_ms`。聚合吞吐 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。各组的中位时间 `median_ms` 和标准差用于观察波动。控制台实测行在吞吐之后依次列出 `graph_steps`、十进制 dataflow 掩码、每组实际/目标设备时间（ms）、每条曲线每组步数（`steps/group`）和每条曲线每个回放块的步数（`steps/block`）。两列步数相除即每组回放块数。原生 Edwards 每步对应一列 NAF，x-only 每步对应一个标量位。原生 Edwards 的 `group_ms` 取各组平均，x-only 取中位数。x-only 采用 `1000 × batch × timed_steps / median_ms`。[GPU 回放和计时](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/cuda/ntt/tune.cpp)
+调优 `iter/s` 统计整批曲线。原生 Edwards 每步对应一列 NAF，单位是曲线·列/s。x-only 每步对应一个标量位，单位是曲线·bit/s。原生 Edwards 按正式组的总列数与总设备时间计算 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。x-only 按每组步数与组时间的中位数计算 `1000 × batch × timed_steps / median_ms`。 [进度与吞吐单位](../architecture/STAGE1.md#迭代口径与算术计数) · [GPU 回放和计时](../../src/ecm/stage1/cuda/ntt/ladder.cu)
+
+`sample_pool_steps` 是采样池步数。`block_steps` 是一个回放块的步数，`timed_steps` 是每曲线每个正式组的步数，`repeats` 是正式组数。原生 Edwards 还保存完整标量列数 `naf_columns`、每块的非零列数 `sample_nonzero` 和正式组 CUDA event 总时间 `total_device_ms`。用 `sample_nonzero / block_steps` 可按本次计时的非零列比例换算逻辑算术吞吐。`median_ms` 和标准差可用来观察波动。控制台实测行在吞吐之后依次列出 `graph_steps`、十进制 dataflow、每组实际/目标设备时间（ms）、`steps/group` 和 `steps/block`。后两列相除得到每组回放块数。 [非零列比例换算](../architecture/NAF.md#点字典与执行成本) · [候选和采样](../../src/ecm/stage1/cuda/ntt/tune.cpp)
 
 ### NTT 形状编码
 
@@ -142,7 +144,7 @@ Edwards 的 `edwards_naf_window_bits=0` 在当前 GPU 的兼容记录中优先�
 
 自动拆批按当前预算筛选候选，合并比较调优与生产实测的 `iter_per_s`。配置 `[stage1] ntt_batch_target_percent`（1–100，默认 95）选择吞吐**大于等于**可行峰值指定百分比的最小实测批量。设为 100 时只选择峰值，多个批量并列取最小者。只有查表后没有可用记录、已配置调优文件、运行时学习开启且剩余曲线数超过容量时，才按当前容量试跑一个真实子批，完成的曲线计入任务。生产样本的 `curves_per_s` 包含标量准备到归一化，部分恢复批次不进入完整排名。日志中 `stage1_ntt_runtime_tune` 表示补测，`stage1_ntt_naf_selection` 表示自动选窗，`stage1_ntt_batch_selection` 和 `stage1_ntt_selection` 给出批量和卷积来源。
 
-恢复原生 Edwards NAF 批次时，保留断点中的曲线、NAF 窗口和游标。自动选型且运行时调优开启时，缺少当前批量实测的 NTT 类型可以从同设备、同窗口和适用指数的邻近批量借用形状。`stage1_ntt_resume_probe` 将这些候选和已有当前批量候选放在一起，按实际批量执行同一份 NAF 片段，两组各以 20 ms 为目标，按设备吞吐选型。测量写回当前批量，后续恢复可直接查表。
+恢复原生 Edwards NAF 批次时，保留断点中的曲线、NAF 窗口和游标。自动选型且运行时调优开启时，缺少当前批量实测的 NTT 类型可以从同设备、同窗口和适用指数的邻近批量借用形状。`stage1_ntt_resume_probe` 将这些候选和已有当前批量候选放在一起，按实际批量执行同一份 NAF 片段，两组各以 100 ms 为目标，按设备吞吐选型。测量写回当前批量，后续恢复可直接查表。 [恢复短测的组目标时间](../../src/ecm/stage1/cuda/ntt/tune.cpp#L1735) · [默认粗测组数](../../include/ecm/stage1/ntt_length.h#L19)
 
 以活跃批量 B、指数 p、NTT 长度 L 计，主数组需要 `88·B·L + 92·B·ceil(p/32)` 字节，此外还有标量、NTT 常量表和加权表。申请前核算显式分配，Graph 上传后及同步执行后用 `cudaMemGetInfo` 采样空闲显存差；两者较大值写为 `peak_bytes`。观测值以 CUDA 上下文就绪后的空闲显存为基准，受同设备其他进程和驱动分配粒度影响。
 

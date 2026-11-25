@@ -814,9 +814,9 @@ def main():
         restored, = ntt_executions(log)
         assert (restored["naf"], restored["ntt_batch"], restored["ntt_resume"]) == ("6", "2", str(cursor))
         if name == "probe":
-            assert "stage1_ntt_resume_probe:" in log and "source=resume_probe" in log, log
+            assert "stage1_ntt_resume_probe: p=57097 naf=6 batch=2 target_ms=100" in log and "source=resume_probe" in log, log
             measured = [r for r in rows() if r["batch"] == 2 and r["reference_bits"] == 57097 and
-                        r.get("sample_target_ms") == 20 and r["naf_window"] == 6]
+                        r.get("sample_target_ms") == 100 and r["naf_window"] == 6]
             assert {r["length"] for r in measured} == {2560, 4096}, measured
             assert len({(r["block_steps"], r["sample_nonzero"], r["repeats"]) for r in measured}) == 1, measured
             winner = str(max(measured, key=lambda r: r["iter_per_s"])["length"])
