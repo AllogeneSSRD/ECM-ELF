@@ -227,7 +227,8 @@ ecm_stage1::ComputationResult run_ntt_batches(
     std::string scratch((mpz_sizeinbase(request.modulus, 2) + 7) / 8, '\0');
     CurvePrefetch prefetch;
     BatchPlanCache plan_cache;
-    bool batch_selected = false;
+    plan_cache.preferred_batch = state.preferred;
+    bool batch_selected = state.preferred && state.preferred <= request.options.execution.ntt.max_batch;
     while (offset < request.curves || state.curves) {
         if (ecm_stage1_stop_requested()) {
             failure.stop();
@@ -247,6 +248,7 @@ ecm_stage1::ComputationResult run_ntt_batches(
                 rounded <= UINT32_MAX && sigma_batch_fits(state.first, uint32_t(rounded), 1, sigma_limit) &&
                 batch_host_bytes(uint32_t(rounded), bits) <= budget)
                 state.curves = state.preferred;
+            plan_cache.preferred_batch = state.preferred;
             save_progress("reserve");
         }
         ecm_ts_fprintf(stdout, "stage1_ntt_batch: offset=%u total=%u curves=%u capacity=%u resumed=%u\n",
@@ -261,7 +263,7 @@ ecm_stage1::ComputationResult run_ntt_batches(
                                   request.append_save, request.expression, options};
         ExecutionOptions execution(options);
         plan_cache.reused = false;
-        if (!resumed) execution.ntt_plan_cache = &plan_cache;
+        execution.ntt_plan_cache = &plan_cache;
         if (options.execution.selection.curve == CurveModel::Edwards) {
             execution.curve_prefetch = &prefetch;
             prefetch.next.clear();

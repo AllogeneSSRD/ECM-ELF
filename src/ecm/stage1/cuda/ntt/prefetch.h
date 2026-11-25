@@ -16,6 +16,7 @@ struct PreparedCurves {
 // Scoped to one immutable queue task. Never persisted in a checkpoint.
 struct BatchPlanCache {
     unsigned p = 0, batch = 0, window = 0;
+    unsigned preferred_batch = 0;
     ecm_stage1::Stage1NttOptions options;
     bool reused = false;
 };

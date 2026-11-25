@@ -1,12 +1,15 @@
 """Check the Stage1 tune grid, timed groups and read-only/runtime production selection."""
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import time
 import tomllib
 
 from test_stage1_ntt_production import edwards_stage1, ntt_executions, saved_points
+from test_stage1_ntt_task_batches import checkpoint_cursor, pausable_process
 
 
 def check_find_probe_budget(log, first):
@@ -747,6 +750,82 @@ def main():
     assert {bool(r["dataflow"] & forward_outer) for r in rows() if r["length"] == 5120} == {False, True}
     bare = run("bare", ["-tune", "--tune-seconds", "1"], settings="ntt_profile = 1")
     assert "stage1_ntt_plan: p=93" in bare and "status=time_limit" in bare
+
+    database = out / "tail_shape.toml"
+    seed = "ntt_max_batch = 3\nntt_profile = 1"
+    run("tail_seed_mixed", ["-tune", "length=2560,naf=6,batch=3,time=0.01", "32"],
+        settings=seed, convolution="weighted")
+    run("tail_seed_binary", ["-tune", "length=4096,naf=6,batch=2,time=0.01", "32"],
+        settings=seed, convolution="weighted")
+    tail_text = database.read_text(encoding="utf-8")
+    columns, *samples = tomllib.loads(tail_text)["ntt"]["matrix"]
+    for row in samples:
+        scale = 100 if row[columns.index("batch")] == 3 else 1
+        row[columns.index("iter_per_s")] *= scale
+        for key in ("median_ms", "stddev_seconds", "total_device_ms"):
+            row[columns.index(key)] /= scale
+    write_matrix(tail_text, columns, samples)
+    tail = run("tail_shape", ["--param", "e", "-sigma", "26", "-gpucurves", "5", "-save", "out.save", "32", "32"],
+               stdin="2^57097-1\n", settings=seed + "\nntt_pad_batch = 0\nedwards_naf_window_bits = 6", convolution="auto")
+    assert [(row["ntt_length"], row["ntt_batch"]) for row in ntt_executions(tail)] == [("2560", "3"), ("2560", "2")]
+    assert re.findall(r"stage1_ntt_plan_timing: .* reused=(\d)", tail) == ["0", "1"]
+    assert "stage1_ntt_prefetch: reused curves=2" in tail
+    assert list(saved_points(out / "tail_shape/out.save", 57097, 32, edwards=True)) == list(range(26, 31))
+
+    resume = out / "resume_probe"
+    resume.mkdir()
+    config = (out / "tail_shape/ecm.toml").read_text(encoding="utf-8").replace(
+        '[stage1]\n', '[stage1]\nparam = "e"\ncheckpoint_interval_seconds = 0.1\n')
+    config = config.replace('[shared]\n', '[shared]\nworktodo_file = "worktodo.txt"\n')
+    todo = "ECM=1,2,57097,-1,8192,8192,5,26\n"
+    checkpoint = ".e_s1_m57097_8192.ckpt"
+    (resume / "ecm.toml").write_text(config.replace('[stage1]\n', f'[stage1]\nstage1_save_dir = "{resume.as_posix()}"\n'),
+                                    encoding="utf-8")
+    (resume / "worktodo.txt").write_text(todo, encoding="utf-8")
+    stop_log = resume / "stop.log"
+    with pausable_process([str(exe), "--config", str(resume / "ecm.toml")], resume, os.environ.copy(), stop_log) as (proc, stop):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and proc.poll() is None:
+            log = stop_log.read_text(encoding="utf-8", errors="replace")
+            if "stage1_ntt_batch: offset=3 total=5 curves=2" in log and checkpoint_cursor(resume / checkpoint):
+                stop()
+                assert proc.wait(timeout=30) != 0, log
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError(f"could not pause inside the short tail: {log[-2000:]}")
+    cursor = checkpoint_cursor(resume / checkpoint)
+    assert cursor > 0
+    snapshot = (resume / checkpoint).read_bytes()
+    for name in ("probe", "cached"):
+        work = resume / name
+        work.mkdir()
+        (work / checkpoint).write_bytes(snapshot)
+        (work / "worktodo.txt").write_text(todo, encoding="utf-8")
+        active_config = config.replace('[stage1]\n', f'[stage1]\nstage1_save_dir = "{work.as_posix()}"\n')
+        (work / "ecm.toml").write_text(active_config.replace("tune_runtime_enabled = false", "tune_runtime_enabled = true"),
+                                      encoding="utf-8")
+        result = subprocess.run([str(exe), "--config", str(work / "ecm.toml")], cwd=work,
+                                text=True, encoding="utf-8", errors="replace",
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+        log = result.stdout
+        (work / "run.log").write_text(log, encoding="utf-8")
+        assert result.returncode == 0, log
+        restored, = ntt_executions(log)
+        assert (restored["naf"], restored["ntt_batch"], restored["ntt_resume"]) == ("6", "2", str(cursor))
+        if name == "probe":
+            assert "stage1_ntt_resume_probe:" in log and "source=resume_probe" in log, log
+            measured = [r for r in rows() if r["batch"] == 2 and r["reference_bits"] == 57097 and
+                        r.get("sample_target_ms") == 20 and r["naf_window"] == 6]
+            assert {r["length"] for r in measured} == {2560, 4096}, measured
+            assert len({(r["block_steps"], r["sample_nonzero"], r["repeats"]) for r in measured}) == 1, measured
+            winner = str(max(measured, key=lambda r: r["iter_per_s"])["length"])
+            assert restored["ntt_length"] == winner
+            points = saved_points(work / "e_m57097_8192.save", 57097, 8192, edwards=True)
+        else:
+            assert "stage1_ntt_resume_probe:" not in log and "source=tune" in log, log
+            assert restored["ntt_length"] == winner
+            assert saved_points(work / "e_m57097_8192.save", 57097, 8192, edwards=True) == points
     print(f"PASS GPU {args.device}: CLI, bounds, Graph grid, timing, cache, runtime and endpoints")
 
 

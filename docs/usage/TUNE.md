@@ -142,6 +142,8 @@ Edwards 的 `edwards_naf_window_bits=0` 在当前 GPU 的兼容记录中优先�
 
 自动拆批按当前预算筛选候选，合并比较调优与生产实测的 `iter_per_s`。配置 `[stage1] ntt_batch_target_percent`（1–100，默认 95）选择吞吐**大于等于**可行峰值指定百分比的最小实测批量。设为 100 时只选择峰值，多个批量并列取最小者。只有查表后没有可用记录、已配置调优文件、运行时学习开启且剩余曲线数超过容量时，才按当前容量试跑一个真实子批，完成的曲线计入任务。生产样本的 `curves_per_s` 包含标量准备到归一化，部分恢复批次不进入完整排名。日志中 `stage1_ntt_runtime_tune` 表示补测，`stage1_ntt_naf_selection` 表示自动选窗，`stage1_ntt_batch_selection` 和 `stage1_ntt_selection` 给出批量和卷积来源。
 
+恢复原生 Edwards NAF 批次时，保留断点中的曲线、NAF 窗口和游标。自动选型且运行时调优开启时，缺少当前批量实测的 NTT 类型可以从同设备、同窗口和适用指数的邻近批量借用形状。`stage1_ntt_resume_probe` 将这些候选和已有当前批量候选放在一起，按实际批量执行同一份 NAF 片段，两组各以 20 ms 为目标，按设备吞吐选型。测量写回当前批量，后续恢复可直接查表。
+
 以活跃批量 B、指数 p、NTT 长度 L 计，主数组需要 `88·B·L + 92·B·ceil(p/32)` 字节，此外还有标量、NTT 常量表和加权表。申请前核算显式分配，Graph 上传后及同步执行后用 `cudaMemGetInfo` 采样空闲显存差；两者较大值写为 `peak_bytes`。观测值以 CUDA 上下文就绪后的空闲显存为基准，受同设备其他进程和驱动分配粒度影响。
 
 #### NTT and transform sizes

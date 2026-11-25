@@ -2,6 +2,7 @@
 
 #include "ecm/stage1/task.h"
 #include <string>
+#include <vector>
 
 namespace ecm_mersenne_ntt {
 
@@ -19,7 +20,9 @@ std::string tune_shape_descriptor(const Plan& plan);
 int tune_command(const ecm_stage1::Stage1Options&, double b1, const ecm_stage1::NttTuneGrid&, bool exhaustive, unsigned seconds);
 ecm_stage1::Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request&, unsigned p,
                                              unsigned curves, const ecm_stage1::Stage1NttOptions&,
-                                             unsigned naf_window, bool require_capacity, BatchMemory&);
+                                             unsigned naf_window, bool require_capacity, BatchMemory&,
+                                             unsigned preferred_batch = 0,
+                                             const std::vector<int16_t>* resume_naf = nullptr);
 bool reuse_tuned_plan(const ecm_stage1::Stage1Request&, unsigned p, unsigned batch, unsigned window,
                       const ecm_stage1::Stage1NttOptions&, BatchMemory&);
 unsigned production_window(const ecm_stage1::Stage1Request&, unsigned p, bool fixed_batch);

@@ -733,12 +733,14 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             const auto plan_started = Clock::now();
             auto* plan_cache = opt.ntt_plan_cache;
             const bool reuse = plan_cache && !has_checkpoint && plan_cache->p == p &&
-                plan_cache->batch == batch && plan_cache->window == naf_window &&
+                plan_cache->batch >= batch && plan_cache->window == naf_window &&
                 ecm_mersenne_ntt::reuse_tuned_plan(request,unsigned(p),batch,naf_window,plan_cache->options,memory);
             if (plan_cache) plan_cache->reused = reuse;
             const auto selected = reuse ? plan_cache->options :
                 ecm_mersenne_ntt::select_tuned_plan(request,unsigned(p),batch,opt.execution.ntt,
-                    naf_window,opt.execution.ntt.observe_batch && !has_checkpoint,memory);
+                    naf_window,opt.execution.ntt.observe_batch && !has_checkpoint,memory,
+                    plan_cache && !has_checkpoint ? plan_cache->preferred_batch : 0,
+                    has_checkpoint && naf_window ? &digits : nullptr);
             const auto plan_ms = milliseconds_since(plan_started);
             ecm_mersenne_ntt::log_batch_span(reuse ? "plan_reuse" : "select_plan",plan_started);
             ecm_ts_fprintf(stdout,"stage1_ntt_plan_timing: ms=%.3f reused=%u\n",plan_ms,unsigned(reuse));
