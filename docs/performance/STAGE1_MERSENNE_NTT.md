@@ -4,7 +4,7 @@ CUDA Stage1 的 NTT 后端可对完整梅森模数 `M=2^p−1` 运行 Suyama Mon
 
 生产入口接受完整 `2^p−1`，或有原始梅森元数据的已知因子任务，单批最多容纳 512 条曲线。CUDA 默认策略在实际模数位宽达到 16384 且符合 NTT 条件时选择 NTT，也可显式启用。队列会按可用显存和调优结果拆分任务。PARAM0 使用 `lcm(1…B1)` 或 `12·lcm(1…B1)`，Edwards 使用 `48·lcm(1…B1)`，按所选窗口走原生 2XY NAF 或 x-only 阶梯。独立算术探针可输出未归一化的 X/Z 与 GMP 对拍。生产入口复用曲线构造、save、结果账本和 Stage2 交接。配置见 [Stage1 用法](../usage/STAGE1.md#cuda-全宽-ntt)。
 
-调优用法、采样口径和显存准入见 [Stage1 NTT 调优](../usage/TUNE.md)。
+调优用法、采样口径和显存准入见 [Stage1 NTT 调优](../usage/TUNE.md)。4070 Ti 上从 107 到 5,242,877 位的完整 Edwards Stage1 曲线成本和并行吞吐见 [全位宽生产复测](STAGE1.md#07313-生产复测)。
 
 ## 300 万位 Edwards 调优的首条结果延迟
 

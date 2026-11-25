@@ -1440,22 +1440,31 @@ struct WindowSearch {
             })->second;
         const auto single_plan = cached_fine && cached.count(Single) ? cached.at(Single).plan :
                                  finals.count(1) ? finals.at(1).plan : peak.plan;
-        auto options = fixed_plan(families.front().options,peak.plan);
+        const auto fine_capacity = finals.find(capacity.batch);
+        const auto max_plan = cached_fine ? cached.at(Capacity) :
+            fine_capacity != finals.end() ? fine_capacity->second : capacity;
+        const auto measure_anchor = [&](unsigned batch, const Plan& plan) {
+            return matrix.sample(fixed_plan(families.front().options,plan),batch,SamplePhase::Fine,nullptr,0,true);
+        };
         round_header(p,w,"find_anchors");
         matrix.header_pending = true;
-        // When the peak itself is at one curve there is only one anchor.
-        const auto single = matrix.sample(peak.batch == 1 ? options : fixed_plan(options,single_plan),
-                                          1,SamplePhase::Fine,nullptr,0,true);
-        auto best = peak.batch == 1 ? single : matrix.sample(options,peak.batch,SamplePhase::Fine,nullptr,0,true);
-        if (!single.rate || !best.rate) throw BudgetError("could not remeasure Stage1 NTT find anchors");
+        const auto single = measure_anchor(1,peak.batch == 1 ? peak.plan : single_plan);
+        const auto remeasured_peak = peak.batch == 1 ? single : measure_anchor(peak.batch,peak.plan);
+        const auto maximum = max_plan.batch == peak.batch ? remeasured_peak :
+            measure_anchor(max_plan.batch,max_plan.plan);
+        if (!single.rate || !remeasured_peak.rate || !maximum.rate)
+            throw BudgetError("could not remeasure Stage1 NTT find anchors");
+        auto best = maximum.rate > remeasured_peak.rate ? maximum : remeasured_peak;
+        auto first = grid.batch.first;
+        if (first == 1 && single.rate > best.rate) best = single;
         ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_find: p=%u naf=%u target=%u best_batch=%u graph=%u\n",
                        p,w,grid.find_percent,best.batch,best.plan.window);
         matrix.header_pending = true;
-        auto selected = best;
+        const auto options = fixed_plan(families.front().options,best.plan);
         const double fraction = grid.find_percent / 100.0;
-        auto first = grid.batch.first;
+        auto selected = remeasured_peak.batch < best.batch && remeasured_peak.rate > fraction * best.rate
+            ? remeasured_peak : best;
         if (first == 1) {
-            if (single.rate > best.rate) best = single;
             if (single.rate > fraction * best.rate) selected = single;
             else ++first;
         }
@@ -1469,7 +1478,7 @@ struct WindowSearch {
             if (score.rate > fraction * best.rate) selected = score;
             else first = batch + 1;
         }
-        found = {{Single,single},{Capacity,capacity},{Fastest,best},{Economical,selected}};
+        found = {{Single,single},{Capacity,maximum},{Fastest,best},{Economical,selected}};
     }
 
     void report(bool repeat) {

@@ -316,16 +316,43 @@ def main():
             row[fields.index(key)] /= 10000
     write_matrix(text, fields, values)
     log = run("roles_kept_cached95", [flags[0], flags[1] + ",find=95", flags[2]], settings=limits)
-    def anchors(log):
+    def anchor_rates(log):
         section = log.split("phase=find_anchors", 1)[1].split("stage1_ntt_find:", 1)[0]
-        return list(map(int, re.findall(r" (\d+)c [\d.]+ iter/s", section)))
+        rates = [(int(batch), int(rate)) for batch, rate in re.findall(r" (\d+)c (\d+) iter/s", section)]
+        assert len(rates) == len({batch for batch, _ in rates}), log
+        return dict(rates)
+
+    def anchors(log):
+        return list(anchor_rates(log))
+
+    def check_capacity_anchor(log):
+        batch, rate = map(int, re.search(r"Max +\d+ +\d+ +\S+ +(\d+)c +(\d+) iter/s", log).groups())
+        peak = int(re.search(r"Best +\d+ +\d+ +\S+ +\d+c +(\d+) iter/s", log)[1])
+        assert anchor_rates(log).get(batch) == rate <= peak, log
+        return peak
+
     assert anchors(log) == [1, 2]
-    current_peak = float(re.search(r"Best +\d+ +\d+ +\S+ +\d+c +([\d.]+) iter/s", log)[1])
-    current_max = int(re.search(r"Max +\d+ +\d+ +\S+ +2c +(\d+) iter/s", log)[1])
-    assert current_max <= current_peak, log
-    assert current_max == int(re.search(r" 2c (\d+) iter/s",
-        log.split("phase=find_anchors", 1)[1].split("stage1_ntt_find:", 1)[0])[1]), log
+    current_peak = check_capacity_anchor(log)
     assert current_peak < 990000 and max(r["iter_per_s"] for r in rows()) == 1000000
+
+    # Give the cache a distinct Best and Max. Both must be measured even when Best
+    # is the single-curve anchor and the capacity plan is outside its search interval.
+    saved_database = database
+    database = out / "find95_separate_capacity.toml"
+    separate = [row.copy() for row in values]
+    for row in separate:
+        if (2, 2) in coverage(dict(zip(fields, row))):
+            single = row[fields.index("batch")] == 1
+            row[fields.index("batch_roles")] = (1 | 4 | 8) if single else 2
+            if single:
+                row[fields.index("iter_per_s")] *= 2
+                for key in ("total_device_ms", "median_ms", "stddev_seconds"):
+                    row[fields.index(key)] /= 2
+    write_matrix(text, fields, separate)
+    log = run("find95_separate_capacity", [flags[0], flags[1] + ",find=95", flags[2]], settings=limits)
+    assert anchors(log) == [1, 2]
+    check_capacity_anchor(log)
+    database = saved_database
 
     # A request larger than max_batch exercises the production scheduler.
     for percent, expected in ((1,1),(99,1),(100,2)):
@@ -430,6 +457,7 @@ def main():
               settings="ntt_max_batch = 8")
     assert log.index("stage1_ntt_graph_scan:") < log.index("stage1_ntt_find:") < log.index("Single ")
     check_find_probe_budget(log, 1)
+    check_capacity_anchor(log)
     best, = (r for r in rows() if r["batch_roles"] & 4)
     economical, = (r for r in rows() if r["batch_roles"] & 8)
     assert economical["iter_per_s"] >= 0.95 * best["iter_per_s"]
@@ -451,7 +479,8 @@ def main():
             start = re.search(r"stage1_ntt_find: .*best_batch=(\d+) graph=(\d+)", log)
             batches = anchors(log)
             assert start and batches[0] == 1 and {int(start[1]), 8} <= set(batches)
-            assert len(batches) == len(set(batches)) <= 3
+            assert len(batches) <= 3
+            check_capacity_anchor(log)
             check_find_probe_budget(log, 2 if batch_arg else 1)
             assert log.find("stage1_ntt_graph_scan:") < start.start()
             b = best_batch(log)
