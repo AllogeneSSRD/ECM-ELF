@@ -321,6 +321,10 @@ def main():
         return list(map(int, re.findall(r" (\d+)c [\d.]+ iter/s", section)))
     assert anchors(log) == [1, 2]
     current_peak = float(re.search(r"Best +\d+ +\d+ +\S+ +\d+c +([\d.]+) iter/s", log)[1])
+    current_max = int(re.search(r"Max +\d+ +\d+ +\S+ +2c +(\d+) iter/s", log)[1])
+    assert current_max <= current_peak, log
+    assert current_max == int(re.search(r" 2c (\d+) iter/s",
+        log.split("phase=find_anchors", 1)[1].split("stage1_ntt_find:", 1)[0])[1]), log
     assert current_peak < 990000 and max(r["iter_per_s"] for r in rows()) == 1000000
 
     # A request larger than max_batch exercises the production scheduler.
@@ -445,7 +449,9 @@ def main():
             extra = f",find={percent}"
             log = search(tag, extra)
             start = re.search(r"stage1_ntt_find: .*best_batch=(\d+) graph=(\d+)", log)
-            assert start and anchors(log) == ([1] if int(start[1]) == 1 else [1,int(start[1])])
+            batches = anchors(log)
+            assert start and batches[0] == 1 and {int(start[1]), 8} <= set(batches)
+            assert len(batches) == len(set(batches)) <= 3
             check_find_probe_budget(log, 2 if batch_arg else 1)
             assert log.find("stage1_ntt_graph_scan:") < start.start()
             b = best_batch(log)
@@ -653,11 +659,18 @@ def main():
     wide = run("wide", ["-tune", "exp=900001,naf=6,batch=1,time=0.25", "16"],
                convolution="auto", settings="ntt_memory_mib = 128")
     layouts = re.findall(r"^.*? 40960 \d+ \S+ \d+c [\d.]+ iter/s \d+ .* (\S+)$", wide, re.M)
-    assert set(layouts) == {"twiddle", "pfa-direct", "pfa-coalesced"}
+    split_layouts = {"twiddle", "pfa-direct", "pfa-coalesced"}
+    assert split_layouts <= set(layouts) <= split_layouts | {"pfa-coalesced+outer"}
     assert "Best " in wide
     candidates = [r for r in rows() if r["reference_bits"] >= 720001]
     assert {r["length"] for r in candidates} == {32768, 40960, 65536}
     assert {r["dataflow"] & 384 for r in candidates if r["length"] == 40960} == {0, 128, 384}
+    database = out / "forward_outer.toml"
+    log = run("forward_outer", ["-tune", "ntt,length=5120,naf=6,batch=3,time=0.25", "128"],
+              convolution="weighted", settings="ntt_tile = 9\nntt_outer_radix_limit = 3\nntt_window_bits = 16")
+    assert "pfa-coalesced+outer" in log
+    forward_outer = 1 << 25
+    assert {bool(r["dataflow"] & forward_outer) for r in rows() if r["length"] == 5120} == {False, True}
     bare = run("bare", ["-tune", "--tune-seconds", "1"], settings="ntt_profile = 1")
     assert "stage1_ntt_plan: p=93" in bare and "status=time_limit" in bare
     print(f"PASS GPU {args.device}: CLI, bounds, Graph grid, timing, cache, runtime and endpoints")

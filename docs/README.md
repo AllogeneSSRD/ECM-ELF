@@ -24,6 +24,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 ## 实现
 
 - [架构与术语](architecture/OVERVIEW.md)：模块职责、数据表示和入口。
+- [GWNUM FFT 实现](architecture/GWNUM.md)：FFT 选型、Pass1/Pass2、汇编 kernel 和静态及动态指令计数。
 - [群阶与点阶模块](architecture/GROUP_ORDER.md)：整数分解、BSGS/Mestre、点阶、资源与证明边界，以及 PARI DLL 优先、GP 回退的诊断策略。
 - [Application 重构开发草稿](development/APPLICATION_REFACTOR_DRAFT.md)：群阶、Android 标量、Stage2 配置快照、源码包与旧 feeder 的实施和验收记录。
 - [目录精简规划草稿](development/DIRECTORY_LAYOUT_SIMPLIFICATION_DRAFT.md)：方案 A 已完成，版本 0.45.28；31 个路径调整、14 个公开头保留，GUI 单一 BAT/local 短默认目录与零 CU 验证通过。[网页阅读版](web/directory-layout-plan-20261021.html)。

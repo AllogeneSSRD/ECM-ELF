@@ -102,22 +102,9 @@ __global__ void pack(const uint32_t* state, U* out, Shape s, Indices in,
     }
 }
 
-// Column j contains one digit from each arm of the first DIF pass.
-// Later outer passes consume the usual in-place spectrum layout.
 template<int Layers>
-__global__ void pack_weighted_outer(const uint32_t* state, U* dest, Shape s, Indices in,
-                                    const WeightedDigit* digits, const U* roots, const U* radix) {
+__device__ __forceinline__ void packed_outer_dif(U (&x)[1u << Layers], U root, const U* radix) {
     constexpr unsigned count = 1u << Layers;
-    const unsigned width = s.length / count;
-    const unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= width) return;
-    const unsigned curve = blockIdx.y % s.curves;
-    const auto* row = state + limb(s, in.x[blockIdx.y / s.curves], curve, 0);
-    U x[count];
-#pragma unroll
-    for (unsigned i = 0; i < count; ++i)
-        x[i] = stage1_ntt_pack_digit<true>(row, s, digits, j + i * width);
-    U root = roots[j];
     if constexpr (Layers == 1 || Layers == 3) {
 #pragma unroll
         for (unsigned i = 0; i < count / 2; ++i) {
@@ -140,9 +127,84 @@ __global__ void pack_weighted_outer(const uint32_t* state, U* dest, Shape s, Ind
             x[i+3] = q.x3;
         }
     }
+}
+
+// Column j contains one digit from each arm of the first DIF pass.
+// Later outer passes consume the usual in-place spectrum layout.
+template<int Layers>
+__global__ void pack_weighted_outer(const uint32_t* state, U* dest, Shape s, Indices in,
+                                    const WeightedDigit* digits, const U* roots, const U* radix) {
+    constexpr unsigned count = 1u << Layers;
+    const unsigned width = s.length / count;
+    const unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= width) return;
+    const unsigned curve = blockIdx.y % s.curves;
+    const auto* row = state + limb(s, in.x[blockIdx.y / s.curves], curve, 0);
+    U x[count];
+#pragma unroll
+    for (unsigned i = 0; i < count; ++i)
+        x[i] = stage1_ntt_pack_digit<true>(row, s, digits, j + i * width);
+    packed_outer_dif<Layers>(x, roots[j], radix);
     auto* out = dest + size_t(blockIdx.y) * s.length + j;
 #pragma unroll
     for (unsigned i = 0; i < count; ++i) out[i * width] = x[i];
+}
+
+template<int Layers>
+__global__ __launch_bounds__(threads)
+void pack_radix5_outer(const uint32_t* state, U* dest, Shape s, Indices in,
+                       const WeightedDigit* digits, const U* roots, const U* radix,
+                       Radix5Constants constants, unsigned rotation_step,
+                       const unsigned* headers, unsigned deferred_mask) {
+    constexpr unsigned arms = 1u << Layers;
+    constexpr unsigned columns = threads / arms;
+    static_assert(columns >= 32); // A warp stays in one contiguous column run.
+    const unsigned width = s.length / 5;
+    const unsigned stride = width / arms;
+    const unsigned block_column = blockIdx.x * columns;
+    const unsigned lane_column = threadIdx.x % columns;
+    const unsigned col = block_column + lane_column + (threadIdx.x / columns) * stride;
+    const unsigned op = blockIdx.y / s.curves;
+    const size_t residue = size_t(in.x[op]) * s.curves + blockIdx.y % s.curves;
+    const auto* source = state + residue * s.words;
+    __shared__ unsigned local_limits[inline_carry_segments];
+    const bool pending = (deferred_mask >> op) & 1;
+    const unsigned* limits = nullptr;
+    if (pending) {
+        const unsigned segments = stage1_segment_count(s.words);
+        limits = headers + residue * segments;
+        if (segments <= inline_carry_segments) {
+            stage1_segment_corrections(local_limits, limits, segments);
+            limits = local_limits;
+        }
+    }
+    const auto read_word = [&](unsigned word) {
+        return pending ? stage1_segment_word(source, limits, word, limb_mask(s,word)) : source[word];
+    };
+    // Pack with coalesced reads before the per-column Good–Thomas rotation.
+    // Each thread owns its five shared entries until all radix-5 outputs are ready.
+    __shared__ U tile[5][threads];
+#pragma unroll
+    for (unsigned i = 0; i < 5; ++i)
+        tile[i][threadIdx.x] = stage1_ntt_pack_digit_from<true,false>(read_word,s,digits,col + i * width);
+    const unsigned rotation = (col * rotation_step) % 5;
+    U row[5];
+#pragma unroll
+    for (unsigned i = 0; i < 5; ++i) row[i] = tile[radix5_plane(i, rotation)][threadIdx.x];
+    radix5_dft(row, constants);
+#pragma unroll
+    for (unsigned i = 0; i < 5; ++i) tile[i][threadIdx.x] = row[i];
+    __syncthreads();
+    // The next pass groups the columns across DIF arms within each plane.
+    auto* out = dest + size_t(blockIdx.y) * s.length + block_column + lane_column;
+    for (unsigned group = threadIdx.x / columns; group < 5; group += arms) {
+        U x[arms];
+#pragma unroll
+        for (unsigned i = 0; i < arms; ++i) x[i] = tile[group][i * columns + lane_column];
+        packed_outer_dif<Layers>(x, roots[block_column + lane_column], radix);
+#pragma unroll
+        for (unsigned i = 0; i < arms; ++i) out[group * width + i * stride] = x[i];
+    }
 }
 
 // A variable spectrum and its prepared dictionary operand have matching
@@ -694,11 +756,15 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         (s.length == 4096 || s.length == 8192 || s.length == 32768);
     const bool packed_outer = (requested & PackedWeightedOuter) && options.weighted && !mixed &&
         forward_input && (single_outer || wide_outer) && ctx.ms[0] >= 1 && ctx.ms[0] <= 3;
+    const bool radix5_forward_outer = naf && coalesced && forward_input && ctx.nms > 0 &&
+        ctx.ms[0] >= 1 && ctx.ms[0] <= 3 &&
+        (options.fused_radix5_forward || (requested & Radix5ForwardOuter));
     const bool dictionary_tile = naf && packed_outer && inverse_warp_input &&
                                  (s.length == 32768 || s.length == 262144) &&
                                  ctx.t == 12 && (requested & DictionaryProductTile);
     if (dictionary_tile) result.dataflow |= DictionaryProductTile;
     if (packed_outer) result.dataflow |= PackedWeightedOuter;
+    if (radix5_forward_outer) result.dataflow |= Radix5ForwardOuter;
     if (routed) result.dataflow |= DirectRoute;
     if (packed) result.dataflow |= PackedForward;
     if (cached) result.dataflow |= CachedCarry;
@@ -894,6 +960,19 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         if (packed_outer && !pending) {
             pack_outer_inputs(dest,count,in);
             forward_tiles(dest,count*curves);
+            return;
+        }
+        if (radix5_forward_outer) {
+            const std::array kernels{pack_radix5_outer<1>, pack_radix5_outer<2>, pack_radix5_outer<3>};
+            // The power-of-two width is a multiple of the CTA's 256 input columns.
+            const auto kernel = kernels[ctx.ms[0] - 1];
+            kernel<<<dim3(width / threads,count * curves),threads,0,q>>>(
+                state.data,dest,s,in,digit_table.data,ctx.passF[0],ctx.radF[0],
+                radix5_fwd,rotation_step,carry_headers.data,pending);
+            CK(cudaGetLastError());
+            const unsigned batch = count * curves * planes;
+            ntt_forward_outer_fused(dest,ctx,omega2,batch,q,ForwardOuterInput::FirstPassComplete);
+            forward_tiles(dest,batch);
             return;
         }
         if (pfa) {

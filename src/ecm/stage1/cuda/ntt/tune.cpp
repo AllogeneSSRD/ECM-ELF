@@ -101,6 +101,7 @@ unsigned linear_exponent_limit(unsigned length, unsigned bpw) {
 
 const char* radix5_layout_name(const Plan& plan) {
     if (!ecm_stage1::stage1_ntt_radix5(plan.length)) return "-";
+    if (plan.dataflow & Radix5ForwardOuter) return "pfa-coalesced+outer";
     if (plan.dataflow & CoalescedRadix5) return "pfa-coalesced";
     return plan.dataflow & PfaRadix5 ? "pfa-direct" : "twiddle";
 }
@@ -119,6 +120,7 @@ Stage1NttOptions fixed_plan(Stage1NttOptions o, const Plan& plan) {
         o.mixed_layout = plan.dataflow & CoalescedRadix5 ? Layout::Coalesced :
                          plan.dataflow & PfaRadix5 ? Layout::Pfa : Layout::Twiddle;
         o.fused_radix5_inverse = (plan.dataflow & Radix5InverseLimbSums) != 0;
+        o.fused_radix5_forward = (plan.dataflow & Radix5ForwardOuter) != 0;
     }
     o.automatic = false;
     o.weighted = plan.weighted;
@@ -502,6 +504,7 @@ std::optional<Cached> decode(const Fields& row, const Packing& shape, const Devi
         const auto flow = uint(row, "dataflow");
         o.mixed_layout = flow & CoalescedRadix5 ? Layout::Coalesced : flow & PfaRadix5 ? Layout::Pfa : Layout::Twiddle;
         o.fused_radix5_inverse = (flow & Radix5InverseLimbSums) != 0;
+        o.fused_radix5_forward = (flow & Radix5ForwardOuter) != 0;
         if (o.fused_radix5_inverse && p / shape.length < radix5_limb_min_digit_bits) return {};
     }
     return Cached{std::move(o), ecm_stage2::tune::real(row,"iter_per_s")};
@@ -1099,6 +1102,7 @@ public:
         if (ecm_stage1_stop_requested()) throw Cancelled();
         try {
             auto plan = describe(device_, p_, batch, options, window_);
+            if (options.fused_radix5_forward && !(plan.dataflow & Radix5ForwardOuter)) return {};
             using ecm_stage2::tune::uint;
             const auto lookup = [&](const std::vector<Fields>& rows, bool previous) -> Score {
                 Score best;
@@ -1384,8 +1388,15 @@ struct WindowSearch {
             ecm_log_accent(EcmLogAccent::Subtitle,"stage1_ntt_pfa_scan: p=%u naf=%u batch=%u length=%u graph=%u\n",
                            p,w,winner.batch,winner.plan.length,winner.plan.window);
             matrix.header_pending = true;
+            options.fused_radix5_forward = false;
             for (const auto layout : {Layout::Twiddle,Layout::Pfa,Layout::Coalesced}) {
                 options.mixed_layout = layout;
+                const auto score = matrix.sample(options,winner.batch,SamplePhase::Fine);
+                if (score.rate > winner.rate) winner = score;
+            }
+            if (w && winner.plan.passes > 2 && (winner.plan.dataflow & ForwardTileInput)) {
+                options.mixed_layout = Layout::Coalesced;
+                options.fused_radix5_forward = true;
                 const auto score = matrix.sample(options,winner.batch,SamplePhase::Fine);
                 if (score.rate > winner.rate) winner = score;
             }

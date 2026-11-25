@@ -29,7 +29,7 @@
 1. 粗测每个 NAF 窗口和卷积族在最小批量、内部批量、最大批量的吞吐。容量受 NTT 工作区、NAF 字典、主机内存和请求曲线数限制；实际分配失败时，用二分查找缩小上限。混合长度在粗测和精调主循环中固定使用 pfa-coalesced。
 2. 自动选窗先汇总 6、8、10、12 的粗测结果。按每个窗口**实际测通的最大批量**分档，每档选在该上限聚合 `iter/s` 最高的窗口，吞吐相同取较小窗口。例如 w12 上限 35、w10 上限 128 时，两者可分别进入精调，搜索范围各自截至 35、128。同一上限的其他窗口保留粗测结果。日志 `stage1_ntt_naf_screen` 给出上限、上限吞吐和是否进入精调。显式 `naf=W`、`naf=A-B` 或 `--tune-exhaustive` 时，精调所有指定且可运行的窗口。
 3. 入选窗口精调 tile、outer 和 batch。默认比较倍增批量和峰值邻档。`--tune-exhaustive` 比较区间内每个可行批量。粗测和这一步统一临时用 16 步/Graph，显式 Graph 或 profile 沿用其设定。
-4. 若主循环 Best 使用 radix-5，`stage1_ntt_pfa_scan` 固定其 batch、tile、outer 和 Graph，比较 twiddle、pfa-direct、pfa-coalesced 三种布局。若最短 digit 至少为 12 位，再对胜出布局比较五点逆变换与去权汇集的融合路径。已测的基线可直接参加比较。二次幂长度跳过此步。对已有完整记录的长度，使用 `force` 重新扫描。
+4. 若主循环 Best 使用 radix-5，`stage1_ntt_pfa_scan` 固定其 batch、tile、outer 和 Graph，比较 twiddle、pfa-direct、pfa-coalesced。符合前向融合条件时同时试测 `pfa-coalesced+outer`。若最短 digit 至少为 12 位，再对胜出路径比较五点逆变换与去权汇集的融合。已测的基线可直接参加比较。二次幂长度跳过此步。对已有完整记录的长度，使用 `force` 重新扫描。
 5. 对胜出布局和批量扫描 Graph，比较 4、8、16、32、64 步，复用已经测过的 16 步。日志 `stage1_ntt_graph_scan` 标出该批量。随后按更新后的峰值计算 95% 批量。显式 Graph 或固定 profile 直接使用指定步数。
 6. 指定 `find=N` 时，先按精测条件重新运行单曲线和 Best 批量，缓存命中时也实测。Best 为 1 时只测一次。单曲线在请求范围内且达标时可直接采用。其余情形在请求下限和 Best 之间二分，每次探测中点，达标则缩小上界，否则抬高下界。中点可复用匹配的精测记录，遇到更高吞吐即更新峰值与门槛。吞吐随批量呈单调趋势时可定位最小达标批量，局部波动时可能跳过孤立的达标批量。显式范围从 2 或更大值开始时，单曲线只作参照。日志 `phase=find_anchors` 标记端点复测，`stage1_ntt_find` 标记搜索开始。
 
@@ -53,7 +53,7 @@ Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，�
 
 例如 x-only 选中 64 步、窗口为 16 时，每块启动 4 个 Graph。若该块预热实测 0.8 ms，默认每组回放 125 块，即每曲线 8000 步。窗口是每个 Graph 的步数上限。x-only 的正数尾段可独立建图；所选块短于窗口时，测到的是该尾段。原生 NAF 的连续零列使用 1、2、4 等二次幂长度的 Graph，非零列直接执行倍点和点加。例如 186 列含 26 个非零列时，最短块约 7 列。若这 7 列耗时 160 ms，默认正式组只执行一块。100 ms 是每个正式组的软目标，调优命令的总耗时还包含初始化、试跑及核对。
 
-`sample_pool_steps` 是采样池列数，`block_steps` 是一块实际回放的列数，`timed_steps` 是每曲线每个正式组的列数，`repeats` 是正式组数。原生 Edwards 保存完整标量列数 `naf_columns`、一轮的非零列数 `sample_nonzero` 和所有正式组的 CUDA event 总时间 `total_device_ms`。聚合吞吐 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。各组的中位时间 `median_ms` 和标准差用于观察波动。控制台实测行在吞吐之后依次列出 dataflow 掩码（十进制）、每组实际/目标设备时间（ms）、每条曲线每组步数（`steps/group`）和每条曲线每个回放块的步数（`steps/block`）。两列步数相除即每组回放块数。末列 `radix5_layout` 显示混合长度的布局：`twiddle`（旋转因子）、`pfa-direct`（直接 PFA）或 `pfa-coalesced`（合并访存 PFA）。二次幂长度显示 `-`。原生 Edwards 每步对应一列 NAF，x-only 每步对应一个标量位。原生 Edwards 的 `group_ms` 取各组平均，x-only 取中位数。x-only 仍采用 `1000 × batch × timed_steps / median_ms`。`Single`、`Best`、`95%` 分别报告单曲线、峰值及达到峰值 95% 的最小实测批量。[GPU 回放和计时](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/cuda/ntt/tune.cpp)
+`sample_pool_steps` 是采样池列数，`block_steps` 是一块实际回放的列数，`timed_steps` 是每曲线每个正式组的列数，`repeats` 是正式组数。原生 Edwards 保存完整标量列数 `naf_columns`、一轮的非零列数 `sample_nonzero` 和所有正式组的 CUDA event 总时间 `total_device_ms`。聚合吞吐 `iter_per_s = 1000 × batch × timed_steps × repeats / total_device_ms`。各组的中位时间 `median_ms` 和标准差用于观察波动。控制台实测行在吞吐之后依次列出 dataflow 掩码（十进制）、每组实际/目标设备时间（ms）、每条曲线每组步数（`steps/group`）和每条曲线每个回放块的步数（`steps/block`）。两列步数相除即每组回放块数。末列 `radix5_layout` 显示混合长度的布局：`twiddle`（旋转因子）、`pfa-direct`（直接 PFA）、`pfa-coalesced`（合并访存 PFA）或 `pfa-coalesced+outer`（同时融合首趟二次幂 outer）。二次幂长度显示 `-`。原生 Edwards 每步对应一列 NAF，x-only 每步对应一个标量位。原生 Edwards 的 `group_ms` 取各组平均，x-only 取中位数。x-only 仍采用 `1000 × batch × timed_steps / median_ms`。`Single`、`Best`、`95%` 分别报告单曲线、峰值及达到峰值 95% 的最小实测批量。[GPU 回放和计时](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [候选和采样](../../src/ecm/stage1/cuda/ntt/tune.cpp)
 
 ## Tune 文件
 
@@ -88,6 +88,7 @@ Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，�
 - **位 19 · `FixedWideForward`（524288）**　原生 Edwards NAF 默认请求。加权变换在位 3 关闭、位 10 和 warp 尾层开启、tile 为 1024 点、N ≥ 5120 且 batch ≥ 24 时，使用固定大小的正向 tile 内核。
 - **位 21 · `PackedWeightedOuter`（2097152）**　默认请求。加权二次幂变换可将输入打包与首个 radix-2、4 或 8 外层 pass 融合。要求位 10 开启，且满足其一：① N 为 4096、8192 或 32768，恰有一个外层 pass 且位 6 关闭；② N 为 262144，进位段数 > 128 且至少有一个外层 pass。某次输入有待处理段进位时，该次打包走常规路径。
 - **位 24 · `Radix5InverseLimbSums`（16777216）**　默认走分离路径。混合长度的最短 digit 至少为 12 位时，精调在 PFA 扫描中试测融合五点逆变换、去权和 limb 汇集。生产可按已有的融合测量选用该路径。融合直接产出 limb 和，后续由现有的进位路径处理，因此替代位 12、14 和 22 所描述的归约。
+- **位 25 · `Radix5ForwardOuter`（33554432）**　精调试测。要求原生 Edwards、加权混合长度、`pfa-coalesced`、位 10 开启，且首趟二次幂 outer 为 1–3 层。打包、五点正变换和首趟 outer 共用一块共享内存，支持段进位延迟到 pack。选型按调优记录重放。
 
 #### 归约与进位
 
@@ -110,7 +111,7 @@ Edwards 调优从射影中性点 `(0:u:u)` 开始。u 由固定种子生成，�
 - **位 16 · `Edwards2XYInverseInput`（65536）**　原生 Edwards NAF 默认请求。位 15 开启时可把 2XY 组合直接并入逆 tile 输入。常规计划还要求二次幂长度、没有外层 pass 且 128 ≤ N ≤ 512。
 - **位 23 · `DictionaryProductTile`（8388608）**　batch ≥ 8 时默认请求。原生 Edwards NAF 在位 9、21 均开启、tile 为 4096 点且 N 为 32768 或 262144 时，可融合正向 tile、字典频谱点乘和逆向 tile。仅对没有待处理段进位的字典乘法执行该内核。
 
-**解读 radix-5 布局。** 对混合长度取 `dataflow & 384`，即只看位 7 和位 8。结果 0、128、384 分别对应 `twiddle`、`pfa-direct`、`pfa-coalesced`。例如 22112、22240、22496 三条记录的其余位相同，分别使用这三种布局。二次幂长度的 `radix5_layout` 显示为 `-`。[布局名称与生产解码](../../src/ecm/stage1/cuda/ntt/tune.cpp)
+**解读 radix-5 布局。** 对混合长度取 `dataflow & 384`，即只看位 7 和位 8。结果 0、128、384 分别对应 `twiddle`、`pfa-direct`、`pfa-coalesced`。置位 25 时显示 `pfa-coalesced+outer`。例如 22112、22240、22496 三条记录的其余位相同，分别使用这三种布局。二次幂长度的 `radix5_layout` 显示为 `-`。[布局名称与生产解码](../../src/ecm/stage1/cuda/ntt/tune.cpp)
 
 ## 生产选型
 
