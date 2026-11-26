@@ -20,11 +20,15 @@ __device__ __forceinline__ void radix3(Word& a, Word& b, Word& c, Word zeta) {
     a = u;
 }
 
-template<bool Radix3>
+template<bool Radix3, bool Batched = false>
 __global__ void transpose_forward(const Word* input, Word* output, unsigned ly,
                                   unsigned k, unsigned input_rows, unsigned frequencies,
                                   const Word* twiddle, Word zeta) {
     constexpr unsigned planes = Radix3 ? 3 : 1;
+    if constexpr (Batched) {
+        input += size_t(blockIdx.z) * input_rows * ly;
+        output += size_t(blockIdx.z) * frequencies * planes * k;
+    }
     __shared__ Word tile[planes][32][33];
     const unsigned frequency = blockIdx.x * 32 + threadIdx.x;
     const unsigned j = blockIdx.y * 32 + threadIdx.y;
@@ -54,11 +58,15 @@ __global__ void transpose_forward(const Word* input, Word* output, unsigned ly,
     }
 }
 
-template<bool Radix3>
+template<bool Radix3, bool Batched = false>
 __global__ void transpose_inverse(const Word* input, Word* output, unsigned ly,
                                   unsigned k, unsigned output_rows, unsigned frequencies,
                                   const Word* twiddle, Word zeta, unsigned first = 0) {
     constexpr unsigned planes = Radix3 ? 3 : 1;
+    if constexpr (Batched) {
+        input += size_t(blockIdx.z) * frequencies * planes * k;
+        output += size_t(blockIdx.z) * output_rows * ly;
+    }
     __shared__ Word tile[planes][32][33];
     const unsigned j = blockIdx.x * 32 + threadIdx.x;
     const unsigned frequency = blockIdx.y * 32 + threadIdx.y;
@@ -89,11 +97,16 @@ __global__ void transpose_inverse(const Word* input, Word* output, unsigned ly,
     }
 }
 
+template<bool Batched = false>
 __global__ __launch_bounds__(FUSE_TILE_THREADS)
 static void pack_forward(const Word* input, Word* output, unsigned words, unsigned length,
                   unsigned bits, const mersenne::WeightedDigit* digits, const Word* table,
-                  unsigned reverse_rows = 0) {
+                  unsigned reverse_rows, const Word* offsets) {
     extern __shared__ Word shared[];
+    if constexpr (Batched) {
+        input += offsets[blockIdx.y];
+        output += size_t(blockIdx.y) * gridDim.x * length;
+    }
     const unsigned row_index = reverse_rows ? reverse_rows - 1 - blockIdx.x : blockIdx.x;
     const auto* row = input + size_t(row_index) * words;
     for (unsigned i = threadIdx.x; i < length; i += blockDim.x) {
@@ -111,12 +124,18 @@ constexpr unsigned carry_threads = 256;
 
 // This is the same cyclic carry transfer as the Stage1 weighted kernel.
 // A thread owns consecutive limbs, then receives the prefix of its interval.
+template<bool Batched = false>
 __global__ __launch_bounds__(carry_threads)
-static void normalize(uint32_t* output, const Word* sums, unsigned words, unsigned p, unsigned output_stride = 0) {
+static void normalize(uint32_t* output, const Word* sums, unsigned words, unsigned p,
+                      unsigned output_stride, const Word* offsets) {
     __shared__ unsigned warps[carry_threads / 32];
     const unsigned pitch = output_stride ? output_stride : words;
     auto* dest = output + size_t(blockIdx.x) * pitch;
     const auto* row = sums + size_t(blockIdx.x) * words;
+    if constexpr (Batched) {
+        dest += size_t(offsets[blockIdx.y]) * 2;
+        row += size_t(blockIdx.y) * gridDim.x * words;
+    }
     const unsigned tail_bits = p - 32 * (words - 1);
     const uint32_t tail_mask = uint32_t((Word{1} << tail_bits) - 1);
     const unsigned stride = (words + carry_threads - 1) / carry_threads;

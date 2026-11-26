@@ -263,8 +263,11 @@ static bool try_two_axis_product(PolyLayer &L,const unsigned long long* wa,const
     static const auto mib=fuse_env_ull("NTT_S4_TWO_AXIS_MIB",0);
     static const auto phases=fuse_env_ull("NTT_S4_TWO_AXIS_PHASES",27);
     static const auto minimum=fuse_env_ull("NTT_S4_TWO_AXIS_MIN_COEFFS",4096);
+    static const unsigned tree_batch=unsigned(fuse_env_ull("NTT_STAGE2_GTREE_TWO_AXIS_BATCH",0));
+    const bool tree_experiment=tree_batch && category==BC_GTREE && resident && !resident->owner &&
+        !resident->reverse_b && first==0 && count==ma+mb-1;
     if(!mib || mib>SIZE_MAX>>20 || !L.carrier_exponent || category<0 || category>=BC_NCAT ||
-       category==BC_FOLD || !(phases&(1ull<<category)) || !count || nbatch>8 ||
+       category==BC_FOLD || !(phases&(1ull<<category)) || !count || (nbatch>8 && !tree_experiment) ||
        std::min(std::max(ma,mb),first+count)<minimum || ma>32768 || mb>32768) return false;
     static const bool audit=fuse_env_ull("NTT_REQUEST_AUDIT",0)!=0;
     if(audit || g_s4_carry_trace || g_s4_carry_test_bad || g_s4_final_readback) return false;
@@ -279,15 +282,17 @@ static bool try_two_axis_product(PolyLayer &L,const unsigned long long* wa,const
     const size_t a_rows=std::min(ma,first+count), b_rows=std::min(mb,first+count);
     const size_t span=stage2_two_axis::window_span(a_rows,b_rows,first,count);
     const size_t output_rows=host ? count : 0;
+    const unsigned requested_batch=tree_experiment && nbatch>1 ? tree_batch : 1;
     const double begin=now_s();
     auto found=std::find_if(C.two_axis_plans.begin(),C.two_axis_plans.end(),[&](const auto &entry) {
         return entry.ma==a_rows && entry.mb==b_rows && entry.span==span &&
-            entry.staging_output==output_rows && entry.host==host;
+            entry.staging_output==output_rows && entry.host==host && entry.requested_batch==requested_batch;
     });
     if(found==C.two_axis_plans.end()) {
         const char* status=nullptr;
         auto* workspace=stage2_two_axis::create_product(L.carrier_exponent,unsigned(ma),unsigned(mb),
-            unsigned(first),unsigned(count),host,limit-C.two_axis_bytes,status);
+            unsigned(first),unsigned(count),host,limit-C.two_axis_bytes,status,
+            unsigned(std::min<size_t>(requested_batch,nbatch)));
         stage2_log::print(stage2_log::debug,
             "stage2_two_axis_admission: phase=%s ma=%zu mb=%zu first=%zu count=%zu device=%d status=%s\n",
             kBatchedCat[category],ma,mb,first,count,(int)!host,status);
@@ -295,11 +300,25 @@ static bool try_two_axis_product(PolyLayer &L,const unsigned long long* wa,const
             C.two_axis_bytes+=stage2_two_axis::bytes(*workspace);
             C.two_axis_peak=std::max(C.two_axis_peak,C.two_axis_bytes);
         }
-        C.two_axis_plans.push_back({a_rows,b_rows,span,output_rows,host,workspace});
+        C.two_axis_plans.push_back({a_rows,b_rows,span,output_rows,requested_batch,host,workspace});
         found=C.two_axis_plans.end()-1;
     }
     if(!found->workspace)return false;
     auto &plan=*found->workspace;
+    const size_t capacity=stage2_two_axis::batch_capacity(plan);
+    const bool batched=tree_experiment && capacity>1 && nbatch>1;
+    if(batched) {
+        const auto* map=resident->meta;
+        for(size_t i=0;i<nbatch;i+=capacity) {
+            const unsigned batch=unsigned(std::min(capacity,nbatch-i));
+            stage2_two_axis::multiply_tree_batch(plan,resident->src,map+i,map+nbatch+i,
+                unsigned(ma),unsigned(mb),resident->dst,map+2*nbatch+i,batch);
+            ++C.two_axis_tree_chunks;
+            C.two_axis_tree_max_batch=std::max(C.two_axis_tree_max_batch,batch);
+        }
+        ++C.two_axis_tree_groups;
+        C.two_axis_tree_products+=nbatch;
+    }
     const size_t w=L.W;
     const bool reverse_b=resident && resident->reverse_b;
     static const bool share_parent=fuse_env_ull("NTT_S4_TWO_AXIS_SHARE_PARENT",1)!=0;
@@ -320,12 +339,14 @@ static bool try_two_axis_product(PolyLayer &L,const unsigned long long* wa,const
         }
         const bool reuse=same_parent;
         same_parent=share && i+1<nbatch && resident->host_meta[i]==resident->host_meta[i+1];
-        if(same_parent && !reuse)
-            stage2_two_axis::pretransform(plan,stage2_two_axis::Operand::left,a,unsigned(a_rows));
-        if(same_parent || reuse)
-            stage2_two_axis::multiply_preserving_left(plan,b,unsigned(mb),dest,unsigned(first),unsigned(count),unsigned(mb));
-        else
-            stage2_two_axis::multiply(plan,a,unsigned(ma),b,unsigned(mb),dest,unsigned(count),unsigned(first),reverse_b);
+        if(!batched) {
+            if(same_parent && !reuse)
+                stage2_two_axis::pretransform(plan,stage2_two_axis::Operand::left,a,unsigned(a_rows));
+            if(same_parent || reuse)
+                stage2_two_axis::multiply_preserving_left(plan,b,unsigned(mb),dest,unsigned(first),unsigned(count),unsigned(mb));
+            else
+                stage2_two_axis::multiply(plan,a,unsigned(ma),b,unsigned(mb),dest,unsigned(count),unsigned(first),reverse_b);
+        }
         if(host)CK(stage2_wait::copy(out.data()+i*count*w,dest,count*w*8,cudaMemcpyDeviceToHost));
         if(check) {
             const size_t stride=std::max(ma,mb)*w;

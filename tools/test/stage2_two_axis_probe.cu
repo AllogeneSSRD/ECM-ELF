@@ -2,6 +2,7 @@
 #include "ecm/stage2/cuda/two_axis.h"
 #include "ecm/stage2/cuda/device/two_axis.cuh"
 
+#include <array>
 #include <charconv>
 #include <optional>
 #include <random>
@@ -341,7 +342,63 @@ static bool check_staged_product(unsigned p, unsigned ma, unsigned mb, unsigned 
     return valid;
 }
 
+static bool check_tree_batch(unsigned p, unsigned ma, unsigned mb) {
+    constexpr unsigned products = 4, batch = 3;
+    const unsigned count = ma + mb - 1, width = (p + 63) / 64;
+    const size_t input_stride = size_t(ma + mb) * width;
+    const size_t output_stride = size_t(count) * width + 1;
+    std::array<Word, products * 3> offsets{};
+    std::vector<std::vector<Integer>> a, b;
+    Buffer src(products * input_stride), dst(products * output_stride), map(offsets.size());
+    for (unsigned i = 0; i < products; ++i) {
+        a.emplace_back(ma);
+        b.emplace_back(mb);
+        const auto left = fill(a.back(), p, 41 + i);
+        const auto right = fill(b.back(), p, 71 + i);
+        CK(cudaMemcpy(src.data + i * input_stride, left.data(), left.size() * sizeof(Word), cudaMemcpyHostToDevice));
+        CK(cudaMemcpy(src.data + i * input_stride + left.size(), right.data(), right.size() * sizeof(Word), cudaMemcpyHostToDevice));
+        offsets[i] = i * input_stride;
+        offsets[products + i] = ((i + 1) % products) * input_stride + size_t(ma) * width;
+        offsets[2 * products + i] = (products - 1 - i) * output_stride;
+    }
+    CK(cudaMemcpy(map.data, offsets.data(), sizeof(offsets), cudaMemcpyHostToDevice));
+    CK(cudaMemset(dst.data, 0xff, products * output_stride * sizeof(Word)));
+    const char* reason = nullptr;
+    auto* workspace = two_axis::create_product(p, ma, mb, 0, count, false, 16ull << 20, reason, batch);
+    if (!workspace || two_axis::batch_capacity(*workspace) != batch) {
+        std::fprintf(stderr, "batch fixture workspace: %s\n", reason);
+        two_axis::release(workspace);
+        return false;
+    }
+    const auto x = two_axis::polynomial_length(*workspace);
+    for (unsigned i = 0; i < products; i += batch)
+        two_axis::multiply_tree_batch(*workspace, src.data, map.data + i, map.data + products + i,
+            ma, mb, dst.data, map.data + 2 * products + i, std::min(batch, products - i));
+    std::vector<Word> row(output_stride);
+    Integer actual;
+    bool valid = true;
+    for (unsigned i = 0; i < products; ++i) {
+        const ProductOracle expected(a[i], b[(i + 1) % products], p);
+        CK(cudaMemcpy(row.data(), dst.data + offsets[2 * products + i], row.size() * sizeof(Word), cudaMemcpyDeviceToHost));
+        valid &= row.back() == ~Word{0};
+        for (unsigned j = 0; j < count; ++j) {
+            mpz_import(actual.value, width, -1, sizeof(Word), 0, 0, row.data() + size_t(j) * width);
+            valid &= mpz_cmp(actual.value, expected.samples[j].value) == 0;
+        }
+    }
+    two_axis::release(workspace);
+    std::printf("tree_batch_api p=%u x=%u products=%u batch=%u gmp_checked=%u %s\n",
+        p, x, products, batch, count * products, valid ? "PASS" : "FAIL");
+    return valid;
+}
+
 int main(int argc, char** argv) {
+    if (argc == 3 && std::string_view(argv[1]) == "--tree-batch") {
+        CK(cudaSetDevice(read_unsigned(argv[2])));
+        const bool mixed = check_tree_batch(521, 9, 9);
+        const bool radix2 = check_tree_batch(521, 16, 15);
+        return mixed && radix2 ? 0 : 1;
+    }
     if (argc == 3 && std::string_view(argv[1]) == "--staged-api") {
         CK(cudaSetDevice(read_unsigned(argv[2])));
         const bool low = check_staged_product(127, 37, 27, 0, 11, true);
@@ -419,7 +476,7 @@ int main(int argc, char** argv) {
     ntt_tile_attributes(false, shared_bytes, true);
     ntt_tile_attributes(true, shared_bytes, true);
     CK(cudaFuncSetAttribute(coefficient_inverse, cudaFuncAttributeMaxDynamicSharedMemorySize, ly * sizeof(Word)));
-    if (gpu) CK(cudaFuncSetAttribute(two_axis::pack_forward, cudaFuncAttributeMaxDynamicSharedMemorySize, ly * sizeof(Word)));
+    if (gpu) CK(cudaFuncSetAttribute(two_axis::pack_forward<false>, cudaFuncAttributeMaxDynamicSharedMemorySize, ly * sizeof(Word)));
     Buffer a(matrix), b(matrix), scratch(scratch_words), twiddle(radix3 ? 4ull * k : 0);
     Buffer raw(gpu ? raw_words : 0), inverse_weights(gpu ? ly : 0);
     Buffer digits(gpu ? ly * sizeof(mersenne::WeightedDigit) / sizeof(Word) : 0);
@@ -499,10 +556,10 @@ int main(int argc, char** argv) {
             transpose_matrix(b.data, a.data, ly, lx);
         } else {
             if (gpu) {
-                two_axis::pack_forward<<<ma, FUSE_TILE_THREADS, ly * sizeof(Word)>>>(
-                    raw.data, weighted_a, input_words, ly, coeff_bits, device_digits, y.ctx.tblF);
-                two_axis::pack_forward<<<mb, FUSE_TILE_THREADS, ly * sizeof(Word)>>>(
-                    raw.data + raw_b_offset, weighted_b, input_words, ly, coeff_bits, device_digits, y.ctx.tblF);
+                two_axis::pack_forward<false><<<ma, FUSE_TILE_THREADS, ly * sizeof(Word)>>>(
+                    raw.data, weighted_a, input_words, ly, coeff_bits, device_digits, y.ctx.tblF, 0, nullptr);
+                two_axis::pack_forward<false><<<mb, FUSE_TILE_THREADS, ly * sizeof(Word)>>>(
+                    raw.data + raw_b_offset, weighted_b, input_words, ly, coeff_bits, device_digits, y.ctx.tblF, 0, nullptr);
                 CK(cudaGetLastError());
             } else {
                 y.forward(b.data, ma);
@@ -557,8 +614,8 @@ int main(int argc, char** argv) {
                     a.data, coefficient_rows + size_t(i) * ly, inverse_weights.data,
                     device_digits, reinterpret_cast<const mersenne::WeightedLimb*>(spans.data), p, output_words, ly);
                 CK(cudaGetLastError());
-                two_axis::normalize<<<rows, two_axis::carry_threads>>>(
-                    reinterpret_cast<uint32_t*>(coefficient_rows) + size_t(i) * output_words, a.data, output_words, p);
+                two_axis::normalize<false><<<rows, two_axis::carry_threads>>>(
+                    reinterpret_cast<uint32_t*>(coefficient_rows) + size_t(i) * output_words, a.data, output_words, p, 0, nullptr);
                 CK(cudaGetLastError());
             }
         }

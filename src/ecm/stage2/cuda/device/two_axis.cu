@@ -18,7 +18,7 @@ struct FoldWorkspace {
     const mersenne::WeightedDigit* digits = nullptr;
     const mersenne::WeightedLimb* spans = nullptr;
     unsigned p = 0, words = 0, limbs = 0, ly = 0, k = 0, lx = 0;
-    unsigned limb_shared = 0;
+    unsigned limb_shared = 0, batch = 1;
     size_t allocated = 0;
     std::array<Word*,2> retained{};
     Word cube = 0, cube2 = 0, x_root = 0, x_inv = 0, x_scale = 0;
@@ -48,7 +48,7 @@ __global__ static void multiply_spectra(Word* out, const Word* a, const Word* b,
 }
 
 static FoldWorkspace* create_shape(unsigned p, unsigned ma, unsigned mb, unsigned first, unsigned output_rows,
-                                   bool host, size_t limit, const char*& fallback) {
+                                   bool host, size_t limit, const char*& fallback, unsigned requested_batch = 1) {
     fallback = "shape";
     if (!p || !ma || !mb || ma > 32768 || mb > 32768) return nullptr;
     const unsigned overlap = std::min(ma, mb);
@@ -89,26 +89,44 @@ static FoldWorkspace* create_shape(unsigned p, unsigned ma, unsigned mb, unsigne
     FuseCtx yplan{}, xplan{};
     fuse_describe(yplan, s.ly, ybits, yroot, yinv, true, &yopts);
     fuse_describe(xplan, s.k, xbits, s.x_root, s.x_inv, true);
-    const size_t data_words = 2 * matrix + input + twiddles + s.ly + digit_words + span_words + staging_words;
-    s.allocated = (data_words + fuse_planned_base_words(yplan) + fuse_planned_table_words(yplan) +
-                   fuse_planned_base_words(xplan) + fuse_planned_table_words(xplan)) * sizeof(Word);
+    const size_t scratch_per_product = 2 * matrix + input;
+    const size_t tables = twiddles + s.ly + digit_words + span_words + staging_words;
+    const size_t plan_words = fuse_planned_base_words(yplan) + fuse_planned_table_words(yplan) +
+                              fuse_planned_base_words(xplan) + fuse_planned_table_words(xplan);
+    const size_t fixed_bytes = (tables + plan_words) * sizeof(Word);
+    const size_t product_bytes = scratch_per_product * sizeof(Word);
     fallback = "budget";
-    if (s.allocated > limit) return nullptr;
+    if (fixed_bytes > limit || product_bytes > limit - fixed_bytes) return nullptr;
     size_t free_bytes, total_bytes;
     CK(cudaMemGetInfo(&free_bytes, &total_bytes));
     fallback = "headroom";
-    if (free_bytes < memory_reserve || s.allocated > free_bytes - memory_reserve) return nullptr;
-    const auto status = cudaMalloc(&s.data, data_words * sizeof(Word));
-    if (status == cudaErrorMemoryAllocation) {
-        cudaGetLastError();
-        fallback = "allocation";
-        return nullptr;
+    if (free_bytes < memory_reserve) return nullptr;
+    const size_t available = std::min(limit, free_bytes - memory_reserve);
+    if (fixed_bytes > available || product_bytes > available - fixed_bytes) return nullptr;
+    if (!host && requested_batch > 1) {
+        // The x transform and limb assembly use the 16-bit grid.y axis.
+        const size_t grid_batch = 65535 / std::max<size_t>(output_rows, s.ly * (s.lx / s.k));
+        s.batch = unsigned(std::min({size_t(requested_batch), grid_batch, (available - fixed_bytes) / product_bytes}));
     }
-    CK(status);
+    for (;;) {
+        const size_t data_words = scratch_per_product * s.batch + tables;
+        const auto status = cudaMalloc(&s.data, data_words * sizeof(Word));
+        if (status != cudaErrorMemoryAllocation) {
+            CK(status);
+            s.allocated = fixed_bytes + product_bytes * s.batch;
+            break;
+        }
+        cudaGetLastError();
+        if (s.batch == 1) {
+            fallback = "allocation";
+            return nullptr;
+        }
+        s.batch /= 2;
+    }
     s.a = s.data;
-    s.b = s.a + matrix;
-    s.input = s.b + matrix;
-    s.twiddle = s.input + input;
+    s.b = s.a + matrix * s.batch;
+    s.input = s.b + matrix * s.batch;
+    s.twiddle = s.input + input * s.batch;
     s.inverse_weights = s.twiddle + twiddles;
     auto* digit_data = s.inverse_weights + s.ly;
     auto* span_data = digit_data + digit_words;
@@ -145,8 +163,9 @@ FoldWorkspace* create(unsigned p, unsigned max_coefficients, size_t limit, const
 }
 
 FoldWorkspace* create_product(unsigned p, unsigned ma, unsigned mb, unsigned first, unsigned count,
-                              bool host, size_t limit, const char*& fallback) {
-    return create_shape(p, std::min(ma, first + count), std::min(mb, first + count), first, count, host, limit, fallback);
+                              bool host, size_t limit, const char*& fallback, unsigned batch) {
+    return create_shape(p, std::min(ma, first + count), std::min(mb, first + count),
+                        first, count, host, limit, fallback, batch);
 }
 
 void release(FoldWorkspace*& workspace) {
@@ -157,30 +176,34 @@ void release(FoldWorkspace*& workspace) {
 size_t bytes(const FoldWorkspace& workspace) { return workspace.allocated; }
 unsigned coefficient_length(const FoldWorkspace& workspace) { return workspace.ly; }
 unsigned polynomial_length(const FoldWorkspace& workspace) { return workspace.lx; }
+unsigned batch_capacity(const FoldWorkspace& workspace) { return workspace.batch; }
 Word* host_staging(FoldWorkspace& workspace) { return workspace.staging; }
 size_t spectrum_words(const FoldWorkspace& workspace) { return size_t(workspace.ly) * workspace.lx; }
 
+template<bool Batched = false>
 static void forward_attributes(const FoldWorkspace& s) {
-    CK(cudaFuncSetAttribute(pack_forward, cudaFuncAttributeMaxDynamicSharedMemorySize, int(s.ly * sizeof(Word))));
+    CK(cudaFuncSetAttribute(pack_forward<Batched>, cudaFuncAttributeMaxDynamicSharedMemorySize, int(s.ly * sizeof(Word))));
     ntt_tile_attributes(s.x.warp_tail && s.x.t >= 5, int(sizeof(Word)) << s.x.t);
 }
 
+template<bool Batched = false>
 static Spectrum pretransform_ready(FoldWorkspace& s, Operand operand, const Word* coefficients, unsigned rows,
-                                   unsigned reverse_rows, Word* retained) {
+                                   unsigned reverse_rows, Word* retained, unsigned batch = 1,
+                                   const Word* offsets = nullptr) {
     const bool left = operand == Operand::left;
     auto* packed = left ? s.b : s.input;
     auto* spectrum = retained ? retained : (left ? s.a : s.b);
     const bool radix3 = s.lx != s.k;
-    const dim3 grid((s.ly + 31) / 32, (s.k + 31) / 32), threads(32, 8);
+    const dim3 grid((s.ly + 31) / 32, (s.k + 31) / 32, batch), threads(32, 8);
     const size_t shared = s.ly * sizeof(Word);
-    pack_forward<<<rows, FUSE_TILE_THREADS, shared>>>(coefficients, packed, s.words, s.ly, s.y.k,
-                                                     s.digits, s.y.tblF, reverse_rows);
+    pack_forward<Batched><<<dim3(rows, batch), FUSE_TILE_THREADS, shared>>>(coefficients, packed, s.words, s.ly, s.y.k,
+                                                                          s.digits, s.y.tblF, reverse_rows, offsets);
     if (radix3)
-        transpose_forward<true><<<grid, threads>>>(packed, spectrum, s.ly, s.k, rows, s.ly, s.twiddle, s.cube);
+        transpose_forward<true, Batched><<<grid, threads>>>(packed, spectrum, s.ly, s.k, rows, s.ly, s.twiddle, s.cube);
     else
-        transpose_forward<false><<<grid, threads>>>(packed, spectrum, s.ly, s.k, rows, s.ly, nullptr, 0);
+        transpose_forward<false, Batched><<<grid, threads>>>(packed, spectrum, s.ly, s.k, rows, s.ly, nullptr, 0);
     CK(cudaGetLastError());
-    ntt_forward_fused(spectrum, s.x, s.x_root, s.ly * (s.lx / s.k));
+    ntt_forward_fused(spectrum, s.x, s.x_root, batch * s.ly * (s.lx / s.k));
     return {spectrum};
 }
 
@@ -218,23 +241,27 @@ void frequency_product(FoldWorkspace& s, Spectrum left, Spectrum right) {
     CK(cudaGetLastError());
 }
 
+template<bool Batched = false>
 static void finish_window(FoldWorkspace& s, Word* polynomial, Word* coefficients,
-                          Word* out, unsigned first, unsigned count) {
+                          Word* out, unsigned first, unsigned count, unsigned batch = 1,
+                          const Word* offsets = nullptr) {
     const bool radix3 = s.lx != s.k;
     const dim3 threads(32, 8);
     const unsigned inverse_columns = first ? s.k : std::min(s.k, count);
-    const dim3 inverse_grid((inverse_columns + 31) / 32, (s.ly + 31) / 32);
+    const dim3 inverse_grid((inverse_columns + 31) / 32, (s.ly + 31) / 32, batch);
     const size_t shared = s.ly * sizeof(Word);
     CK(cudaFuncSetAttribute(inverse_rows, cudaFuncAttributeMaxDynamicSharedMemorySize, int(shared)));
     if (radix3)
-        transpose_inverse<true><<<inverse_grid, threads>>>(polynomial, coefficients, s.ly, s.k, count, s.ly, s.twiddle + 2 * s.k, s.cube2, first);
+        transpose_inverse<true, Batched><<<inverse_grid, threads>>>(polynomial, coefficients, s.ly, s.k, count, s.ly, s.twiddle + 2 * s.k, s.cube2, first);
     else
-        transpose_inverse<false><<<inverse_grid, threads>>>(polynomial, coefficients, s.ly, s.k, count, s.ly, nullptr, 0, first);
-    inverse_rows<<<count, FUSE_TILE_THREADS, shared>>>(coefficients, s.ly, s.y.k, s.y.tblI);
+        transpose_inverse<false, Batched><<<inverse_grid, threads>>>(polynomial, coefficients, s.ly, s.k, count, s.ly, nullptr, 0, first);
+    const unsigned rows = count * batch;
+    inverse_rows<<<rows, FUSE_TILE_THREADS, shared>>>(coefficients, s.ly, s.y.k, s.y.tblI);
     const unsigned limb_blocks = (s.limbs + mersenne::weighted_limb_threads - 1) / mersenne::weighted_limb_threads;
-    mersenne::weighted_limb_sums<<<dim3(limb_blocks, count), mersenne::weighted_limb_threads, s.limb_shared>>>(
+    mersenne::weighted_limb_sums<<<dim3(limb_blocks, rows), mersenne::weighted_limb_threads, s.limb_shared>>>(
         polynomial, coefficients, s.inverse_weights, s.digits, s.spans, s.p, s.limbs, s.ly);
-    normalize<<<count, carry_threads>>>(reinterpret_cast<uint32_t*>(out), polynomial, s.limbs, s.p, 2 * s.words);
+    normalize<Batched><<<dim3(count, batch), carry_threads>>>(reinterpret_cast<uint32_t*>(out), polynomial,
+                                                             s.limbs, s.p, 2 * s.words, offsets);
     CK(cudaGetLastError());
 }
 
@@ -275,6 +302,15 @@ void multiply(FoldWorkspace& s, const Word* a, unsigned ma, const Word* b, unsig
     // Fuse the spectral product with the first inverse pass for one-shot calls.
     ntt_inverse_fused(s.a, right.data, s.x, s.x_inv, s.x_scale, s.ly * (s.lx / s.k));
     finish_window(s, s.a, s.b, out, first, count);
+}
+
+void multiply_tree_batch(FoldWorkspace& s, const Word* src, const Word* left, const Word* right,
+                         unsigned ma, unsigned mb, Word* dst, const Word* output, unsigned batch) {
+    forward_attributes<true>(s);
+    pretransform_ready<true>(s, Operand::left, src, ma, 0, nullptr, batch, left);
+    pretransform_ready<true>(s, Operand::right, src, mb, 0, nullptr, batch, right);
+    ntt_inverse_fused(s.a, s.b, s.x, s.x_inv, s.x_scale, batch * s.ly * (s.lx / s.k));
+    finish_window<true>(s, s.a, s.b, dst, 0, ma + mb - 1, batch, output);
 }
 
 }

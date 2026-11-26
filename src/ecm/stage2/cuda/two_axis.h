@@ -16,11 +16,12 @@ inline size_t window_span(size_t ma, size_t mb, size_t first, size_t count) {
 
 FoldWorkspace* create(unsigned p, unsigned max_coefficients, size_t limit, const char*& fallback);
 FoldWorkspace* create_product(unsigned p, unsigned ma, unsigned mb, unsigned first, unsigned count,
-                              bool host, size_t limit, const char*& fallback);
+                              bool host, size_t limit, const char*& fallback, unsigned batch = 1);
 void release(FoldWorkspace*& workspace);
 size_t bytes(const FoldWorkspace& workspace);
 unsigned coefficient_length(const FoldWorkspace& workspace);
 unsigned polynomial_length(const FoldWorkspace& workspace);
+unsigned batch_capacity(const FoldWorkspace& workspace);
 unsigned long long* host_staging(FoldWorkspace& workspace);
 // The plan bounds the input rows and the alias-free output window. All stages
 // use the default stream. Spectra are valid only with the plan that built them.
@@ -46,4 +47,10 @@ void inverse_window(FoldWorkspace& workspace, unsigned long long* out, unsigned 
 void multiply(FoldWorkspace& workspace, const unsigned long long* a, unsigned ma,
               const unsigned long long* b, unsigned mb, unsigned long long* out, unsigned count,
               unsigned first = 0, bool reverse_b = false);
+// Full products of resident tree nodes. Offsets are device arrays of word
+// offsets into src and dst, with one entry per product.
+void multiply_tree_batch(FoldWorkspace& workspace, const unsigned long long* src,
+                         const unsigned long long* left, const unsigned long long* right,
+                         unsigned ma, unsigned mb, unsigned long long* dst,
+                         const unsigned long long* output, unsigned batch);
 }

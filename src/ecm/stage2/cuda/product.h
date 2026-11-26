@@ -36,6 +36,7 @@ struct GrootMetadata {
 struct S4Ctx {
     struct TwoAxisPlan {
         size_t ma, mb, span, staging_output;
+        unsigned requested_batch;
         bool host;
         stage2_two_axis::FoldWorkspace* workspace;
     };
@@ -43,6 +44,8 @@ struct S4Ctx {
     size_t two_axis_bytes=0, two_axis_peak=0;
     unsigned long long two_axis_muls[BC_NCAT]{}, two_axis_checked[BC_NCAT]{};
     unsigned long long two_axis_parent_hits=0;
+    unsigned long long two_axis_tree_groups=0, two_axis_tree_chunks=0, two_axis_tree_products=0;
+    unsigned two_axis_tree_max_batch=0;
     size_t release_two_axis();
     S4Reduce *red = nullptr;
     unsigned long long *d_out = nullptr;
