@@ -57,6 +57,17 @@ __device__ __forceinline__ void ntt_tile_finish_inverse(unsigned long long* out,
         out[i] = sm[i];
 }
 
+// A 4096-word tile whose first six DIT stages ran in registers. The caller
+// synchronizes after writing the warp results into shared memory.
+__device__ __forceinline__ void ntt_tile_finish_inverse_4096(unsigned long long* out,
+    unsigned long long* sm, const unsigned long long* twiddles) {
+    tile_radix4_block_inv(sm, 4096, 6, twiddles);
+    __syncthreads();
+    tile_radix4_block_inv(sm, 4096, 8, twiddles);
+    __syncthreads();
+    tile_radix4_block_inv<true>(sm, 4096, 10, twiddles, out);
+}
+
 // Operates on a ready shared-memory tile and writes the same transform layout
 // for in-place NTTs and Stage1 products loaded from immutable spectra.
 template<bool INVERSE, bool WARP_TAIL>
@@ -81,7 +92,8 @@ __device__ __forceinline__ void ntt_tile_pass(unsigned long long* out, unsigned 
         } else for(unsigned long long i=threadIdx.x;i<TILE;i+=blockDim.x)
             sm[i]=tile_warp5<true>(sm[i],tbl);
         __syncthreads();
-        ntt_tile_finish_inverse(out, sm, TILE, wt, t, tbl);
+        if(t==12) ntt_tile_finish_inverse_4096(out, sm, tbl);
+        else ntt_tile_finish_inverse(out, sm, TILE, wt, t, tbl);
         return;
     }
     ntt_tile_finish_inverse(out, sm, TILE, 0, t, tbl);

@@ -2,6 +2,18 @@
 
 CUDA Stage1 和 Stage2 共用 Goldilocks 域算术、根表与正逆变换调度。Stage1 在完整梅森模数上计算单个点坐标的乘积，Stage2 使用 Kronecker 槽计算多项式乘积并逐系数归约。
 
+## CUDA 共用变换与调用边界
+
+两阶段的基础 NTT 库位于 `src/ecm/cuda/ntt/`。`FuseCtx` 及其执行器负责根表、二次幂 tile、外层 radix 和 DIF／DIT 调度。Stage1 阶梯的融合乘加与 Stage2 的频域乘积可以各自装入数据，再进入同一个 tile。4,096 点逆向 tile 的前六层在 warp 内完成，末三组 radix-4 由共用例程执行，最后一组直接写入全局输出。Stage1 的字典乘积和固定宽逆变换，以及 Stage2 的通用逆变换和双轴逆向行都调用该例程。Stage2 普通逆向 tile 在装入共享内存前完成点乘和归一化，减少一次块同步。[运行时](../../src/ecm/cuda/ntt/runtime.cpp) · [共享 tile](../../src/ecm/cuda/ntt/device/tile_pass.cuh) · [Stage1 融合乘积](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [Stage2 双轴变换](../../src/ecm/stage2/cuda/device/two_axis.cu)
+
+两个可执行文件各自链接共用源码编译所得的目标文件。同一构建中，CUDA 架构、Goldilocks 选项和 device link 一致时，可以进一步共用编译目标以减少重复编译。两阶段仍各自持有设备上下文、根表和工作区。[CUDA 构建目标](../../CMakeLists.txt#L308)
+
+Stage1 的坐标路径可使用加权循环卷积。打包按梅森 digit 边界加权，去权后执行梅森回卷与 limb 进位。Stage2 双轴路径的系数轴也复用了这套权重表，当前由 Stage1 的 `weighted.cuh` 提供。G 树的单轴路径处理零填充的线性卷积，通过 Kronecker 槽恢复独立的多项式系数，再由 S4 做系数模归约。共用变换的接口是域元素、频谱布局、长度和归一化因子。调用方在各自卷积语义下检查系数界。[权重表](../../src/ecm/stage1/cuda/ntt/weighted.cuh) · [Stage2 双轴系数计划](../../src/ecm/stage2/cuda/device/two_axis.cu#L118) · [Stage2 线性乘积](../../src/ecm/stage2/cuda/product.cpp)
+
+Stage1 的五点 DFT、常量和 PFA 置换可作为共用原语。接入 G 树单轴路径时，需要由线性乘积的实际打包长度、系数上界和输出窗口决定是否准入，并同步核对计划缓存、工作区与进位的长度合同。测试应覆盖线性零填充边界、正逆归一化，以及各槽还原后与 GMP 系数逐项一致。把完整的 Stage1 加权卷积移入 G 树会改变多项式系数的回卷规则。[五点 DFT 与 PFA](../../kernels/cuda/stage1_ntt_radix5.cuh) · [Stage2 请求与归约](../../src/ecm/stage2/cuda/product.cpp)
+
+以 4,253 位 G 树第一层为例，若用 27 位 digit 和每槽 316 个 digit，两个二项式各占至多 632 个 digit。线性卷积至少需要 1,263 个位置，因此可用 1,280 点作为 radix-5 原型。下一层的三项输入各占至多 948 个 digit，1,280 点容不下其完整线性乘积。按当前二次幂规则，这两层都请求 2,048 点。[变换长度与批量实测](../performance/STAGE2.md#卷积次数gpu-时间与优化范围)
+
 ## Stage1 已知因子与梅森承载
 
 梅森任务可保留原始 $M=2^p-1$ 作为 GPU 算术模数，同时令 $C=M/K$ 为实际目标，$K$ 为 worktodo 中已知因子的乘积。默认配置 `ntt_allow_known_factors = 1` 允许这条路径；0 关闭其选型。输入须保留 $k=1,b=2,c=-1,p$ 和已知因子元数据，并验证 $C\mid M$。GPU 算法切片按 $C$ 的位宽匹配，NTT 长度、系数界和显存准入按 $p$ 计算。见 [模数资格](../../include/ecm/stage1/ntt_target.h)。

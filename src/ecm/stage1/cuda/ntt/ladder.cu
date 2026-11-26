@@ -234,7 +234,7 @@ void dictionary_product_tile(const U* input, const U* dictionary, U* output,
         sm[i + 32] = hi;
     }
     __syncthreads();
-    ntt_tile_finish_inverse(output + start, sm, width, 6, 12, inverse, true);
+    ntt_tile_finish_inverse_4096(output + start, sm, inverse);
 }
 
 struct ProductInputs {
@@ -299,11 +299,7 @@ void inverse_product_tile(U* out,
         if constexpr (Fixed12) {
             static_assert(StoreLastRadix4);
             __syncthreads();
-            tile_radix4_block_inv(sm, 4096, 6, twiddles);
-            __syncthreads();
-            tile_radix4_block_inv(sm, 4096, 8, twiddles);
-            __syncthreads();
-            tile_radix4_block_inv<true>(sm, 4096, 10, twiddles, output);
+            ntt_tile_finish_inverse_4096(output, sm, twiddles);
         } else if (tile > 6) {
             __syncthreads();
             ntt_tile_finish_inverse(output, sm, width, 6, tile, twiddles, StoreLastRadix4);

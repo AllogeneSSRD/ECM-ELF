@@ -166,20 +166,17 @@ void tile_kernel(unsigned long long *a, const unsigned long long *b,
     extern __shared__ unsigned long long sm[];
     const unsigned long long TILE = 1ull << t;
     const unsigned long long base = blockIdx.x * TILE;
-    for (unsigned long long i = threadIdx.x; i < TILE; i += blockDim.x)
-        sm[i] = a[base + i];
-    __syncthreads();
-    if (INVERSE) {
-        /* pointwise product + 1/N, both elementwise: fusing them here saves two passes */
-        if(shift_scale && gl_scale_is_inverse_pow2(n_scale,k)) {
-            for (unsigned long long i = threadIdx.x; i < TILE; i += blockDim.x)
-                sm[i] = gl_scale_inverse_pow2(gl_mul(sm[i], b[base + i]), k);
-        } else {
-            for (unsigned long long i = threadIdx.x; i < TILE; i += blockDim.x)
-                sm[i] = gl_mul(gl_mul(sm[i], b[base + i]), n_scale);
+    const bool use_shift = INVERSE && shift_scale && gl_scale_is_inverse_pow2(n_scale,k);
+    for (unsigned long long i = threadIdx.x; i < TILE; i += blockDim.x) {
+        auto value = a[base + i];
+        if constexpr (INVERSE) {
+            // Form and scale the spectrum before publishing it to the tile.
+            value = gl_mul(value, b[base + i]);
+            value = use_shift ? gl_scale_inverse_pow2(value,k) : gl_mul(value,n_scale);
         }
-        __syncthreads();
+        sm[i] = value;
     }
+    __syncthreads();
     ntt_tile_pass<INVERSE,WARP_TAIL>(a+base, sm, TILE, t, tbl);
 }
 
