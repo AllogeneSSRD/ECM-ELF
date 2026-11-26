@@ -66,6 +66,10 @@ flowchart LR
 
 每个块处理同一输出坐标的至多四条曲线。归约直接写入点坐标槽，省去一组全局 limb 和的写入、读回以及一次 kernel 启动。Montgomery PARAM0 的末批乘积沿用原有标量位决定的坐标槽。见 [warp 归约](../../kernels/cuda/stage1_ntt_segments.cuh)、[乘积调度](../../src/ecm/stage1/cuda/ntt/ladder.cu) 和 [吞吐实测](../performance/STAGE1_MERSENNE_NTT.md#短加权乘积归约)。
 
+### 512 点原生 Edwards 批量归约
+
+512 点加权 NTT 在原生 Edwards 每批至少 32 条曲线时，为每条曲线的每路输出分配一个 256 线程块。线程先合作去权，把整路 512 个系数保存在共享内存，随后在同一块内汇集各 limb。汇集按固定长度计算 digit 的起始位，环形进位使用原有的块内扫描，将规范结果直接写入坐标槽。每批乘积省去一次独立归约 kernel 启动以及每条曲线、每路输出的一组 64 位 limb 和写入与读回。[实现](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [4060 Laptop 实测](../performance/STAGE1_MERSENNE_NTT.md#rtx-4060-laptop-多曲线瓶颈与-512-点归约)
+
 ### 单曲线融合归约
 
 2560 点单曲线在 \(p\ge53249\)、5120 点单曲线在 \(p\ge106497\) 时，去权、limb 汇集和段内扫描共用一个 CTA。每个 lane 从逆变换系数求本 limb 的和，warp 内用 shuffle 取得前一 limb 的高部。warp 首 lane 直接从输入系数重算前一 limb，包含段之间的邻接值。最低 limb 单独读取最高两 limb，计算模 \(2^p-1\) 的回卷。普通 limb 只扫描本区间，低两 limb 还检查回卷区间，短模数另处理第二次回卷。

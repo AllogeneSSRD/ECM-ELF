@@ -31,6 +31,7 @@ WARP_WEIGHTED_CARRY = 1 << 20
 PACKED_WEIGHTED_OUTER = 1 << 21
 FIXED_CARRY_OFFSETS = 1 << 22
 DICTIONARY_PRODUCT_TILE = 1 << 23
+BLOCK_WEIGHTED_CARRY = 1 << 26
 
 
 def ntt_executions(log):
@@ -235,8 +236,9 @@ def main():
         print("PASS Edwards 2XY inverse input dispatch, Graph/direct and integer endpoint", flush=True)
 
         b1, sigma = 16, 26
-        reduction = SEGMENTED_CARRY | CACHED_FUSED_WEIGHTED_CARRY
-        for length, p in ((4096, 81919), (8192, 104729)):
+        segmented = SEGMENTED_CARRY | CACHED_FUSED_WEIGHTED_CARRY
+        for length, p, reduction in ((512, 9689, BLOCK_WEIGHTED_CARRY),
+                                     (4096, 81919, segmented), (8192, 104729, segmented)):
             by_batch = {}
             for batch in (31, 32):
                 work, cmd = fixture(f"edwards_{length}_carry_{batch}", model="ed",
@@ -245,6 +247,9 @@ def main():
                 log = run(work, call, text=data)
                 [flow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
                 assert int(flow) & reduction == (reduction if batch == 32 else 0), log
+                if length == 512 and "ECM_EDWARDS_NTT_DICTIONARY" not in env:
+                    [builder] = re.findall(r"stage1_ntt_edwards_dictionary: .*\bbackend=(\w+)", log)
+                    assert builder == ("gpu" if batch == 32 else "host"), log
                 by_batch[batch] = saved_points(work / "out.save", p, b1, True)
                 assert set(by_batch[batch]) == set(range(sigma, sigma + batch))
             assert all(by_batch[32][seed] == x for seed, x in by_batch[31].items())
@@ -252,7 +257,7 @@ def main():
             for seed in (sigma, sigma + 31):
                 _, x, z = edwards_stage1(n, seed, b1)
                 assert by_batch[32][seed] == x * pow(z, -1, n) % n
-        print("PASS 4096/8192-point Edwards carry dispatch, common lanes and integer endpoints", flush=True)
+        print("PASS 512/4096/8192-point Edwards carry dispatch, common lanes and integer endpoints", flush=True)
 
         for p, expects_direct in ((3433, True), (3457, False)):
             work, cmd = fixture(f"edwards_inverse_input_128_{p}", model="ed",

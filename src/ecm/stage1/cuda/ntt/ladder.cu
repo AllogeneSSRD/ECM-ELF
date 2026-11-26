@@ -333,31 +333,11 @@ struct Join {
 // One block per output residue. A thread first summarizes a contiguous limb
 // interval; warp ballots compute its prefix. Feed the high carry back into the
 // low limb (2^p=1). An all-propagate sum is exactly M, represented as zero.
-template<bool Fold, bool Select, bool Weighted = false, bool Routed = false, bool Cached = false>
-__global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, Cursor cursor) {
+template<bool Cached, class Raw>
+__device__ __forceinline__ void combine_limbs(uint32_t* output, Shape s, Raw raw, uint32_t* saved_raw) {
     __shared__ unsigned warp_tags[threads/32];
-    extern __shared__ uint32_t saved_raw[];
-    const unsigned op = blockIdx.x/s.curves, curve = blockIdx.x%s.curves;
-    const unsigned out = output_slot<Routed>(ops.out.x[op],cursor);
-    unsigned a = ops.left.x[op], b = ops.right.x[op];
-    if constexpr(Select) {
-        const unsigned swap = 2u * scalar_bit(cursor);
-        a ^= swap; b ^= swap;
-    }
     const unsigned stride = (s.words+threads-1)/threads;
     const unsigned begin = min(threadIdx.x * stride, s.words), end = min(begin+stride, s.words);
-    const auto raw = [=](unsigned i, uint32_t mask) -> U {
-        if constexpr(Weighted) {
-            const auto* sums = products + size_t(blockIdx.x) * s.words;
-            const unsigned tail_bits = s.p - 32 * (s.words - 1);
-            return weighted_limb(sums, s.words, tail_bits, i, mask);
-        } else if constexpr(Fold) {
-            const auto* digits = products + size_t(blockIdx.x)*s.length;
-            return linear_fold_limb(digits,s,i,mask);
-        } else {
-            return add_limb(state,s,a,b,curve,i,mask,(ops.subtract >> op) & 1);
-        }
-    };
     unsigned tag = 1, limb_generate = 0, limb_propagate = 0;
     for (unsigned i=begin; i<end; ++i) {
         const uint32_t mask = limb_mask(s,i);
@@ -390,14 +370,61 @@ __global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, C
         if constexpr (Cached) {
             const unsigned j = i-begin;
             const uint32_t v = saved_raw[j*threads + threadIdx.x] + carry;
-            state[limb(s,out,curve,i)] = whole == 1 ? 0 : v & mask;
+            output[i] = whole == 1 ? 0 : v & mask;
             carry = ((limb_generate | (limb_propagate & (0u - carry))) >> j) & 1;
         } else {
             const U v = raw(i,mask) + carry;
-            state[limb(s,out,curve,i)] = whole == 1 ? 0 : uint32_t(v) & mask;
+            output[i] = whole == 1 ? 0 : uint32_t(v) & mask;
             carry = v > mask;
         }
     }
+}
+
+template<bool Fold, bool Select, bool Weighted = false, bool Routed = false, bool Cached = false>
+__global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, Cursor cursor) {
+    extern __shared__ uint32_t saved_raw[];
+    const unsigned op = blockIdx.x/s.curves, curve = blockIdx.x%s.curves;
+    const unsigned out = output_slot<Routed>(ops.out.x[op],cursor);
+    unsigned a = ops.left.x[op], b = ops.right.x[op];
+    if constexpr(Select) {
+        const unsigned swap = 2u * scalar_bit(cursor);
+        a ^= swap; b ^= swap;
+    }
+    const auto raw = [=](unsigned i, uint32_t mask) -> U {
+        if constexpr(Weighted) {
+            const auto* sums = products + size_t(blockIdx.x) * s.words;
+            const unsigned tail_bits = s.p - 32 * (s.words - 1);
+            return weighted_limb(sums, s.words, tail_bits, i, mask);
+        } else if constexpr(Fold) {
+            const auto* digits = products + size_t(blockIdx.x)*s.length;
+            return linear_fold_limb(digits,s,i,mask);
+        } else {
+            return add_limb(state,s,a,b,curve,i,mask,(ops.subtract >> op) & 1);
+        }
+    };
+    combine_limbs<Cached>(state + limb(s,out,curve,0),s,raw,saved_raw);
+}
+
+// Keep the deweighted spectrum and the limb sums in one CTA. Each block
+// owns a complete output residue, so its carry can wrap without a global pass.
+constexpr unsigned block_weighted_length = 512;
+__global__ __launch_bounds__(threads, 3)
+void weighted_block_reduce(uint32_t* state, WeightedLimbSource source, Shape s, Indices out) {
+    __shared__ U coefficients[block_weighted_length];
+    __shared__ U sums[block_weighted_length];
+    __shared__ uint32_t saved_raw[block_weighted_length];
+    const unsigned curve = blockIdx.x, op = blockIdx.y;
+    const auto* input = source.coefficients + (size_t(op) * s.curves + curve) * block_weighted_length;
+    for (unsigned j = threadIdx.x; j < block_weighted_length; j += threads)
+        coefficients[j] = gl_mul(input[j], source.inverse_weights[j]);
+    __syncthreads();
+    for (unsigned i = threadIdx.x; i < s.words; i += threads)
+        sums[i] = gather_carry_limb<block_weighted_length>(source,s.p,i,
+            [](unsigned j) { return coefficients[j]; });
+    __syncthreads();
+    const unsigned tail_bits = s.p - 32 * (s.words - 1);
+    const auto raw = [=](unsigned i, uint32_t mask) { return weighted_limb(sums,s.words,tail_bits,i,mask); };
+    combine_limbs<true>(state + limb(s,out.x[op],curve,0),s,raw,saved_raw);
 }
 
 __global__ void route(uint32_t* state, Shape s, Cursor cursor) {
@@ -568,7 +595,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     Run result;
     unsigned defaults = FusedMultiplyAdd | LooseDifference | DirectRoute | PackedForward |
                         PfaRadix5 | CoalescedRadix5 | InverseWarpInput | ShortInverseTile | WarpWeightedCarry |
-                        PackedWeightedOuter | FixedCarryOffsets;
+                        PackedWeightedOuter | FixedCarryOffsets | BlockWeightedCarry;
     if (curves >= 8) defaults |= DictionaryProductTile;
     // Wider weighted reductions showed a batch-dependent cache tradeoff.
     if (p <= 65536) defaults |= CachedCarry;
@@ -745,7 +772,11 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool warp_reduce = (requested & WarpWeightedCarry) && options.weighted && !segmented &&
                              s.words <= 32 && s.length <= 64;
     if (warp_reduce) result.dataflow |= WarpWeightedCarry;
-    const bool cached = (requested & CachedCarry) && options.weighted && !segmented && !warp_reduce && s.words <= 32 * threads;
+    const bool block_reduce = (requested & BlockWeightedCarry) && naf && options.weighted && !segmented &&
+                              s.length == block_weighted_length && s.words <= block_weighted_length && curves >= 32;
+    if (block_reduce) result.dataflow |= BlockWeightedCarry;
+    const bool cached = (requested & CachedCarry) && options.weighted && !segmented &&
+                        !warp_reduce && !block_reduce && s.words <= 32 * threads;
     const bool deferred = segmented && !packed && (requested & DeferredPack);
     const bool wide_outer = s.length == 262144 && segment_count > inline_carry_segments && ctx.nms > 0;
     const bool single_outer = ctx.nms == 1 && !deferred &&
@@ -904,7 +935,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         radix5_fwd = radix5_constants(gl_pow_host(omega, width));
         radix5_inv = radix5_constants(gl_pow_host(inv, width));
     }
-    const unsigned limb_smem = fused_weighted || warp_reduce || radix5_limb_sums
+    const unsigned limb_smem = fused_weighted || warp_reduce || block_reduce || radix5_limb_sums
         ? 0 : weighted_limb_smem(weights.limbs);
     Buffer<WeightedDigit> digit_table(weights.digits.size());
     Buffer<U> inverse_weights(weights.inverse.size());
@@ -1151,6 +1182,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 const auto kernel = route_output ? weighted_warp_reduce<true> : weighted_warp_reduce<false>;
                 kernel<<<groups,32 * weighted_carry_warps,weighted_carry_warps * s.length * sizeof(U),q>>>(
                     state.data,source,s,out,cursor);
+            } else if (block_reduce) {
+                weighted_block_reduce<<<dim3(curves,outputs),threads,0,q>>>(state.data,source,s,out);
             } else if (fused_weighted) {
                 const auto launch = [&](auto route) {
                     constexpr bool routed = decltype(route)::value;

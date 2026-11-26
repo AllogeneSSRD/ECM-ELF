@@ -13,6 +13,7 @@ namespace ecm_edwards::ntt {
 inline bool prefer_device_dictionary(size_t p, unsigned curves, unsigned window, unsigned min_bits) {
     if (min_bits) return p >= min_bits;
     if (p >= 32768 || (p >= 20000 && window >= 6)) return true;
+    if (window >= 6 && p >= 4096 && curves >= 32) return true;
     if (window < 8) return false;
     if (p >= 2000 && curves >= 64) return true;
     if (p >= 6144) return curves >= 8;
