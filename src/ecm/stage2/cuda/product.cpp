@@ -89,6 +89,15 @@ void PolyLayer::print_ntt_lengths()const
         const double work=double(total)*double(1ull<<k);
         elements+=work;butterflies+=work*double(k)/2.;
     }
+    if (const auto &v=ntt_lengths.mixed1280;v.convolutions) {
+        const auto forward=2ull*v.convolutions-v.reused_forwards;
+        const auto total=forward+v.convolutions;
+        std::printf("ntt_count_mixed_row: %u %llu %llu %llu %llu\n",ntt_pfa5_length,
+            (unsigned long long)v.convolutions,forward,(unsigned long long)v.convolutions,total);
+        pairs+=v.convolutions;chunks+=v.chunks;transforms+=total;
+        const double work=double(total)*ntt_pfa5_length;
+        elements+=work;butterflies+=work*8/2;
+    }
     std::printf("ntt_length_counts: log2_length:num_of_ntt %s\n",counts.c_str());
     std::printf("ntt_work: scope=curve_polynomial convolutions=%llu transforms=%llu s4_chunks=%llu elements=%.6e logical_radix2_butterflies=%.6e short_batch_changed=%llu\n",
         pairs,transforms,chunks,elements,butterflies,short_batch_changed);
@@ -564,6 +573,8 @@ void poly_mul_batch_modN(
        destroyed unread, since reading them would need the drain we are removing) -- the last chunk
        of each call still reports the sample. */
     const bool defer_ok = (!host_pack && L.arena != nullptr && g_s4_defer_carry);
+    const bool allow_pfa5=resident && memory_category==BC_GTREE && ma==2 && mb==2 &&
+        fuse_env_ull("NTT_STAGE2_GTREE_PFA5",0);
     /* the doubly-buffered PINNED output staging (section 30): reserved once per call at the largest
        chunk this call can use, so every chunk of the call follows the same path (mixing a blocking
        chunk with the deferred-consumption scheme would break the pending bookkeeping) */
@@ -620,7 +631,7 @@ void poly_mul_batch_modN(
             const bool pack_weighted=std::max(ma,mb)<=qN/2/qsw &&
                                      stage2_pack::supported(qN,qsw,ma,(int)L.S,qbpw,(int)W) &&
                                      stage2_pack::supported(qN,qsw,mb,(int)L.S,qbpw,(int)W);
-            NttInputHook input{&pack,s4_gather_final_input,pack_weighted,resident->fixed_b,mb};
+            NttInputHook input{&pack,s4_gather_final_input,pack_weighted,resident->fixed_b,mb,allow_pfa5};
             const auto hits=resident->fixed_b ? resident->fixed_b->hits : 0;
             const double tp=C.t_packdev;
             r1=ntt_poly_mul_batch_dev(P,(int)L.S,L.device,m,nullptr,nullptr,&st,L.arena,&h2,
@@ -856,7 +867,8 @@ void poly_mul_batch_modN(
     }
     ++L.ntt_launches;
     L.ntt_calls += nbatch;
-    L.count_ntt(qN,nbatch,nbatch/chunk+(nbatch%chunk!=0),fixed_b ? fixed_b->hits-initial_spectrum_hits : 0,memory_category);
+    L.count_ntt(st.pfa5?ntt_pfa5_length:qN,nbatch,nbatch/chunk+(nbatch%chunk!=0),
+        fixed_b ? fixed_b->hits-initial_spectrum_hits : 0,memory_category);
     L.muls += nbatch;
     L.t_fwd += st.t_fwd;
     L.t_inv += st.t_inv;

@@ -179,7 +179,7 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                                     std::vector<unsigned long long> *hPre,
                                     std::vector<unsigned long long> *hPost,
                                     bool need_hout = true, bool defer_res = false, NttArena *arena=nullptr,
-                                    NttRightSpectrum right_spectrum=NttRightSpectrum::None);
+                                    NttRightSpectrum right_spectrum=NttRightSpectrum::None, bool pfa5=false);
 void ntt_pass_read_marks(NttPassResult &r, double *t_fwd, double *t_inv, double *t_chk,
                          double *t_combined);
 bool ntt_hook_window(const NttReduceHook *hook, unsigned long long slots,
@@ -471,7 +471,8 @@ struct NttCfg {
 };
 
 struct NttMulStats {
-    unsigned long long P = 0, N = 0, out_slots = 0;      /* coefficients, transform length */
+    unsigned long long P = 0, N = 0, out_slots = 0;      /* coefficients, digit buffer stride */
+    bool pfa5 = false;                                    /* logical transform length 1280 when set */
     unsigned long long slot_bits = 0, slot_stride = 0, slot_words = 0, L_terms = 0;
     unsigned long long cw = 0;                           /* words per exact coefficient */
     int S = 0, k = 0, bpw = 0;
@@ -600,6 +601,7 @@ struct NttInputHook {
     bool accepts_weighted = false;
     NttFixedSpectrum *fixed_b = nullptr;
     unsigned long long fixed_b_coefficients = 0;
+    bool allow_pfa5 = false;
 };
 
 NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,

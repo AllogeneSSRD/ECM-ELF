@@ -31,6 +31,8 @@ void ecm_launch_ntt_inverse_tile_from_pairs(EcmCudaLaunch, unsigned long long*, 
 template<int T, bool ShiftScale, bool Packed>
 void ecm_launch_ntt_short_convolution(EcmCudaLaunch, unsigned long long*, unsigned long long*,
     const unsigned long long*, const unsigned long long*, unsigned long long);
+void ecm_launch_ntt_pfa5_convolution(unsigned slices,unsigned long long* a,const unsigned long long* b,
+    const unsigned long long* fwd,const unsigned long long* inv);
 void ecm_launch_gl_mul_test_kernel(EcmCudaLaunch cfg, const unsigned long long *x, const unsigned long long *y, unsigned long long *out, int n);
 void ecm_launch_gl_twiddle_test_kernel(EcmCudaLaunch cfg, unsigned long long *out, unsigned long long n, unsigned long long omega);
 void ecm_launch_dft_direct_kernel(EcmCudaLaunch cfg, const unsigned long long *x, unsigned long long *out, unsigned long long n, unsigned long long omega);

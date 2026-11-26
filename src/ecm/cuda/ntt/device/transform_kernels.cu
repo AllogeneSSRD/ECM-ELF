@@ -3,9 +3,20 @@
 #include "carry.cuh"
 #include "tile.cuh"
 #include "short_convolution.cuh"
+#include "pfa5.cuh"
 #include "outer_coop.cuh"
 #include "carry_partial.cuh"
 #include "tune_checks.cuh"
+
+void ecm_launch_ntt_pfa5_convolution(unsigned slices,unsigned long long* a,const unsigned long long* b,
+    const unsigned long long* fwd,const unsigned long long* inv) {
+    using namespace ecm_cuda_ntt;
+    static const auto root=gl_pow_host(7,(GL_P-1)/5);
+    static const auto fwd5=radix5_constants(root);
+    static const auto inv5=radix5_constants(gl_pow_host(root,GL_P-2));
+    static const auto scale=gl_pow_host(ntt_pfa5_length,GL_P-2);
+    pfa5_convolution<<<slices,128>>>(a,b,fwd,inv,fwd5,inv5,scale);
+}
 
 const void *ecm_ntt_tile_handle(bool inverse,bool warp) {
     if(inverse)return warp ? (const void*)tile_kernel<true,true> : (const void*)tile_kernel<true>;

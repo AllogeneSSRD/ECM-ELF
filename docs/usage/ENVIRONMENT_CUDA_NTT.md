@@ -34,6 +34,7 @@
 | 变量 | 默认 | 用途 |
 | --- | ---: | --- |
 | `NTT_STAGE2_SHORT_CONV` | 0 | 0 原卷积，1 短档寄存器逆向，2 融合 A/B 前向、乘法和逆向，模式 2 要求无 outer。未满足条件时使用原路径。 |
+| `NTT_STAGE2_GTREE_PFA5` | 0 | 1 启用驻留 G 树首层的 1,280 点 PFA 实验路径。要求普通单轴线性卷积、原计划 2,048 点、完整乘积可装入 1,280 点并且根表已缓存。 |
 | `NTT_SHORT_GRAPH` | 0 | 缓存短长度卷积的 CUDA Graph 提交。 |
 | `NTT_SHORT_GRAPH_MAX_K` | 19 | Graph 每条变换的最大 `k`。 |
 | `NTT_SHORT_GRAPH_MAX_WORDS` | 4194304 | Graph 单次 `L × batch` 的上限。 |

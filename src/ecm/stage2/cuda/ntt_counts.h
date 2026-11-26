@@ -1,4 +1,5 @@
 #pragma once
+#include "../../cuda/ntt/parameters.h"
 #include <array>
 #include <cstdint>
 
@@ -9,8 +10,15 @@ struct NttLengthCounts {
     struct Entry { uint64_t convolutions=0,chunks=0,reused_forwards=0; };
     bool enabled=false;
     std::array<Entry,33> entries{};
+    Entry mixed1280;
     void add(uint64_t length,uint64_t convolutions,uint64_t chunks,uint64_t reused_forwards) {
         if(!enabled)return;
+        if(length==ntt_pfa5_length) {
+            mixed1280.convolutions+=convolutions;
+            mixed1280.chunks+=chunks;
+            mixed1280.reused_forwards+=reused_forwards;
+            return;
+        }
         unsigned k=0;for(auto n=length;n>1;n>>=1)++k;
         if(k<entries.size()) {
             entries[k].convolutions+=convolutions;

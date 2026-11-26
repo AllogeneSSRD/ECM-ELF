@@ -10,9 +10,9 @@ CUDA Stage1 和 Stage2 共用 Goldilocks 域算术、根表与正逆变换调度
 
 Stage1 的坐标路径可使用加权循环卷积。打包按梅森 digit 边界加权，去权后执行梅森回卷与 limb 进位。Stage2 双轴路径的系数轴也复用了这套权重表，当前由 Stage1 的 `weighted.cuh` 提供。G 树的单轴路径处理零填充的线性卷积，通过 Kronecker 槽恢复独立的多项式系数，再由 S4 做系数模归约。共用变换的接口是域元素、频谱布局、长度和归一化因子。调用方在各自卷积语义下检查系数界。[权重表](../../src/ecm/stage1/cuda/ntt/weighted.cuh) · [Stage2 双轴系数计划](../../src/ecm/stage2/cuda/device/two_axis.cu#L118) · [Stage2 线性乘积](../../src/ecm/stage2/cuda/product.cpp)
 
-Stage1 的五点 DFT、常量和 PFA 置换可作为共用原语。接入 G 树单轴路径时，需要由线性乘积的实际打包长度、系数上界和输出窗口决定是否准入，并同步核对计划缓存、工作区与进位的长度合同。测试应覆盖线性零填充边界、正逆归一化，以及各槽还原后与 GMP 系数逐项一致。把完整的 Stage1 加权卷积移入 G 树会改变多项式系数的回卷规则。[五点 DFT 与 PFA](../../kernels/cuda/stage1_ntt_radix5.cuh) · [Stage2 请求与归约](../../src/ecm/stage2/cuda/product.cpp)
+Stage1 与 Stage2 共用五点 DFT、根常量和 PFA 平面置换。Stage2 的实验路径用于驻留 G 树首层的单轴线性卷积。每个线程块完成两个操作数的五点 DFT 和五组 256 点 NTT、逐点乘法与逆变换，并按普通 digit 顺序写回。频域乘积使用 \(1/1280\) 归一化。执行仍用 2,048 字的步长，逆变换将第 1,280 字之后置零，进位和 S4 继续使用原来的工作区布局。准入沿用 Goldilocks 系数界，并要求两个输入的完整线性乘积能装进 1,280 点。[共用五点 DFT](../../src/ecm/cuda/ntt/device/radix5.cuh) · [PFA 卷积](../../src/ecm/cuda/ntt/device/pfa5.cuh) · [分派条件](../../src/ecm/cuda/ntt/runtime.cpp)
 
-以 4,253 位 G 树第一层为例，若用 27 位 digit 和每槽 316 个 digit，两个二项式各占至多 632 个 digit。线性卷积至少需要 1,263 个位置，因此可用 1,280 点作为 radix-5 原型。下一层的三项输入各占至多 948 个 digit，1,280 点容不下其完整线性乘积。按当前二次幂规则，这两层都请求 2,048 点。[变换长度与批量实测](../performance/STAGE2.md#卷积次数gpu-时间与优化范围)
+4,253 位输入采用 27 位 digit、每槽 316 个 digit。G 树首层的两个二项式各占至多 632 个 digit，完整乘积最多占 1,263 个位置。下一层的三项输入各占至多 948 个 digit，继续用 2,048 点变换。打开 `NTT_STAGE2_GTREE_PFA5=1` 后，实际命中的卷积在 `ntt_phase_row` 中计为 1,280 点，汇总中另列 `ntt_count_mixed_row`。该档的蝶形计数只包含 256 点子变换的八层 radix-2 工作量。[变换长度与批量实测](../performance/STAGE2.md#卷积次数gpu-时间与优化范围)
 
 ## Stage1 已知因子与梅森承载
 

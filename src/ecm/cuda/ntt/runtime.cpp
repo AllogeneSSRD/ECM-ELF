@@ -1189,14 +1189,15 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                                     std::vector<unsigned long long> *hPre,
                                     std::vector<unsigned long long> *hPost,
                                     bool need_hout, bool defer_res, NttArena *arena,
-                                    NttRightSpectrum right_spectrum)
+                                    NttRightSpectrum right_spectrum, bool pfa5)
 {
     stage2_trace::Range trace("NTT.submit");
     // Physical batch after chunking. Keep the existing submit range for
     // consumers of older traces; format the inner label only when tracing.
     char shape_label[80]{};
     if(stage2_trace::enabled())
-        std::snprintf(shape_label,sizeof(shape_label),"NTT.shape %llu %llu",sh.N,nbatch);
+        std::snprintf(shape_label,sizeof(shape_label),"NTT.shape %llu %llu",
+                      pfa5 ? (unsigned long long)ntt_pfa5_length : sh.N,nbatch);
     stage2_trace::Range shape_trace(shape_label);
     NttPassResult r;
     const unsigned long long N = sh.N, out_slots = sh.out_slots;
@@ -1236,7 +1237,7 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     const uintptr_t addr_a=(uintptr_t)dA,addr_b=(uintptr_t)dB;
     const auto distance=addr_a>addr_b ? addr_a-addr_b : addr_b-addr_a;
     int short_mode=0;
-    if (right_spectrum==NttRightSpectrum::None && requested_short && !dump && fc.warp_tail && (fc.k==10 || fc.k==11) &&
+    if (!pfa5 && right_spectrum==NttRightSpectrum::None && requested_short && !dump && fc.warp_tail && (fc.k==10 || fc.k==11) &&
         (fc.t==10 || fc.t==11) && dA && dB && !(addr_a%16) && !(addr_b%16) &&
         distance>=N*nbatch*sizeof(unsigned long long)) {
         if (requested_short==1) short_mode=1;
@@ -1252,7 +1253,7 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
         stats.min_batch=stats.min_batch ? std::min(stats.min_batch,nbatch) : nbatch;
         stats.max_batch=std::max(stats.max_batch,nbatch);
     }
-    if(right_spectrum==NttRightSpectrum::None && arena && arena->short_graph.enabled && !dump &&
+    if(!pfa5 && right_spectrum==NttRightSpectrum::None && arena && arena->short_graph.enabled && !dump &&
        arena->workspace_pool && arena->workspace.dA && arena->workspace.dB) {
         const size_t required=(size_t)N*(size_t)nbatch;
         const auto contains=[&](const unsigned long long *base,const unsigned long long *value) {
@@ -1264,8 +1265,11 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
             graph=arena->short_graph.lookup(arena->device,fc,dA,dB,sh.omega,sh.omega_inv,sh.n_scale,nbatch,weighted,short_mode);
     }
     CK(cudaEventRecord(ev_f0));
-    r.combined_transform=short_mode==2;
-    if (r.combined_transform) {
+    r.combined_transform=pfa5 || short_mode==2;
+    if (pfa5) {
+        ecm_launch_ntt_pfa5_convolution(static_cast<unsigned>(nbatch),dA,dB,fc.tblF,fc.tblI);
+        CK(cudaGetLastError());
+    } else if (r.combined_transform) {
         if (graph) {
             CK(cudaGraphLaunch(graph->forward,0));
             ++arena->short_graph.launches;
@@ -1682,6 +1686,9 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         if (rc) return rc;
     }
     const unsigned long long N = sh.N, out_slots = sh.out_slots, W = sh.W;
+    const bool pfa5=input && input->allow_pfa5 && !input->fixed_b && N==2048 &&
+        sh.L_terms<=(ntt_pfa5_length+1)/2 && fc.t>=8 && fc.tables_cached &&
+        !fuse_env_ull("NTT_S4_WEIGHTED",0);
     unsigned long long hook_count=out_slots;
     if (!ntt_hook_window(hook,out_slots,hook_count)) return 2;
     std::vector<unsigned long long> alias_a, alias_b;
@@ -1809,7 +1816,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         NttPassResult rr = ntt_run_passes(sh, fc, dA + s0 * N, dB + s0 * N, dQ + s0 * N,
                                           dOut + s0 * out_slots, dRes + 2 * s0, m, 0,
                                           nullptr, nullptr, nullptr, nullptr, want_hout, true, ab ? arena : nullptr,
-                                          right_spectrum);
+                                          right_spectrum,pfa5);
         sub[(size_t)ci] = rr;
         if (!rr.hOut.empty())
             std::copy(rr.hOut.begin(), rr.hOut.end(), r.hOut.begin() + (long)(s0 * out_slots));
@@ -1836,7 +1843,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         }
         for (unsigned long long ci = 0; ci < nchunk; ++ci)
             ntt_pass_read_marks(sub[(size_t)ci], &r.t_fwd, &r.t_inv, &r.t_check_kernel,
-                                ab && arena ? &arena->short_graph.fused_seconds : nullptr);
+                                ab && arena && !pfa5 ? &arena->short_graph.fused_seconds : nullptr);
         if (!defer) r.t_check_d2h += now_s() - tr0;
     }
     if (right_spectrum==NttRightSpectrum::Build) {
@@ -1850,6 +1857,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
     }
     if (st) {
         st->P = P; st->S = S; st->N = N; st->k = sh.k; st->bpw = sh.bpw;
+        st->pfa5 = pfa5;
         st->slot_bits = sh.slot_bits; st->slot_stride = sh.slot_stride;
         st->slot_words = sh.slot_words; st->out_slots = out_slots; st->L_terms = sh.L_terms;
         st->cw = (unsigned long long)((sh.slot_bits + 63) / 64);

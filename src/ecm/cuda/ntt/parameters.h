@@ -9,6 +9,7 @@
 #define FUSE_MAX_M 4
 #define FUSE_MAX_CARRY_ROUNDS 10
 #define FUSE_MAX_PASSES 8
+inline constexpr unsigned ntt_pfa5_length = 5 * 256;
 #ifndef NTT_GL_SHORT_REDUCE_DEFAULT
 #define NTT_GL_SHORT_REDUCE_DEFAULT 0
 #endif
