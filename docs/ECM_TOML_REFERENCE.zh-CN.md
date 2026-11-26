@@ -1004,14 +1004,14 @@ b2_round_chain = true
 ### baby_backend
 
 ```toml
-baby_backend = "auto"
+baby_backend = "coop32"
 ```
 
 类型 `string` · 范围 `[auto|scalar|coop32]` · Worker 覆盖 `[worker.N] baby_backend` · 级别 `高级`。
 
 显式写入此键时，即使数值与内置默认值相同，也可能覆盖 worker 后缀、路径或环境变量的隐式规则。
 
-Baby点算术：auto在有效运行时对照达到最少重复数前保留标量基线；scalar强制每点一线程；coop32请求在实际算术8193..16384 bits使用32线程协作。不支持的位宽或设备baby预算回退仍用标量。运行时先固定D/布局/链长比较一个后端候选，再继续D搜索。CLI --baby-backend覆盖当前worker配置；省略此键时保留显式NTT_BABY_COOP。OpenCL仅支持auto/scalar。
+CUDA 默认在实际算术位宽 8193..16384 bits 且设备 baby 生成可用时使用 coop32，其他形状使用标量。显式 auto 从标量起步，依据通过校验的配对 tune 结果选择。CLI --baby-backend 覆盖 TOML。省略此键时优先使用显式 NTT_BABY_COOP。旧成本配置默认使用标量，OpenCL 使用标量。
 
 <a id="stage2_progress_dir"></a>
 
@@ -1188,14 +1188,14 @@ fold_resident_mib = 640
 ### giant_backend
 
 ```toml
-giant_backend = "auto"
+giant_backend = "coop32"
 ```
 
 类型 `string` · 范围 `[auto|scalar|coop16|coop32]` · Worker 覆盖 `[worker.N] giant_backend` · 级别 `高级`。
 
 显式写入此键时，即使数值与内置默认值相同，也可能覆盖 worker 后缀、路径或环境变量的隐式规则。
 
-Giant链算术：默认auto，在有效对照达到最少重复数前保留scalar，再按含点启动检查的实测耗时选择coop32／coop16或标量。先完成baby选型，在固定D/布局/链长上逐个比较giant候选；按算术位宽、并行链数区间和内存路径复用配对后再扩展D。coop16使用固定16384-bit容器，coop32按位宽分档。协作要求CUDA实际算术8193..16384 bits及合格chain；seed和[D]Q不变。显式scalar/coop16/coop32固定后端。CLI --giant-backend覆盖当前worker配置；省略时保留显式NTT_GIANT_COOP。OpenCL仅支持auto/scalar。
+CUDA 默认在实际算术位宽 8193..16384 bits 且可走递推链时使用 coop32。coop16 使用固定 16384-bit 容器，coop32 按位宽分档。显式 auto 从标量起步，依据通过校验的配对 tune 结果选择。CLI --giant-backend 覆盖 TOML。省略此键时优先使用显式 NTT_GIANT_COOP。旧成本配置默认使用标量，OpenCL 使用标量。
 
 <a id="stage2_giant_chain"></a>
 
@@ -1475,14 +1475,14 @@ s4_batch_mib = 64
 ### seed_backend
 
 ```toml
-seed_backend = "auto"
+seed_backend = "coop32"
 ```
 
 类型 `string` · 范围 `[auto|scalar|coop32]` · Worker 覆盖 `[worker.N] seed_backend` · 级别 `高级`。
 
 显式写入此键时，即使数值与内置默认值相同，也可能覆盖 worker 后缀、路径或环境变量的隐式规则。
 
-Giant相邻seed及GPU构建[D]Q的算术：默认auto，在同形状有效对照达到最少重复数前保留scalar，再按含点启动检查的实测耗时选择最快合格项。固定D／布局／链长／baby及giant算术后，每个家族只增加一个coop32对照，按算术位宽、链并行区间及显存路径复用，随后继续D搜索。协作要求CUDA实际算术8193..16384 bits及真实chain；其他情况保持标量、坐标布局和非单位回退。实际seed_coop独立记入ECM每行，即使忽略environment也不合并；NTT表仍可复用。CLI --seed-backend覆盖当前worker；省略时保留显式NTT_GIANT_SEED_COOP=0|32。OpenCL实际为scalar。
+CUDA 默认在实际算术位宽 8193..16384 bits 且使用成对种子时，以 coop32 生成种子和设备端 [D]Q。显式 auto 从标量起步，依据通过校验的配对 tune 结果选择。CLI --seed-backend 覆盖 TOML。省略此键时优先使用显式 NTT_GIANT_SEED_COOP。旧成本配置默认使用标量，OpenCL 使用标量。
 
 <a id="stage2_short_calibration"></a>
 

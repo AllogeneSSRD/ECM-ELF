@@ -1004,14 +1004,14 @@ Round B2 per candidate D. CPU gwpoly fills the existing last P-point G block aft
 ### baby_backend
 
 ```toml
-baby_backend = "auto"
+baby_backend = "coop32"
 ```
 
 Type `string` · Range `[auto|scalar|coop32]` · Worker override `[worker.N] baby_backend` · Level `advanced`.
 
 Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
 
-Baby point arithmetic: auto retains the scalar baseline until checked runtime comparisons qualify coop32; scalar forces one thread per point; coop32 requests 32 cooperating CUDA threads for arithmetic widths 8193..16384 bits. Unsupported widths or device-baby fallback use scalar. Runtime tuning compares one backend alternative at fixed D/layout/chain before expanding D. CLI --baby-backend overrides this worker key; an omitted key preserves an explicit NTT_BABY_COOP override. OpenCL accepts auto/scalar only.
+CUDA defaults to coop32 for baby ladders at arithmetic widths 8193..16384 bits when device baby generation is available. Other shapes use scalar. Explicit auto uses checked paired tune results, starting with scalar. CLI --baby-backend overrides TOML. If omitted, an explicit NTT_BABY_COOP takes precedence. Legacy cost profiles default to scalar. OpenCL uses scalar.
 
 <a id="stage2_progress_dir"></a>
 
@@ -1188,14 +1188,14 @@ Budget in MiB for keeping fold accumulators on the GPU. 0 disables this residenc
 ### giant_backend
 
 ```toml
-giant_backend = "auto"
+giant_backend = "coop32"
 ```
 
 Type `string` · Range `[auto|scalar|coop16|coop32]` · Worker override `[worker.N] giant_backend` · Level `advanced`.
 
 Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
 
-Giant chain arithmetic: auto keeps scalar until checked comparisons qualify coop32 or coop16, then selects the fastest measured route including point startup checks. At fixed D/layout/chain, try one alternative at a time after baby selection; reuse paired regions by arithmetic width, chain occupancy and memory route before extending D. coop16 uses a fixed 16384-bit container; coop32 uses width-matched containers. Cooperative modes require CUDA arithmetic widths 8193..16384 bits and an eligible chain; seeds and [D]Q are unchanged. Explicit scalar/coop16/coop32 locks the backend. CLI --giant-backend overrides this worker key; omission preserves explicit NTT_GIANT_COOP. OpenCL accepts auto/scalar only.
+CUDA defaults to coop32 for eligible giant chains at arithmetic widths 8193..16384 bits. coop16 uses a fixed 16384-bit container, while coop32 uses width-matched containers. Explicit auto uses checked paired tune results, starting with scalar. CLI --giant-backend overrides TOML. If omitted, an explicit NTT_GIANT_COOP takes precedence. Legacy cost profiles default to scalar. OpenCL uses scalar.
 
 <a id="stage2_giant_chain"></a>
 
@@ -1474,14 +1474,14 @@ Stage2 S4 batch-buffer budget in MiB. Larger budgets may reduce batching overhea
 ### seed_backend
 
 ```toml
-seed_backend = "auto"
+seed_backend = "coop32"
 ```
 
 Type `string` · Range `[auto|scalar|coop32]` · Worker override `[worker.N] seed_backend` · Level `advanced`.
 
 Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
 
-Giant paired-seed and GPU [D]Q arithmetic: auto keeps scalar until checked, repeated same-shape comparisons qualify coop32, then selects the fastest measured route including point startup checks. At fixed D/layout/chain/baby/giant arithmetic, try one alternative per family before extending D; reuse paired regions by arithmetic width, chain occupancy and memory route. Cooperative arithmetic requires CUDA widths 8193..16384 bits and a real chain; other cases remain scalar, preserving coordinates and nonunit fallback. Actual seed_coop is part of each ECM timing row even when environment matching is ignored; NTT tables remain reusable. CLI --seed-backend overrides this worker key; omission preserves explicit NTT_GIANT_SEED_COOP=0|32. OpenCL uses scalar.
+CUDA defaults to coop32 for paired seeds and GPU [D]Q at arithmetic widths 8193..16384 bits when the paired-seed path is used. Explicit auto uses checked paired tune results, starting with scalar. CLI --seed-backend overrides TOML. If omitted, an explicit NTT_GIANT_SEED_COOP takes precedence. Legacy cost profiles default to scalar. OpenCL uses scalar.
 
 <a id="stage2_short_calibration"></a>
 

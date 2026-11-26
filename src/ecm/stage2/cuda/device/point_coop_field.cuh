@@ -30,11 +30,13 @@ struct Stage2CoopField {
         cgbn_set(e,r,v);
     }
 
-    __device__ __forceinline__ void reduce_mersenne(Bn &r,const typename Env::cgbn_wide_t &t) const {
+    __device__ __forceinline__ void reduce_mersenne(Bn &r,const typename Env::cgbn_wide_t &t,
+                                                   int radix_bits=Env::BITS) const {
         Bn v,tail;
         fold_mersenne(v,t);
-        // Montgomery R^-1 is rotation by (BITS-p) mod p in the p-bit ring.
-        const int rotate=(Env::BITS-mersenne_bits)%mersenne_bits;
+        // The reduction uses the caller's Montgomery radix, even if the
+        // cooperative field container has more limbs.
+        const int rotate=(radix_bits-mersenne_bits)%mersenne_bits;
         if(rotate) {
             cgbn_shift_right(e,tail,v,rotate);
             cgbn_shift_left(e,v,v,mersenne_bits-rotate);
@@ -70,23 +72,19 @@ struct Stage2PaddedCoopField {
     // call site is prohibitively expensive for a first wide-point experiment.
     __device__ __noinline__ void mul(Bn &r,const Bn &a,const Bn &b) const {
         const Stage2CoopField<Env> full{e,n,np0,mersenne_bits};
+        if(mersenne_bits) {
+            typename Env::cgbn_wide_t product;
+            cgbn_mul_wide(e,product,a,b);
+            full.reduce_mersenne(r,product,radix_bits);
+            return;
+        }
         const int delta=Env::BITS-radix_bits;
         if(!delta){full.mul(r,a,b);return;}
         typename Env::cgbn_wide_t t;
         cgbn_mul_wide(e,t,a,b);
-        Bn low,high,v;
-        if(mersenne_bits) {
-            full.reduce_mersenne(v,t); // ab / R_container, already canonical
-            const int left=delta%mersenne_bits;
-            if(left) {
-                cgbn_shift_left(e,low,v,left);cgbn_bitwise_and(e,low,low,n);
-                cgbn_shift_right(e,high,v,mersenne_bits-left);
-                cgbn_bitwise_ior(e,v,low,high);
-            }
-            cgbn_set(e,r,v);return;
-        }
         // REDC_container(ab*2^delta)=ab/R_actual. The shifted numerator is
         // < n*R_container, so the wide REDC input bound still holds.
+        Bn high,v;
         cgbn_shift_right(e,v,t._low,Env::BITS-delta);
         cgbn_shift_left(e,high,t._high,delta);cgbn_bitwise_ior(e,t._high,high,v);
         cgbn_shift_left(e,t._low,t._low,delta);

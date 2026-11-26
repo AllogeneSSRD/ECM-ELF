@@ -511,6 +511,9 @@ int driver(Options o, const ecm_stage2::LaunchConfig* launch) {
     configure_pack_zero(o,&pack_defaults);
     const HostWaitDefaults wait_defaults{s.has_low_cpu_wait,s.low_cpu_wait};
     configure_host_wait(o,&wait_defaults);
+    const fs::path base = ini.parent_path();
+    if(!o.cost_profile.empty())o.cost_profile=absolute_from(cwd,o.cost_profile).string();
+    else if(!s.cost_profile.empty())o.cost_profile=absolute_from(base,s.cost_profile).string();
     const PointBackendDefaults point_defaults{s.has_baby_backend,s.has_giant_backend,s.baby_backend,s.giant_backend,s.has_seed_backend,s.seed_backend};
     configure_s4_backend(o,s.has_reduce_backend,s.reduce_backend);
     configure_point_backends(o,&point_defaults);
@@ -570,10 +573,7 @@ int driver(Options o, const ecm_stage2::LaunchConfig* launch) {
     if(!o.has_ratio)o.ratio_adjust=s.ratio_adjust;
     if(!o.has_gp && !s.gp.empty())o.gp=s.gp;
     if(!o.has_factor_timeout)o.factor_timeout=static_cast<unsigned>(s.factor_timeout);
-    const fs::path base = ini.parent_path();
     freeze_publication(o,s,ini);
-    if(!o.cost_profile.empty())o.cost_profile=absolute_from(cwd,o.cost_profile).string();
-    else if(!s.cost_profile.empty())o.cost_profile=absolute_from(base,s.cost_profile).string();
     if(!stage2_backend::opencl && !o.portable_cli.count("--weighted-ntt"))o.weighted_ntt=s.weighted_ntt;
     configure_weighted_ntt(o);
     if(!o.portable_cli.count("--two-axis-ntt"))o.ntt_two_axis=s.ntt_two_axis;

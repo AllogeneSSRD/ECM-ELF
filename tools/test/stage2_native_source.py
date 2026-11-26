@@ -35,7 +35,7 @@ def units(text):
                     if re.match(r'(?:struct|class|enum)\b', lead):
                         end = clean.index(';', end)+1; kind = 'type'
                     elif re.match(r'namespace\b', lead): kind = 'namespace'
-                    elif not re.search(r'\)\s*(?:const\s*)?$', lead):
+                    elif not re.search(r'\)\s*(?:const\s*)?(?:noexcept\s*)?$', lead):
                         i = end; continue
                     else: kind = 'func'
                     yield kind, start, end, text[start:end]; i = end; break

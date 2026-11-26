@@ -73,7 +73,7 @@ NVIDIA 可由原生 OpenCL 计划选择设备点或 CPU 点；AMD目标超过512
 
 直接读档和队列运行启动时均输出 `ECM-ELF x.y.z (Stage2)` 版本横幅，包括 `--dry-run` 和 `--plan-only`；GUI 从这个横幅读取实际 worker 版本。只输出机器数据的内部辅助入口保持其原有格式。
 
-CUDA点算术使用`[stage2]` 中的 `baby_backend="auto"`、`giant_backend="auto"`默认配置。Baby可强制scalar／coop32，giant可强制scalar／coop16／coop32；CLI为`--baby-backend`／`--giant-backend`。协作仅支持实际算术8193…16384 bits，承载时按承载位宽判断；giant还需真实chain。auto先保留标量，在当前D／布局／链长上先比较baby、再逐项比较giant，受`tune_min_repeats`控制；达到重复数后选最快合格均值，再继续D与链长搜索。短队列或关闭运行时探索时不会为收集数据额外重复任务。配置范围见[TOML参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_giant_backend)，学习、回退和性能文件复用见[协作点后端选型](../architecture/AUTO_B2.md#协作点后端选型)。
+CUDA 在 `[stage2]` 省略 `baby_backend`、`giant_backend` 或 `seed_backend` 时默认请求 `coop32`。协作支持实际算术位宽 8193…16384 bits，承载模式按承载位宽判断。Baby 需要设备生成路径，giant 需要递推链，seed 需要成对种子路径。不满足条件时使用标量。显式 `auto` 仍使用配对 tune，`scalar` 可固定标量，giant 还可选 `coop16`。CLI 优先于 TOML，省略键时仍接受旧环境变量覆盖。OpenCL 和旧成本配置默认使用标量。[TOML 参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_giant_backend) · [协作点后端选型](../architecture/AUTO_B2.md#协作点后端选型)
 
 多卡共用工作目录时，可为每个 worker 指定自己的设备和性能文件。
 
@@ -97,7 +97,7 @@ CUDA 完整区间和 CPU gwpoly 默认启用 `b2_round_chain`。设为 false 或
 
 CPU gwpoly 同样读取这个开关，按自己的高位后缀补满最后一个 P 点 G 块。直接读档和队列的结果均使用实际 B2，内部结果另保留请求值。[CPU 整块扩展](EDWARDS_CPU_STAGE2.md#将-b2-扩展到整块)
 
-CUDA的`seed_backend`默认auto，也可强制scalar／coop32；CLI为`--seed-backend`。它控制8193…16384实际算术bits的paired seed及GPU构建[D]Q，其他情况仍为标量。运行时先完成同形状、R=`tune_min_repeats`次的标量／协作对照，再选最快合格均值；正式tune可复用配对区域。只读模式继续采用已有合格胜者，单独强制协作的未配对记录不足以启用auto。实际`seed_coop`按行记账，NTT表继续共享。详见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_seed_backend)与[自动选型合同](../architecture/AUTO_B2.md#giant-seed自动选型)。
+`seed_backend` 控制 Giant 的成对种子和设备端 `[D]Q`，CLI 为 `--seed-backend`。实际 `seed_coop` 随每行 ECM 计时记录，NTT 表可继续共享。[Seed 自动选型](../architecture/AUTO_B2.md#giant-seed自动选型)
 
 普通高位宽S4可显式设置`reduce_backend="coop32"`，CLI为`--reduce-backend coop32`；默认`scalar`。仅CUDA实际算术8193…16384 bits的普通归约启用协作，小位宽和梅森归约继续原内核。它与seed／baby／giant的auto独立；ECM性能文件分开记录两种归约策略，独立NTT表可共用。当前设备资格、固定D收益和限制见[S4性能](../performance/STAGE2_S4_REDUCTION.md)与[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_reduce_backend)。
 
@@ -216,7 +216,7 @@ Stage2 与 Stage1 共用 `[shared]` 的 `worktodo_file`、`finished_file` 和 `l
 
 ## CUDA点块与链长选项
 
-可用 `giant_tail_balance` 对完整giant区间末两块借整P点，避免可消除的ladder短尾；它保持B2与点总数。未实际借块时继续使用原执行与缓存身份，不增加策略重放或额外同步；日志及结果分别保留请求和实际值。默认仍为false，真实借块的原分块重放预算尚待完整扩展。`b2_round_chain` 则增加实际B2到最小整P且使尾块可走chain，日志和结果保留请求／实际边界；它会增加覆盖量和可能的G树工作。
+CUDA 会按算术位宽和设备驻留条件决定短尾能否直接递推。合格时在原点块内用成对种子开始差分递推，保持 B2、点数和 G 树分块。无需配置。若短尾仍低于有效门槛，可用 `giant_tail_balance` 从倒数第二块借整 P 点，保持 B2 和点数。该选项默认关闭，命中或遇到非单位时可能按原分块重放。`b2_round_chain` 则向上调整实际 B2，补到满足递推门槛的整 P 边界，可能增加覆盖量和 G 树工作。[递推条件和回退](../architecture/STAGE2.md#点生成与归一化)
 
 `giant_chain` 可固定32或64，或以auto在正常任务中对当前最优项补有限32/64对照。默认保留原点块和64链；这些CUDA选项尚未获得全设备／全位宽默认启用资格。配置取值见[生成参考](../ECM_TOML_REFERENCE.zh-CN.md)，完整约束及回退见[点策略](../architecture/STAGE2.md#完整区间点块策略)，实测见[固定D报告](../performance/STAGE2_PREPARATION.md#完整尾块平衡b2凑整与3264生产选项)。
 

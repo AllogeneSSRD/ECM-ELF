@@ -30,6 +30,31 @@ __global__ void stage2_coop_chain(const unsigned long long *n,unsigned long long
 }
 
 template<int WORDS,int TPI>
+__global__ void stage2_coop_segprod(const unsigned long long *n,unsigned long long ninv,int nw,
+    const unsigned long long *values,unsigned long long count,unsigned long long length,
+    int mersenne_bits,unsigned long long *out,const unsigned long long *fix)
+{
+    const auto segment=(blockIdx.x*(unsigned long long)blockDim.x+threadIdx.x)/TPI;
+    const auto start=segment*length;
+    if(start>=count)return;
+    const auto end=min(start+length,count);
+    using Ctx=cgbn_context_t<TPI>;using Env=cgbn_env_t<Ctx,64*WORDS>;using Bn=typename Env::cgbn_t;
+    Ctx ctx(cgbn_no_checks);Env e(ctx);Bn bn,product,value;
+    stage2_coop_load<Env>(bn,n,nw);
+    const Stage2PaddedCoopField<Env> field{e,bn,(uint32_t)ninv,mersenne_bits,64*nw};
+    stage2_coop_load<Env>(product,values+start*nw,nw);
+    for(auto i=start+1;i<end;++i) {
+        stage2_coop_load<Env>(value,values+i*nw,nw);
+        field.mul(product,product,value);
+    }
+    if(fix && end-start>1) {
+        stage2_coop_load<Env>(value,fix+(end-start)*nw,nw);
+        field.mul(product,product,value);
+    }
+    stage2_coop_store<Env>(out+segment*nw,product,nw);
+}
+
+template<int WORDS,int TPI>
 __global__ void stage2_coop_mont_test(const unsigned long long *a,const unsigned long long *b,
     const unsigned long long *n,unsigned long long ninv,int nw,int cases,int mersenne_bits,
     bool square,unsigned long long *out)

@@ -223,7 +223,11 @@ pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d
     s.frontier=s.fold && ecm_stage2::owner_bytes(p,w,3)+24*p<=std::min(o.owner_mb,front)*1048576;
     const auto leaf_mb=et::environment_uint(env,"device_gleaf_max_mb",512);
     const auto leaf_bytes=leaf_mb<=~uint64_t(0)/1048576?leaf_mb*1048576:0;
-    s.chain_min=ecm_stage2::giant_chain_minimum(w,et::environment_uint(env,"giant_chain_min",32768),leaf_bytes);
+    const auto configured_chain_min=et::environment_uint(env,"giant_chain_min",32768);
+    s.chain_min=ecm_stage2::giant_chain_minimum(w,configured_chain_min,leaf_bytes);
+#ifdef ECM_STAGE2_OPENCL
+    if(w<=128)s.chain_min=configured_chain_min;
+#endif
     s.force_ladder=et::environment_uint(env,"giant_ladder",0)!=0;
     s.tail_balance=o.giant_tail_balance;s.chain_block=o.selected_chain;
     const auto kb=et::environment_uint(env,"giant_point_budget_kb",262144);

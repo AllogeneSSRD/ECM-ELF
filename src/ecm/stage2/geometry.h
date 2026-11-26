@@ -18,12 +18,11 @@ constexpr int max_words = max_input_bits / 64;
 inline Word giant_chain_block(Word points, Word base, Word short_block, Word short_max) {
     return short_block && points < short_max && short_block < base ? short_block : base;
 }
-// Above 128 limbs the point kernels use their 256-limb instance. A medium
-// giant tail is expensive as independent ladders; keep the existing chain
-// below the general threshold, while retaining ladders for very short tails.
+// Resident giant tails can reuse the chain and its bounded ladder recovery.
+// Mid-width scalar chains also win on short tails with device-side seed pairs.
 inline Word giant_chain_minimum(Word words, Word configured, Word resident_bytes=~Word(0)) {
-    return words>128 && words<=256 && resident_bytes>=16*32767*words?
-        std::min(configured,Word(8192)):configured;
+    if(words<=64 || words>256 || resident_bytes<16*32767*words)return configured;
+    return std::min(configured,Word(words<=128?4096:8192));
 }
 // Reserve an index/point tile for the nonunit-base ladder fallback. Its output
 // reuses chain coordinates, so successful and fallback paths share the layout.

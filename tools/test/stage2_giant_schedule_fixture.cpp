@@ -16,6 +16,13 @@ int main(){try{
     check(a.ladder_points==11700 && b.ladder_points==0 && b.chain_points==149940 && b.chain_chunks==2);
     Word bound=0;check(giant_round_b2(27015978990ull,180180,17280,138240,32768,1,bound));
     check(bound==Word(172800-2)*180180);
+    const Word mid_min=giant_chain_minimum(67,32768);
+    auto mid=giant_schedule(532802,253440,5760,mid_min,true);
+    check(mid.valid && mid.borrow==0 && mid.runs.back().points==25922);
+    check(giant_work(mid.points,60060,mid.capacity,mid_min,false,a,mid.p,true));
+    check(a.ladder_points==0 && a.chain_points==mid.points);
+    check(giant_round_b2(32000000000ull,60060,5760,253440,mid_min,1,bound));
+    check(bound==Word(93*5760-2)*60060);
     check(!giant_round_b2(~Word(0),180180,17280,138240,32768,1,bound));
     check(!giant_round_b2(10000,210,24,24,32768,1,bound));
     for(Word p:{24ull,240ull,17280ull})for(Word batches:{1ull,2ull,4ull,8ull})

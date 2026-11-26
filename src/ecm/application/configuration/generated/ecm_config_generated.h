@@ -358,9 +358,9 @@ struct Stage2Values {
     uint64_t opencl_point_window=0;
     bool opencl_short_point_batch=true;
     std::string opencl_tune_profile="stage2_opencl_tune.toml";
-    std::string baby_backend="auto";
-    std::string giant_backend="auto";
-    std::string seed_backend="auto";
+    std::string baby_backend="coop32";
+    std::string giant_backend="coop32";
+    std::string seed_backend="coop32";
     std::string reduce_backend="auto";
     std::string groot_balanced="auto";
     std::string groot_subtree="1[:3072], 0[8192:], auto[]";

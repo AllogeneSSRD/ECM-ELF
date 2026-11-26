@@ -1,15 +1,15 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "b70d7f42fa064ca209cb7dd1ae6c791a2e7ec9e841eef62aa5c8060e45aff1cb",
-    "src/ecm/platform/generated/configuration_defaults.h": "b1bf9120c0c2c155efb60c8d7803892769fb99608cbf198a132a26f1b60929c2",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "e77945289728a19f86e89ae6bf793e65f8b0ee866b0a3378f797580f215840e2",
+    "src/ecm/platform/generated/configuration_defaults.h": "cac4a08e1ac3cff47dd4f5abfe40d0c1e694f74e2998a9cfc09a7d05bbc5e3c4",
     "src/ecm/application/configuration/generated/ecm_toml_schema.h": "9431bc9724fa3257e56cba9c07fafa7f3ab3bf5ac1bbfd75248d55f3a0957870",
     "src/ecm/application/configuration/generated/ecm_toml_template.h": "96750548906a3e2a0f18369201cb7253185a274a924b64886cd3c8940f1438f4",
     "config/ecm.toml.default": "1ea80ed80fb7e8c217fa978a1c28534b8bc6cb7e520850f99af1bb871e365af1",
-    "config/ecm.toml.example": "03024266244ef6b3de17dc500f2c37f6c237003b5875030e5f0c5f01544bb1d9",
-    "docs/ECM_TOML_REFERENCE.en.md": "b65e2393a88dc56669b745ff710c416180e3310e2b638dbeede44dc5d8ae6839",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "ea478ae9856e34bb09394af75091f5b6bc928b63d79c6e550799c560fb07bcf6",
-    "config/ecm_options.json": "2a9b592bce29ab53bc88919727c0d1b7c02aa16dc608ba146facd356fa4a85fe",
+    "config/ecm.toml.example": "656b2252134972badfe00bb564d1d2194f5cba7254d6ffdda673dd033b8fc489",
+    "docs/ECM_TOML_REFERENCE.en.md": "e740c74c4f5677de7fe8825fbad992f8b72bda7ef32d85dd43237a208c149156",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "5a6aeef0a0b4662389e7aa3199aac7896c33fd086b3a8a8fba3b87255cbb6fef",
+    "config/ecm_options.json": "7507ae630341fa462baa5a05e8e00a7631455ab01612f8dfd0e746ecf5ec2ca0",
     "tools/gen/generate_ecm_config.py": "dc958b3dca0b3de26b544c9f86bce0bd4ebba11c4ce483938393f99bf03c32e5"
   }
 }

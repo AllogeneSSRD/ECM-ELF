@@ -103,7 +103,7 @@ S3 workspace=8[5W+(2W+1)c+W(v+r)+W(f+1)·[f>0]+2Wh] bytes。
 
 点 X/Z 坐标=16·Q·W bytes；segment/group 使用各自数量×8W。chain seed 数约 2⌈Q/Cchain⌉+1，ladder 则可能直接保留 Q。尾块切换到 ladder 时可以增长 seed 容量，并保留至末阶段；不能只记录最大满 chunk 的 chain seed。
 
-启用 [宽尾块路线](STAGE2.md#点生成与归一化) 且 8192≤Q<32768 时，令实际 seed 数 s=2⌈Q/Cchain⌉+1，新的 seed/索引点槽预留为 qreserve=max(s,min(Q,8192))，保留容量更新为 c←max(c,qreserve)。S3 同时为这 qreserve 个槽保留索引、seed X/Z，字节量为 8·qreserve·(1+2W)，不是只有索引数组。非单位回退使用这些索引槽分批生成逐点 ladder，输出、segment 和 group 复用该点块已有设备缓冲区，不在重做时额外增长容量。`giant_memory.policy.wide_tail_chain` 标记此规划合同，生命周期状态机使用相同规则。
+触发[驻留短块递推](STAGE2.md#点生成与归一化)且 Q<32768 时，令实际 seed 数 s=2⌈Q/Cchain⌉+1，seed 与索引槽预留为 qreserve=max(s,min(Q,8192))，保留容量更新为 c←max(c,qreserve)。索引及 seed X/Z 合计占用 8·qreserve·(1+2W) 字节。非单位回退使用这些索引槽分批生成逐点梯形，输出、segment 和 group 复用该点块的设备缓冲区。`giant_memory.policy.wide_tail_chain` 标记此预留规则，生命周期状态机使用同一公式。
 
 积缓冲按 r=⌈P/64⌉ 分配，叶值仍为 P。相对于 r=P，节省 8W(P−⌈P/64⌉) bytes。这个末阶段容量收益不必降低发生在 giant 阶段的完整峰。
 

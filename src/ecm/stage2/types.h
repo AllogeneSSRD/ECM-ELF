@@ -63,9 +63,13 @@ struct Options {
     bool b2_round_chain=false;
     std::string giant_chain=ecm_config::defaults::stage2_stage2_giant_chain;
     unsigned selected_chain=64;
+#ifdef ECM_STAGE2_OPENCL
+    std::string baby_backend="scalar", giant_backend="scalar", seed_backend="scalar";
+#else
     std::string baby_backend=ecm_config::defaults::stage2_stage2_baby_backend;
     std::string giant_backend=ecm_config::defaults::stage2_stage2_giant_backend;
     std::string seed_backend=ecm_config::defaults::stage2_stage2_seed_backend;
+#endif
     std::string reduce_backend=ecm_config::defaults::stage2_stage2_reduce_backend;
     unsigned selected_baby_coop=0,selected_giant_coop=0,selected_seed_coop=0;
     unsigned selected_reduce_coop=0,selected_reduce_threads=0,selected_reduce_kernel=0;

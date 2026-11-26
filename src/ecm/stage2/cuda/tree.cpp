@@ -223,7 +223,8 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
         deg[pad+(balanced?layout.leaf(i):i)]=1;
     }
     for(size_t i=pad;--i;)deg[i]=deg[2*i]+deg[2*i+1];
-    std::vector<std::vector<unsigned long long>> tree(2*pad),expected;
+    std::vector<std::vector<unsigned long long>> tree,expected;
+    if(!root_sink || !n)tree.resize(2*pad);
     if(!n) {tree[1].assign(W,0);tree[1][0]=1;fs.node_peak_bytes=fs.node_retained_bytes=8*W;return tree;}
     S4Ctx &C=*L.s4;
     // Exclusive lease of the existing raw staging pair. Resident calls never upload raw inputs.
@@ -355,14 +356,15 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
         validate(frontier);
     }
 #endif
-    GrootMetadata local_metadata;
     const bool keep_metadata=C.cache_groot_offsets;
-    auto &metadata=keep_metadata ? C.groot_metadata : local_metadata;
+    // Reuse the bounded staging allocation across trees even when the shape
+    // does not qualify to retain a complete offset table.
+    auto &metadata=C.groot_metadata;
     const size_t meta_words=3*(keep_metadata ? live-1 : frontier/2);
     metadata.reserve(meta_words);
     g_gdevice.metadata_peak_bytes=std::max(g_gdevice.metadata_peak_bytes,8ull*metadata.capacity);
     const bool cached=keep_metadata && metadata.leaves==n && metadata.word_width==W && metadata.balanced==balanced;
-    if(keep_metadata && !metadata.pinned)metadata.pageable.resize(metadata.capacity);
+    if(!metadata.pinned)metadata.pageable.resize(meta_words);
     auto *host_meta=metadata.pinned ? metadata.pinned : metadata.pageable.data();
     size_t meta_offset=0;
     for(size_t base=frontier/2; base; base/=2) {
@@ -390,8 +392,7 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
                 std::fprintf(stderr,"%s: FATAL: resident tree metadata exceeds capacity\n",NTT_PROBE_NAME);
                 std::exit(3);
             }
-            std::vector<unsigned long long> transient(keep_metadata ? 0 : words);
-            auto *map=keep_metadata ? host_meta+meta_offset : transient.data();
+            auto *map=host_meta+meta_offset;
             auto *device_map=metadata.device+meta_offset;
             if(!cached) {
                 for(size_t j=0;j<nb;++j) {
@@ -399,10 +400,8 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
                     const bool swap=deg[2*base+left]>deg[2*base+right];
                     map[j]=offsets[swap?right:left];map[nb+j]=offsets[swap?left:right];map[2*nb+j]=target[i];
                 }
-                if(metadata.pinned) {
-                    if(!keep_metadata)std::copy_n(map,words,metadata.pinned);
-                    CK(cudaMemcpyAsync(device_map,metadata.pinned+meta_offset,words*8,cudaMemcpyHostToDevice));
-                } else CK(stage2_wait::copy(device_map,map,words*8,cudaMemcpyHostToDevice));
+                if(metadata.pinned)CK(cudaMemcpyAsync(device_map,map,words*8,cudaMemcpyHostToDevice));
+                else CK(stage2_wait::copy(device_map,map,words*8,cudaMemcpyHostToDevice));
                 g_gdevice.metadata_words+=words;
             }
             S4DeviceBatch batch{cur,device_map,next,map,cur_words,next_words,nb};
@@ -418,7 +417,7 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
             stage2_log::print(stage2_log::debug, "gdevice_progress: base=%llu groups=%llu t_level=%.3f t_total=%.3f\n",
                 (unsigned long long)base,(unsigned long long)groups.size(),now_s()-level_start,now_s()-start);
     }
-    metadata.leaves=n;
+    metadata.leaves=keep_metadata ? n : 0;
     metadata.word_width=W;
     metadata.balanced=balanced;
     if(root_sink) {

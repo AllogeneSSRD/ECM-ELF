@@ -29,8 +29,8 @@ def main():
     identity,save_sha,tool_sha = freeze(exe),sha(save),sha(__file__)
     verifier = Path(__file__).with_name('test_stage2_workspace_plan.py')
     verifier_sha = sha(verifier)
-    ini = out/'manual.ini'
-    ini.write_text(f'device={args.device}\n',encoding='utf-8')
+    config = out/'worker.toml'
+    config.write_text('config_version = 4\n[stage2]\n',encoding='utf-8')
     cases = [
         ('legacy_points',1381380,2600000000000,{}),
         ('legacy_products',1381380,2600000000000,{'NTT_S3_COMPACT_PRODUCTS':'0'}),
@@ -54,10 +54,10 @@ def main():
             env.update(NTT_D_MODEL='0',NTT_GIANT_POINT_BUDGET_KB='262144',NTT_GIANT_CHUNK_FLOOR='0',
                        NTT_GIANT_CHAIN_BLOCK='64',NTT_GIANT_CHAIN_MIN='32768',NTT_SMALL_PRIME_REUSE='1')
             env.update(overrides)
-            command = [str(exe),'--ini',str(ini),'--save',str(save),'--carrier-exponent',str(args.carrier_exponent),
+            command = [str(exe),'--config',str(config),'--save',str(save),'--carrier-exponent',str(args.carrier_exponent),
                        '--device',str(args.device),'--b2',str(b2),'--d',str(d),'--arena-mb','6300',
                        '--owner-budget-mb','1024','--batch-mb','256','--plan-only',
-                       '--short-calibration','0','--tune-runtime','0']
+                       '--short-calibration','0','--tune-runtime','0','--b2-round-chain','0','--relocation','0']
             proc = subprocess.run(command,env=env,capture_output=True,timeout=60)
             log = out/(name+'.log');log.write_bytes(proc.stdout+proc.stderr)
             if name in ('legacy_seed','small_prime_no_reuse','short_chain'):
@@ -86,11 +86,14 @@ def main():
             if name=='ladder_tail' and not (m['chunks'][0]['route']=='chain' and m['chunks'][1]['route']=='ladder' and m['final_point_capacity']==32000):
                 raise ValueError('chain -> ladder retained-capacity transition missing')
             if name=='wide_tail':
-                wide=(plan['bits']+63)//64>128
-                if m['policy'].get('wide_tail_chain',False)!=wide or m['chunks'][-1]['route']!=('chain' if wide else 'ladder'):
+                words=(plan['bits']+63)//64
+                minimum=32768 if words<=64 else 4096 if words<=128 else 8192
+                short_chain=minimum<32768
+                if (m['policy']['chain_min']!=minimum or m['policy'].get('wide_tail_chain',False)!=short_chain or
+                        m['chunks'][-1]['route']!=('chain' if short_chain else 'ladder')):
                     raise ValueError('wrong width-dependent tail route')
-                if wide and m['final_point_capacity']!=8192:
-                    raise ValueError('wide-tail fallback reserve is missing')
+                if short_chain and m['final_point_capacity']!=8192:
+                    raise ValueError('short-chain fallback reserve is missing')
             if name=='resident_budget_fallback' and any(c['resident'] for c in m['chunks']):
                 raise ValueError('resident budget incorrectly accepted')
             if sha(exe)!=identity['binary_sha256'] or sha(save)!=save_sha or sha(__file__)!=tool_sha:

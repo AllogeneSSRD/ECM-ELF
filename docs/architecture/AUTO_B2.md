@@ -62,7 +62,7 @@ B2凑整可与运行时D、baby／giant后端及有限链长搜索共同使用�
 
 ## 协作点后端选型
 
-`baby_backend`默认auto，可强制scalar／coop32；`giant_backend`默认auto，可强制scalar／coop16／coop32。CLI `--baby-backend`／`--giant-backend`优先于当前worker TOML，显式TOML优先于环境；省略新键时兼容显式`NTT_BABY_COOP`／`NTT_GIANT_COOP`。普通曲线向子进程传递策略，子进程读档后才决定具体后端；校准曲线传递已经选定的后端。OpenCL的两项均仅接受auto／scalar，实际使用标量。
+CUDA 的 `baby_backend` 和 `giant_backend` 默认请求 `coop32`。显式 `auto` 启用本节的配对选型。CLI 优先于 worker TOML，再到 `NTT_BABY_COOP`／`NTT_GIANT_COOP` 环境变量。普通曲线向子进程传递策略，子进程读档后决定具体后端。校准曲线传递已经选定的后端。OpenCL 和旧成本配置默认使用标量。
 
 资格按**实际算术位宽**判定：8193…16384 bits，承载时取p。Baby设备预算回退或位宽不支持时实际为标量；giant没有合格chain时也记录标量。矩阵的`baby_coop`为0／32，`giant_coop`为0／16／32，0表示实际标量。这些字段参与聚合、精确查找、模型、缓存和默认保护；即使忽略environment，也不跨后端合并。Baby32／giant32使用160／192／224／256词分档，giant16固定256词；不跨容量边界套用实测。NTT吞吐表继续共享。
 
@@ -84,7 +84,7 @@ B2凑整保持已选择的后端请求，直到实际B2和原生容量完成稳�
 
 ### Giant seed自动选型
 
-`seed_backend`默认auto，可强制scalar／coop32；CLI `--seed-backend`覆盖worker TOML，省略键时兼容显式`NTT_GIANT_SEED_COOP=0|32`。CUDA实际算术8193…16384 bits可使用按160／192／224／256词分档的TPI32；范围外、没有真实chain或未使用paired seed时为标量。该策略同时控制GPU构建[D]Q和相邻seed，保留非单位回退；baby和giant链的后端仍独立配置。
+CUDA 的 `seed_backend` 默认请求 `coop32`。显式 `auto` 启用配对选型，`scalar` 固定标量。CLI `--seed-backend` 优先于 worker TOML，再到 `NTT_GIANT_SEED_COOP=0|32` 环境变量。CUDA 实际算术位宽 8193…16384 bits 且使用成对种子时，TPI32 按 160／192／224／256 词分档。其他情况使用标量。该策略同时控制设备端 `[D]Q` 和相邻种子，保留非单位回退。Baby 和 giant 链的后端独立配置。
 
 Auto以R=`tune_min_repeats`为重复门槛。先完成baby／giant的已有对照，再对每个算术家族当前最快且完成R次的标量seed项，只新增一个coop32项，固定D、布局、链长、baby／giant算术和驻留路径。双方达到R次后按引擎加点启动检查的平均时间选优，随后恢复D和有限链长搜索；不将整个D表乘上后端数。新对照仍受队列剩余量和原有预算约束，已有观察和未完成对照保留。
 

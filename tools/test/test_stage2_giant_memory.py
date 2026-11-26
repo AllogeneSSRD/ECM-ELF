@@ -111,16 +111,18 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     text, native_sources = native_view()
     template = Path(__file__).with_name('stage2_giant_memory_fixture.cpp')
-    files = [*native_sources,Path(__file__).with_name('stage2_native_source.py'),template,Path(__file__).resolve(),ROOT/'src/core/ecm_stage2_giant_memory.h',
-             ROOT/'src/core/ecm_stage2_geometry.h', ROOT/'src/core/ecm_stage2_giant_state.h', ROOT/'tools/bench/stage2_memory_ledger.py']
+    stage2 = ROOT/'src/ecm/stage2'
+    headers = [stage2/'planning/giant_memory.h', stage2/'planning/giant_state.h']
+    files = [*native_sources, Path(__file__).with_name('stage2_native_source.py'), template, Path(__file__).resolve(),
+             *headers, stage2/'geometry.h', stage2/'giant_schedule.h', ROOT/'tools/bench/stage2_memory_ledger.py']
     identities = {str(p.relative_to(ROOT)):sha(p) for p in files}
     start = text.index('struct S3Workspace {')
     end = text.index('\n};',start)+3
     native = text[start:end]
     cpp = out/'fixture.cpp'
-    fixture = template.read_text(encoding='utf-8').replace('"../../src/core/ecm_stage2_giant_memory.h"',
-        '"'+(ROOT/'src/core/ecm_stage2_giant_memory.h').as_posix()+'"').replace(
-        '"../../src/core/ecm_stage2_giant_state.h"','"'+(ROOT/'src/core/ecm_stage2_giant_state.h').as_posix()+'"')
+    fixture = template.read_text(encoding='utf-8')
+    for header in headers:
+        fixture = fixture.replace('../../'+header.relative_to(ROOT).as_posix(), header.as_posix())
     cpp.write_text(fixture.replace('// @NATIVE_S3@',native),encoding='utf-8')
     command = out/'compile.cmd'
     command.write_text('@echo off\ncall "'+str(args.vcvars)+'" >nul 2>&1\nif errorlevel 1 exit /b 1\n'

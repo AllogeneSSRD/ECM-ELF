@@ -47,6 +47,13 @@ void ecm_launch_s2g_coop_mont_test_kernel(EcmCudaLaunch cfg,int tpi,const unsign
     S2G_COOP_DISPATCH(stage2_coop_mont_test,a,b,n,ninv,nw,cases,mersenne_bits,square,out);
 }
 
+void ecm_launch_s2g_coop_segprod(EcmCudaLaunch cfg,int tpi,const unsigned long long *n,
+    unsigned long long ninv,int nw,const unsigned long long *values,unsigned long long count,
+    unsigned long long length,int mersenne_bits,unsigned long long *out,const unsigned long long *fix)
+{
+    S2G_COOP_DISPATCH(stage2_coop_segprod,n,ninv,nw,values,count,length,mersenne_bits,out,fix);
+}
+
 void ecm_launch_s2g_baby_wheel_coop(EcmCudaLaunch cfg, int nw,
     const unsigned long long* n, unsigned long long ninv, const unsigned long long* one,
     const ecm_stage2::baby_wheel::Segment* segments, unsigned count, const unsigned* slots,

@@ -51,7 +51,7 @@ void configure_point_backends(Options &o,const PointBackendDefaults *defaults) {
             const std::string value=std::getenv("NTT_BABY_COOP");
             if(value!="0" && value!="32")throw std::runtime_error("NTT_BABY_COOP must be 0 or 32");
             o.baby_backend=value=="32"?"coop32":"scalar";
-        }
+        } else if(!o.cost_profile.empty())o.baby_backend="scalar";
     }
     if(!giant_cli) {
         if(defaults && defaults->giant_present)o.giant_backend=defaults->giant;
@@ -59,7 +59,7 @@ void configure_point_backends(Options &o,const PointBackendDefaults *defaults) {
             const std::string value=std::getenv("NTT_GIANT_COOP");
             if(value!="0" && value!="16" && value!="32")throw std::runtime_error("NTT_GIANT_COOP must be 0, 16 or 32");
             o.giant_backend=ecm_stage2::point_backend_name(unsigned(std::stoul(value)));
-        }
+        } else if(!o.cost_profile.empty())o.giant_backend="scalar";
     }
     if(!o.portable_cli.count("--seed-backend")) {
         if(defaults && defaults->seed_present)o.seed_backend=defaults->seed;
@@ -67,7 +67,7 @@ void configure_point_backends(Options &o,const PointBackendDefaults *defaults) {
             const std::string value=std::getenv("NTT_GIANT_SEED_COOP");
             if(value!="0" && value!="32")throw std::runtime_error("NTT_GIANT_SEED_COOP must be 0 or 32");
             o.seed_backend=value=="32"?"coop32":"scalar";
-        }
+        } else if(!o.cost_profile.empty())o.seed_backend="scalar";
     }
 
 #endif

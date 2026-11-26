@@ -3,6 +3,7 @@
 #include "../../src/ecm/stage2/planning/giant_memory.h"
 #include "../../src/ecm/stage2/planning/giant_state.h"
 #include <iostream>
+#include <map>
 #include <string>
 #include <stdexcept>
 #include <cstdint>
@@ -23,6 +24,13 @@ static int cudaFree(void *p) {
     live-=bytes;heap.erase(it);events.push_back({false,bytes,live});return 0;
 }
 template<class... T>static int cudaMemcpy(T...){return 0;}
+namespace stage2_wait {
+template<class... T>int copy(T... args){return cudaMemcpy(args...);}
+}
+struct EcmCudaLaunch { unsigned grid, block; };
+template<class... T>static void ecm_launch_s2g_coop_ladder_kernel(EcmCudaLaunch,T...){}
+static int seed_coop_tpi(){return 0;}
+static int point_mersenne_bits(const struct LadderCtx &){return 0;}
 static int cudaGetLastError(){return 0;}
 static constexpr int cudaMemcpyHostToDevice=0,cudaMemcpyDeviceToHost=1;
 #define CK(x) do{check((x)==0);}while(0)
@@ -44,7 +52,7 @@ struct LadderCtx {
     size_t nw;Word ninv=0;std::vector<Word> hn,hqx,hqz,ha24,hmone;
     explicit LadderCtx(size_t w):nw(w),hn(w),hqx(w),hqz(w),ha24(w),hmone(w){}
 };
-struct {Word base_gpu_builds=0,base_d2h_bytes=0,base_builds=0,base_nonunits=0;
+struct {Word base_gpu_builds=0,base_d2h_bytes=0,base_builds=0,base_nonunits=0,base_cooperative_tpi=0;
     double base_build_seconds=0;} g_giant_seed;
 
 // @NATIVE_S3@
@@ -154,11 +162,14 @@ int main(int argc,char **argv) {
                 <<",\"giant_peak\":"<<giant_peak<<",\"point_capacity\":"<<p.final_point_capacity<<"}\n";return 0;
         }
         for(Word w=1;w<=256;++w) {
-            check(giant_chain_minimum(w,32768)==(w>128?8192ull:32768ull));
+            const Word resident_min=w<=64?32768:w<=128?4096:8192;
+            check(giant_chain_minimum(w,32768)==resident_min);
+            check(giant_chain_minimum(w,32768,16*32767*w-1)==32768);
+            check(giant_chain_minimum(w,32768,16*32767*w)==resident_min);
             check(giant_chain_minimum(w,0)==0);
             check(giant_chain_minimum(w,1024)==1024);
         }
-        for(Word w:{128ull,129ull,256ull})for(Word n:{8191ull,8192ull,32767ull,32768ull}) {
+        for(Word w:{64ull,65ull,128ull,129ull,256ull})for(Word n:{4095ull,4096ull,8191ull,8192ull,32767ull,32768ull}) {
             GiantMemoryPolicy policy;policy.chain_min=giant_chain_minimum(w,32768);
             GiantMemoryPlan route;check(giant_memory_plan(1,n,w,n,policy,route));
             check(route.chunks.size()==1 && route.chunks[0].chain==(n>=policy.chain_min));
@@ -178,6 +189,8 @@ int main(int argc,char **argv) {
         GiantMemoryPolicy wide;wide.chain_min=8192;wide.wide_tail_chain=true;
         one(240,8192,129,12000,wide);one(240,32767,256,34560,wide);
         one(2880,149940,256,69120,wide);
+        wide.chain_min=4096;
+        one(5760,253440+5767,67,253440,wide);
         GiantMemoryPolicy v;v.initial_points=1;
         one(126720,1882177,126,253440,v);
         one(126720,253440+32000,126,253440,v); // chain -> ladder tail retains larger seed cap

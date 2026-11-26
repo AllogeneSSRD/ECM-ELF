@@ -48,6 +48,10 @@ def main():
 
     run("dormant_cuda_presets", 'weighted_ntt = true\ncurve_concurrency = "dual"\n',
         [], 0, "invalid_tasks=0")
+    run("dormant_cuda_point_backends", 'baby_backend = "coop32"\ngiant_backend = "coop32"\nseed_backend = "coop32"\n',
+        [], 0, "invalid_tasks=0")
+    run("explicit_cuda_point_backend", "", ["--giant-backend", "coop32"], 2,
+        "cooperative point backends are CUDA-only")
     run("explicit_weighted", "", ["--weighted-ntt", "1"], 2, "weighted NTT requires")
     run("explicit_parallel", "", ["--parallel", "2"], 2, "does not support --parallel 2")
     run("automatic_parallel_flag", "", ["--parallel", "auto"], 0, "invalid_tasks=0")

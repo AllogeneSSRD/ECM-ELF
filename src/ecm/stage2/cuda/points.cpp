@@ -20,6 +20,22 @@ static int point_mersenne_bits(const LadderCtx& C) {
     mpz_clear(arithmetic);return result;
 }
 
+static void giant_segment_products(const LadderCtx &ctx,int tpi,const unsigned long long *modulus,
+    const unsigned long long *values,unsigned long long count,unsigned long long length,
+    unsigned long long *out,const unsigned long long *fix)
+{
+    const int words=(int)ctx.nw;
+    if(tpi && words>128 && words<=256) {
+        const auto segments=(count+length-1)/length;
+        const unsigned threads=64;
+        const unsigned grid=(unsigned)((segments*tpi+threads-1)/threads);
+        ecm_launch_s2g_coop_segprod(EcmCudaLaunch{grid,threads},tpi,modulus,ctx.ninv,
+            words,values,count,length,point_mersenne_bits(ctx),out,fix);
+    } else {
+        S2G_DISPATCH(words,s2g_launch_segprod,words,count,length,ctx.ninv,modulus,values,out,fix);
+    }
+}
+
 bool affine_x_gmp_checked(mpz_t out,const mpz_t X,const mpz_t Z,const mpz_t N)
 {
     if (mpz_cmp_ui(Z, 0) == 0 || (mpz_cmp(Z,N)>=0 && mpz_divisible_p(Z,N))) {
@@ -299,7 +315,7 @@ void ResidentGiant::prepare(
         mpz_mul(p,p,R);mpz_mod(p,p,L.N);
     }
     CK(stage2_wait::copy(group_fix,fix.data(),fix.size()*8,cudaMemcpyHostToDevice));
-    S2G_DISPATCH((int)w,s2g_launch_segprod,(int)w,ns,GROUP,ws.C->ninv,ws.dn,segments,groups_device,group_fix);
+    giant_segment_products(*ws.C,g_giant_seed.cooperative_tpi,ws.dn,segments,ns,GROUP,groups_device,group_fix);
     CK(cudaGetLastError());CK(stage2_wait::copy(products.data(),groups_device,products.size()*8,cudaMemcpyDeviceToHost));
     st.group_d2h_bytes+=products.size()*8;st.group_peak_bytes=std::max(st.group_peak_bytes,8ull*(ng+GROUP+1)*w);
     std::vector<unsigned long long> all_segments;
@@ -538,8 +554,8 @@ bool giant_chunk_chain(
         gseg->assign((size_t)nseg * nw, 0ull);
         CK(cudaMalloc(&dsp, (size_t)nseg * nw * 8));
         if(g_gfinv_seg_exact)W.need_segfix((size_t)seg);
-        S2G_DISPATCH((int)nw, s2g_launch_segprod, (int)nw, npts, seg, C.ninv, W.dn, oz, dsp,
-                    g_gfinv_seg_exact?W.dsegfix:nullptr);
+        giant_segment_products(C,ladder_fallback?0:g_giant_seed.cooperative_tpi,W.dn,oz,npts,seg,dsp,
+                               g_gfinv_seg_exact?W.dsegfix:nullptr);
         g_giant_seed.segments+=nseg;
         if(g_gfinv_seg_exact) {
             g_giant_seed.segment_fix_muls+=nseg-((npts%seg)==1?1:0);
