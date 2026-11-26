@@ -237,7 +237,12 @@ ecm_stage1::ComputationResult run_ntt_batches(
         if (!state.curves) {
             const unsigned left = request.curves - offset;
             if (!batch_selected) {
-                state.preferred = ecm_mersenne_ntt::select_production_batch(request, left);
+                const auto preferred = ecm_mersenne_ntt::select_production_batch(request, left);
+                if (ecm_stage1_stop_requested()) {
+                    failure.stop();
+                    return failure;
+                }
+                state.preferred = preferred;
                 batch_selected = true;
             }
             if (!state.preferred || state.preferred > stage1_ntt_max_curves)

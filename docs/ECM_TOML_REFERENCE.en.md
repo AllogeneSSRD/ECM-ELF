@@ -445,7 +445,7 @@ ntt_batch_target_percent = 95
 
 Type `int` · Range `[1,100]` · Worker override `[worker.N] ntt_batch_target_percent` · Level `advanced`.
 
-Select the smallest eligible CUDA Stage1 NTT batch reaching this percentage of the fastest saved throughput.
+Throughput threshold as a percentage of the eligible CUDA Stage1 NTT peak. Prefer the requested curve count when it meets the threshold. When splitting, select the smallest measured batch meeting the threshold relative to the eligible sub-batch peak.
 
 <a id="ntt_bpw"></a>
 

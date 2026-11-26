@@ -445,7 +445,7 @@ ntt_batch_target_percent = 95
 
 类型 `int` · 范围 `[1,100]` · Worker 覆盖 `[worker.N] ntt_batch_target_percent` · 级别 `高级`。
 
-CUDA Stage1 NTT 生产选批从可用记录中选择吞吐达到峰值指定百分比的最小曲线数。
+CUDA Stage1 NTT 选批的吞吐门槛，以可行峰值的百分比表示。请求批量达标时优先整批执行。需要拆批时，选择达到可行子批峰值该比例的最小实测批量。
 
 <a id="ntt_bpw"></a>
 

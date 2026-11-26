@@ -243,6 +243,65 @@ def main():
         assert process.returncode == 0, (label, process.returncode, process.stdout[-4000:])
         return process.stdout, time.monotonic() - start
 
+    # A larger measured Best can guide the exact requested width. Require a
+    # fresh sample on the first task and a cache hit on the next one.
+    fixed_shape = 'ntt_convolution = "weighted"\nntt_length = 256\nntt_profile = 1\n'
+    accept = fixed_shape + "ntt_batch_target_percent = 1\n"
+    work, command, probe_tune = fixture("batch_probe", requested=3, pad=0, extra_stage1=accept)
+    run(work, [*command, "-tune", "length=256,naf=6,batch=4,time=0.01", str(BOUND)], label="seed")
+    seed_profile = probe_tune.read_bytes()
+    log, wall = run(work, command)
+    assert "stage1_ntt_runtime_tune:" not in log, log
+    probe, = log_records(log, "stage1_ntt_batch_probe:")
+    assert (probe["batch"], probe["best_batch"]) == ("3", "4"), probe
+    decision, = log_records(log, "stage1_ntt_batch_probe_done:")
+    assert decision["status"] == "accepted" and float(decision["iter_per_s"]) > 0, decision
+    assert [row["curves"] for row in batch_launches(log)] == [3], log
+    assert_finished(work, 3)
+    work, command, _ = fixture("batch_probe_reuse", requested=3, pad=0, tune=probe_tune, extra_stage1=accept)
+    log, _ = run(work, command)
+    assert not log_records(log, "stage1_ntt_batch_probe:"), log
+    assert [row["curves"] for row in batch_launches(log)] == [3], log
+    assert_finished(work, 3)
+    passed("requested_batch_probe_and_reuse", probe=probe, decision=decision, seconds=wall)
+
+    work, command, reject_tune = fixture("batch_probe_reject", requested=3, pad=0,
+                                         extra_stage1=fixed_shape + "ntt_batch_target_percent = 100\n")
+    # Keep the rate and timings consistent while forcing a clear rejection
+    # independently of clock changes between the seed and the test.
+    prefix, matrix = seed_profile.decode("utf-8").split("matrix = [", 1)
+    fields, *rows = tomllib.loads("matrix = [" + matrix)["matrix"]
+    for row in rows:
+        if row[fields.index("batch")] != 4:
+            continue
+        row[fields.index("iter_per_s")] *= 10
+        for key in ("median_ms", "total_device_ms", "stddev_seconds"):
+            row[fields.index(key)] /= 10
+    suffix = matrix[matrix.index("\n]\n") + 3:]
+    lines = "".join(f"    {json.dumps(row)},\n" for row in [fields, *rows])
+    reject_tune.write_text(prefix + "matrix = [\n" + lines + "]\n" + suffix, encoding="utf-8")
+    run(work, [*command, "-tune", "length=256,naf=6,batch=2,time=0.01", str(BOUND)], label="seed")
+    log, wall = run(work, command)
+    decision, = log_records(log, "stage1_ntt_batch_probe_done:")
+    assert decision["status"] == "below_target" and float(decision["iter_per_s"]) > 0, decision
+    assert [row["curves"] for row in batch_launches(log)] == [2, 1], log
+    assert_finished(work, 3)
+    passed("requested_batch_below_target", decision=decision, seconds=wall)
+
+    # A 256-point w12 dictionary takes 8 MiB of device spectra per curve.
+    # Four fit only if the unused GPU builder workspace is excluded.
+    work, command, _ = fixture("batch_probe_host_dictionary", requested=4, pad=0, naf_window=12,
+                               extra_stage1=accept + "naf_memory_mb = 34\nntt_naf_gpu_min_bits = 20000\n")
+    run(work, [*command, "-tune", "length=256,naf=12,batch=3,time=0.01", str(BOUND)], label="seed")
+    log, wall = run(work, command)
+    selection, = log_records(log, "stage1_ntt_batch_selection:")
+    assert (selection["source"], selection["weighted_capacity"]) == ("request_probe", "4"), selection
+    assert [row["curves"] for row in batch_launches(log)] == [4], log
+    assert log_records(log, "stage1_ntt_edwards_dictionary:")[0]["backend"] == "host", log
+    assert log_records(log, "stage1_ntt_naf_init:")[0]["dictionary_workspace_bytes"] == "0", log
+    assert_finished(work, 4)
+    passed("requested_batch_host_dictionary_capacity", selection=selection, seconds=wall)
+
     # Force neither backend. The upper case lies beyond the configured cutoff
     # and above CUDA Stage2's width limit, so it is tested in direct Stage1 mode.
     for p, backend in ((127, "cgbn"), (19937, "ntt")):
@@ -271,12 +330,14 @@ def main():
 
     fields, *values = tomllib.loads(small_tune.read_text(encoding="utf-8"))["ntt"]["matrix"]
     tuned_batches = {r["batch"] for value in values if (r := dict(zip(fields, value))).get("sample_target_ms")}
-    work, command, _ = fixture("trial_at_capacity", requested=128, pad=0, tune=small_tune)
+    work, command, capacity_tune = fixture("trial_at_capacity", requested=128, pad=0)
+    capacity_tune.write_bytes(small_tune.read_bytes())
     log, _ = run(work, command)
     selections = log_records(log, "stage1_ntt_batch_selection:")
     assert (selections[0]["remaining"], selections[0]["capacity"]) == ("128", "128")
-    assert selections[0]["source"] in ("production", "tune"), selections
-    expected_batches = incumbents if selections[0]["source"] == "production" else tuned_batches
+    source = selections[0]["source"]
+    assert source in ("production", "tune", "request_probe"), selections
+    expected_batches = {"request_probe": {128}, "production": incumbents, "tune": tuned_batches}[source]
     assert int(selections[0]["batch"]) in expected_batches, selections
     assert all(row["source"] != "production_trial" for row in selections)
     assert_finished(work, 128)

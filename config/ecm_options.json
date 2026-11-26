@@ -1245,8 +1245,8 @@
       "minimum": 1,
       "maximum": 100,
       "description": [
-        "Select the smallest eligible CUDA Stage1 NTT batch reaching this percentage of the fastest saved throughput.",
-        "CUDA Stage1 NTT 生产选批从可用记录中选择吞吐达到峰值指定百分比的最小曲线数。"
+        "Throughput threshold as a percentage of the eligible CUDA Stage1 NTT peak. Prefer the requested curve count when it meets the threshold. When splitting, select the smallest measured batch meeting the threshold relative to the eligible sub-batch peak.",
+        "CUDA Stage1 NTT 选批的吞吐门槛，以可行峰值的百分比表示。请求批量达标时优先整批执行。需要拆批时，选择达到可行子批峰值该比例的最小实测批量。"
       ]
     },
     {
