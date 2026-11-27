@@ -138,6 +138,7 @@ inline unsigned weighted_limb_smem(const std::vector<WeightedLimb>& limbs) {
     return capacity * sizeof(WeightedWord);
 }
 
+template<bool CubicLayout = false>
 static __global__ __launch_bounds__(weighted_limb_threads)
 void weighted_limb_sums(WeightedWord* out, const WeightedWord* coefficients,
     const WeightedWord* inverse_weights, const WeightedDigit* digits, const WeightedLimb* spans,
@@ -151,8 +152,11 @@ void weighted_limb_sums(WeightedWord* out, const WeightedWord* coefficients,
     unsigned offset = 0;
     for (unsigned wrap = 0; wrap < 3; ++wrap) {
         const unsigned lo = first.first[wrap], hi = last.end[wrap];
-        for (unsigned j = lo + threadIdx.x; j < hi; j += weighted_limb_threads)
-            local[offset + j - lo] = gl_mul(input[j], inverse_weights[j]);
+        for (unsigned j = lo + threadIdx.x; j < hi; j += weighted_limb_threads) {
+            const unsigned width = length / 3;
+            const unsigned index = CubicLayout ? (j % 3) * width + (j & (width - 1)) : j;
+            local[offset + j - lo] = gl_mul(input[index], inverse_weights[j]);
+        }
         offset += hi - lo;
     }
     __syncthreads();

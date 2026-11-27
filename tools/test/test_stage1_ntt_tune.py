@@ -136,13 +136,13 @@ matrix = [
     print("PASS full tune compares four capacity entries and all mixed layouts", flush=True)
 
     cubic = fixture.replace('param = "m0"', 'param = "e"') + 'edwards_naf_window_bits = 6\n'
-    for n, cap in ((768, 20481), (1536, 40192), (3072, 78849)):
+    for n, cap in ((768, 20481), (1536, 40192), (3072, 78849), (6144, 154624)):
         spec = f"ntt,length={n},naf=6,batch=1,time=0.1,repeat=1:1"
         log = run(f"tune{n}", ["-tune", spec], cfg=cubic)
         assert re.search(rf"Best +{n} +{cap} +1:", log)
     columns, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]
     rows = [dict(zip(columns, row)) for row in values]
-    plane_layers = {768: 8, 1536: 9, 3072: 10}
+    plane_layers = {768: 8, 1536: 9, 3072: 10, 6144: 11}
     cubic_rows = [row for row in rows if row["length"] in plane_layers]
     assert {row["length"] for row in cubic_rows} == plane_layers.keys()
     assert all(row["ntt_type"] == "stage1_weighted" and row["tile"] <= plane_layers[row["length"]]

@@ -177,7 +177,9 @@ Edwards 的 `edwards_naf_window_bits=0` 在当前 GPU 的兼容记录中优先�
 
 下表按各长度的连续位宽上限划分区间。x-only 和关闭收紧界的原生 NAF 使用保守界。原生 Edwards 开启收紧界时采用连续的原生区间，自动选型和显式指定长度都检查该上限。例如 20,480 点的上限为 497,665，497,666 位起使用 32,768 点，497,680 位也归入这一档。[生产选长](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [连续上限](../../include/ecm/stage1/ntt_sizes.h)
 
-768、1536、3072 点使用三平面加权卷积。可用 `-tune "ntt,length=1536"` 单独调优，也可设 `ntt_convolution = "weighted"` 和 `ntt_length = 1536` 固定该长度。原生 Edwards 自动选型分别从 13,313、26,113 和 63,489 位起加入这些候选，上限由所用系数界决定。自动选型同时比较二次幂与适用的 radix-5 计划。启用运行时短测时，已有其他长度的结果仍可补测缺失的三平面候选。[选型](../../src/ecm/stage1/cuda/ntt/tune.cpp) · [三平面卷积](../architecture/NTT.md#stage1-三平面加权卷积) · [1536、3072 点实测](../performance/STAGE1_MERSENNE_NTT.md#rtx-4060-laptop-的-1536-和-3072-点加权变换)
+768 至 393216 点之间的 `3×2^k` 使用三平面加权卷积。可用 `-tune "ntt,length=6144"` 调优 ECM，或用 `-tune "pm1,length=6144"` 调优 P−1，也可设 `ntt_convolution = "weighted"` 和 `ntt_length = 6144` 固定长度。原生 Edwards 自动选型从 13,313、26,113、63,489 位起加入前三档。6144 至 196608 点在前一档 radix-5 超过连续位宽上限后加入候选，393216 点可显式选用或调优。P−1 自动选型使用适用的调优记录。位宽上限由所用系数界决定。[选型](../../src/ecm/stage1/cuda/ntt/tune.cpp) · [三平面卷积](../architecture/NTT.md#stage1-三平面加权卷积)
+
+共享调优表含有 6144 点及以上的 radix-3 行时，读取该表的 worker 需支持这些长度。
 
 RTX 4070 Ti 的两列实测峰值按 tune 记录的卷积类型（`stage1_linear` 或 `stage1_weighted`）和实际 NTT 长度分组。每格先列组内最高聚合吞吐 `iter/s`，再列用未舍入吞吐换算的 `µs/iter = 1,000,000 / (iter/s)`。一次迭代指一条曲线的一列 Edwards NAF。换算值是按批内所有曲线的总列数分摊的设备时间。两列各自在全部代表指数、NAF 窗口、批量、Graph 和粗精测记录中取最大值。峰值列的「—」表示文件中没有该组合的实测记录。其中加权 32,768 点只有四条粗测，111.819 µs 来自 p=401409、单曲线、w12。50 万位批量的实际列吞吐见[同卡生产复测](../performance/STAGE1_MERSENNE_NTT.md#50-万位-edwards-列吞吐与-32768-点热点)。
 

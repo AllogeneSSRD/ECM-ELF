@@ -24,28 +24,28 @@ namespace {
 using namespace stage1_layout;
 using U = unsigned long long;
 constexpr unsigned threads = 256;
-template<unsigned Width>
-__device__ __forceinline__ unsigned cubic_digit(unsigned plane, unsigned column) {
+__device__ __forceinline__ unsigned cubic_digit(unsigned plane, unsigned column, unsigned width) {
     // Digit i belongs to (i mod 3, i mod Width). Width is its own inverse modulo 3.
-    return column + Width * ((plane + 3 - column % 3) * (Width % 3) % 3);
+    return column + width * ((plane + 3 - column % 3) * (width % 3) % 3);
 }
 
 template<int Tile, bool Transform, bool WarpTail, bool Modulus = false>
 __global__ void pack_cubic(const uint32_t* state, U* out, Shape s, Indices in,
                            const WeightedDigit* weights, const U* twiddles = nullptr) {
-    constexpr unsigned width = 1u << Tile;
+    const unsigned width = Tile ? 1u << Tile : s.length / 3;
     const unsigned plane = blockIdx.y % 3, row = blockIdx.y / 3;
     const auto* source = Modulus ? nullptr : state + limb(s,in.x[row / s.curves],row % s.curves,0);
     auto* dest = out + size_t(blockIdx.y) * width;
     const auto load = [=](unsigned column) {
         const auto word = [=](unsigned index) { return source[index]; };
-        return stage1_ntt_pack_digit_from<true,Modulus>(word,s,weights,cubic_digit<width>(plane,column));
+        return stage1_ntt_pack_digit_from<true,Modulus>(word,s,weights,cubic_digit(plane,column,width));
     };
     if constexpr (Transform) {
         extern __shared__ U scratch[];
         stage1_ntt_forward_from<WarpTail,false,Tile>(load,dest,scratch,Tile,twiddles);
     } else {
-        for (unsigned column = threadIdx.x; column < width; column += blockDim.x)
+        for (unsigned column = blockIdx.x * blockDim.x + threadIdx.x; column < width;
+             column += gridDim.x * blockDim.x)
             dest[column] = load(column);
     }
 }
@@ -327,6 +327,17 @@ struct ProductInputs {
     const U* modulus;
     U* cached_e;
 };
+
+__global__ void cubic_products(U* out, ProductInputs products, unsigned width, unsigned shift) {
+    const unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= width) return;
+    const size_t offset = size_t(blockIdx.y) * (3 * width) + j;
+    const auto* left = products.left[blockIdx.z] + offset;
+    const auto* right = products.right[blockIdx.z] + offset;
+    const auto a = cubic_load(left,width);
+    const auto value = left == right ? cubic_square(a,shift) : cubic_product(a,cubic_load(right,width),shift);
+    cubic_store(out + size_t(blockIdx.z) * gridDim.y * (3 * width) + offset,width,value);
+}
 
 template<bool WarpTail>
 __global__ __launch_bounds__(threads, 3)
@@ -748,6 +759,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     s.length=packing.length; s.bpw=packing.bpw; s.digits=packing.digits;
     const bool mixed = ecm_stage1::stage1_ntt_radix5(s.length);
     const bool cubic = ecm_stage1::stage1_ntt_radix3(s.length);
+    const bool cubic_wide = cubic && s.length > ecm_stage1::stage1_ntt_cubic_block_limit;
     const unsigned planes = mixed ? 5 : cubic ? 3 : 1;
     const unsigned width = s.length / planes;
     const unsigned cubic_shift = cubic ? ecm_stage1::stage1_ntt_cubic_twist(p, width) : 0;
@@ -807,7 +819,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         if (options.mixed_layout == Layout::Coalesced) requested |= CoalescedRadix5;
     }
     if (naf || pm1) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute);
-    if (cubic) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute | SegmentedCarry | DeferredPack);
+    if (cubic) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute | DeferredPack);
+    if (cubic && !cubic_wide) requested &= ~SegmentedCarry;
     const bool pfa = mixed && (requested & PfaRadix5);
     const bool coalesced = pfa && (requested & CoalescedRadix5);
     // n = (1 + rotation_step * width) * i + width * j (mod length).
@@ -878,8 +891,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (result.owned_bytes > result.budget_bytes)
         throw BudgetError("Stage1 NTT buffers exceed the total VRAM budget");
     const size_t header_words = size_t(state_slots) * curves * segment_count;
-    const bool segmented = (requested & SegmentedCarry) &&
+    const bool segmented = (cubic_wide || (requested & SegmentedCarry)) &&
         header_words * sizeof(unsigned) <= result.budget_bytes - result.owned_bytes;
+    if (cubic_wide && !segmented) throw BudgetError("radix-3 carry headers exceed the VRAM budget");
     if (segmented) {
         result.owned_bytes += header_words * sizeof(unsigned);
         result.dataflow |= SegmentedCarry;
@@ -932,8 +946,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (inverse_warp_input) result.dataflow |= InverseWarpInput;
     if (short_inverse) result.dataflow |= ShortInverseTile;
     const size_t tile_smem = sizeof(U) << ctx.t;
-    const size_t inverse_smem = cubic ? 3*tile_smem : short_inverse || (inverse_warp_input && ctx.t == 6) ? 0 : tile_smem;
-    const bool cubic_packed = cubic && ctx.nms == 0;
+    const bool cubic_fused_product = cubic && ctx.t <= 10;
+    const size_t inverse_smem = cubic ? (cubic_fused_product ? 3*tile_smem : tile_smem)
+        : short_inverse || (inverse_warp_input && ctx.t == 6) ? 0 : tile_smem;
+    const bool cubic_packed = cubic && !cubic_wide && ctx.nms == 0;
     const bool packed = (requested & PackedForward) && !mixed && !cubic && ctx.nms == 0;
     const bool default_forward = control && !control->experimental_dataflow.has_value();
     const bool packed_batch = packed && curves >= 24;
@@ -956,7 +972,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool warp_reduce = (requested & WarpWeightedCarry) && options.weighted && !segmented &&
                              s.words <= 32 && s.length <= 64;
     if (warp_reduce) result.dataflow |= WarpWeightedCarry;
-    const bool block_reduce = cubic || ((requested & BlockWeightedCarry) && naf && options.weighted && !segmented &&
+    const bool block_reduce = (cubic && !cubic_wide) || ((requested & BlockWeightedCarry) && naf && options.weighted && !segmented &&
                               s.length == block_weighted_length && s.words <= block_weighted_length && curves >= 32);
     if (block_reduce) result.dataflow |= BlockWeightedCarry;
     const bool cached = (requested & CachedCarry) && options.weighted && !segmented &&
@@ -995,14 +1011,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool radix5_limb_sums = mixed && (options.fused_radix5_inverse || (requested & Radix5InverseLimbSums)) &&
         p / s.length >= radix5_limb_min_digit_bits;
     if (radix5_limb_sums) result.dataflow |= Radix5InverseLimbSums;
-    const unsigned carry_cache_smem = !radix5_limb_sums && options.weighted && segmented &&
+    const unsigned carry_cache_smem = !cubic && !radix5_limb_sums && options.weighted && segmented &&
         (requested & CachedFusedWeightedCarry)
         ? weighted_segment_cache_bytes(weights.limbs) : 0;
     // Keep the shared coefficient tile small enough to allow several CTAs per SM.
     const bool cached_fused = carry_cache_smem && carry_cache_smem <= 16 * 1024;
     const bool fixed_carry_offsets = (requested & FixedCarryOffsets) && s.length == 5120 && cached_fused;
     if (fixed_carry_offsets) result.dataflow |= FixedCarryOffsets;
-    const bool fused_weighted = !radix5_limb_sums && options.weighted && segmented &&
+    const bool fused_weighted = !cubic && !radix5_limb_sums && options.weighted && segmented &&
         (cached_fused || (requested & FusedWeightedCarry));
     if (fused_weighted) result.dataflow |= FusedWeightedCarry;
     if (cached_fused) result.dataflow |= CachedFusedWeightedCarry;
@@ -1094,7 +1110,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             : warp_tile ? (const void*)inverse_product_tile<true,add_bb,loose_e>
                         : (const void*)inverse_product_tile<false,add_bb,loose_e>);
     };
-    if (!short_inverse) {
+    if (!short_inverse && !cubic) {
         configure_tile(std::false_type{},std::false_type{});
         if (loose && fma) configure_tile(std::true_type{},std::true_type{});
         else if (loose) configure_tile(std::false_type{},std::true_type{});
@@ -1111,7 +1127,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const auto frequency_inverse = direct_frequency
         ? frequency_kernel(std::integral_constant<InverseInput, InverseInput::Edwards2XY>{})
         : frequency_kernel(std::integral_constant<InverseInput, InverseInput::CombinedSpectrum>{});
-    if (frequency_double) configure_inverse((const void*)frequency_inverse);
+    if (frequency_double && !cubic) configure_inverse((const void*)frequency_inverse);
     ntt_fuse_cache_tables(ctx,omega2,inv2);
     CK(cudaDeviceSynchronize()); // table creation uses the legacy stream
     Buffer<uint32_t> state(state_slots*stride);
@@ -1191,7 +1207,11 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const auto forward_inputs = [&](U* dest, unsigned count, Indices in, unsigned pending = 0) {
         if (cubic) {
             const unsigned batch=count*curves*planes;
-            cubic_width_dispatch([&](auto plane_layers) {
+            if (cubic_wide) {
+                pack_cubic<0,false,false><<<dim3((width + threads - 1) / threads,batch),threads,0,q>>>(
+                    state.data,dest,s,in,digit_table.data);
+                forward_spectra(dest,batch);
+            } else cubic_width_dispatch([&](auto plane_layers) {
                 constexpr int tile = decltype(plane_layers)::value;
                 if (cubic_packed) {
                     const auto kernel=warp_tile?pack_cubic<tile,true,true>:pack_cubic<tile,true,false>;
@@ -1265,10 +1285,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         Shape one = s;
         one.curves = 1;
         if (cubic)
-            cubic_width_dispatch([&](auto plane_layers) {
-                pack_cubic<decltype(plane_layers)::value,false,false,true><<<dim3(1,3),threads,0,q>>>(
-                    nullptr,modulus.data,one,{},digit_table.data);
-            });
+            pack_cubic<0,false,false,true><<<dim3((width + threads - 1) / threads,3),threads,0,q>>>(
+                nullptr,modulus.data,one,{},digit_table.data);
         else if (pfa)
             pack<true,true,true,false,true><<<(width+threads-1)/threads,threads,0,q>>>(
                 nullptr,modulus.data,one,{},digit_table.data,nullptr,radix5_fwd,nullptr,0,rotation_step);
@@ -1368,8 +1386,12 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 inverse_product_tile<false,add_bb,loose_e><<<tiles,FUSE_TILE_THREADS,tile_smem,q>>>(
                     inverse,products,s.length,ctx.t,ctx.tblI,product_scale);
         };
-        if (cubic && combine_double) {
-            cubic_double<<<dim3(curves,width/threads),threads,0,q>>>(freq,inverse,modulus.data,width,cubic_shift);
+        if (cubic && (combine_double || !cubic_fused_product)) {
+            if (combine_double)
+                cubic_double<<<dim3(curves,width/threads),threads,0,q>>>(freq,inverse,modulus.data,width,cubic_shift);
+            else
+                cubic_products<<<dim3((width + threads - 1) / threads,curves,outputs),threads,0,q>>>(
+                    inverse,products,width,cubic_shift);
             const auto kernel=warp_tile?cubic_inverse_spectra<true>:cubic_inverse_spectra<false>;
             kernel<<<dim3(width >> ctx.t,outputs*curves*planes),inverse_threads,tile_smem,q>>>(inverse,width,ctx.t,ctx.tblI);
         } else if (cubic) {
@@ -1452,7 +1474,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                         freq,source,s,log,mixed_inv.data,radix5_inv,rotation_step);
                 } else {
                     const dim3 limb_grid((s.words + weighted_limb_threads - 1) / weighted_limb_threads, batch);
-                    weighted_limb_sums<<<limb_grid,weighted_limb_threads,limb_smem,q>>>(
+                    const auto kernel = cubic_wide ? weighted_limb_sums<true> : weighted_limb_sums<false>;
+                    kernel<<<limb_grid,weighted_limb_threads,limb_smem,q>>>(
                         freq,inverse,inverse_weights.data,digit_table.data,limb_table.data,p,s.words,s.length);
                 }
                 if (output_scale != 1)

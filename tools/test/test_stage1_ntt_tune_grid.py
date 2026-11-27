@@ -584,14 +584,15 @@ def main():
     broad = run("broad", ["-tune", "ntt,exp=2000-1000000,batch=128"],
                 convolution="auto", settings="ntt_memory_mib = 1", success=False)
     expected = sorted([2**i for i in range(7, 17)] + [2**i for i in range(6, 17)]
-                      + [768, 1536, 2560, 3072, 5120, 10240, 20480, 40960])
+                      + [768, 1536, 2560, 3072, 5120, 6144, 10240, 12288, 20480, 24576, 40960, 49152])
     for window in (6, 8, 10, 12):
         assert sorted(n for p, n, w in planned(broad) if w == window) == expected
     assert "stage1_ntt_reuse" not in broad and "fits the requested grid" in broad
 
     upper = run("upper_bound", ["-tune", "ntt,exp=5242880,naf=4,batch=128"],
                 convolution="auto", settings="ntt_memory_mib = 1", success=False)
-    assert sorted(planned(upper)) == [(5242880, 262144, 4), (5242880, 524288, 4)]
+    assert sorted(planned(upper)) == [(4456449, 196608, 4), (5242880, 262144, 4),
+                                     (5242880, 393216, 4), (5242880, 524288, 4)]
 
     database = out / "tune.toml"
     spec = "ntt,exp=61-62,naf=6-7,batch=1-2"
@@ -742,7 +743,7 @@ def main():
     assert {"0", "1", "2"} <= layouts <= {"0", "1", "2", "3"}
     assert "Best " in wide
     candidates = [r for r in rows() if r["reference_bits"] >= 720001]
-    assert {r["length"] for r in candidates} == {32768, 40960, 65536}
+    assert {r["length"] for r in candidates} == {32768, 40960, 49152, 65536}
     assert {r["dataflow"] & 384 for r in candidates if r["length"] == 40960} == {0, 128, 384}
     database = out / "forward_outer.toml"
     log = run("forward_outer", ["-tune", "ntt,length=5120,naf=6,batch=3,time=0.25", "128"],

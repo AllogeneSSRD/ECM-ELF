@@ -11,7 +11,8 @@ inline constexpr unsigned stage1_ntt_max_length = 524288;
 inline constexpr unsigned stage1_ntt_mixed_limit = 163840;
 inline constexpr unsigned stage1_ntt_mixed_min = 2560;
 inline constexpr unsigned stage1_ntt_cubic_min = 768;
-inline constexpr unsigned stage1_ntt_cubic_max = 3072;
+inline constexpr unsigned stage1_ntt_cubic_block_limit = 3072;
+inline constexpr unsigned stage1_ntt_cubic_max = 393216;
 
 struct TuneRange {
     unsigned first = 0, last = 0;

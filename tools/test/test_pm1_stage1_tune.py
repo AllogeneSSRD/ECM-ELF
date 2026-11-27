@@ -129,6 +129,13 @@ def check(exe, root):
     assert "length=2560 batch=2 available=2" in run("radix5_queue")
     for p,b1 in wide:
         assert saved_residue(root/"pm1"/f"M{p}-B1-{b1}",p,b1) == pow(3, 2*p*math.lcm(*range(1,b1+1)), 2**p-1)
+    run("radix3_tune", "-tune", "pm1,length=6144,batch=2,time=0.01,repeat=1:1")
+    wide = [(148021,17), (154621,13)]
+    queue.write_text("".join(f"Pminus1=1,2,{p},-1,{b1},0\n" for p,b1 in wide))
+    log = run("radix3_queue")
+    assert "length=6144 batch=2 available=2" in log and "3x(" in log
+    for p,b1 in wide:
+        assert saved_residue(root/"pm1"/f"M{p}-B1-{b1}",p,b1) == pow(3, 2*p*math.lcm(*range(1,b1+1)), 2**p-1)
     initial_config = cfg.read_text()
     tune_two = ("-tune","pm1,length=2,batch=2,time=0.02,repeat=1:2")
     def limits(common, specific, worker):

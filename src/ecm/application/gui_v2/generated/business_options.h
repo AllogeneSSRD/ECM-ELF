@@ -78,7 +78,7 @@ inline constexpr BusinessOption business_options[]={
     {"stage1","ntt_max_batch_pm1","[0,512]","option_stage1_ntt_max_batch_pm1","int",true,true,0,512},
     {"stage1","ntt_batch_target_percent","[1,100]","option_stage1_ntt_batch_target_percent","int",true,true,1,100},
     {"stage1","ntt_memory_mib","[0,1048576]","option_stage1_ntt_memory_mib","int",true,true,0,1048576},
-    {"stage1","ntt_length","0, 2^k in [2,524288], 3*2^k in [768,3072] (weighted), or 5*2^k in [2560,163840] (weighted)","option_stage1_ntt_length","int",true,true,0,524288},
+    {"stage1","ntt_length","0, 2^k in [2,524288], 3*2^k in [768,393216] (weighted), or 5*2^k in [2560,163840] (weighted)","option_stage1_ntt_length","int",true,true,0,524288},
     {"stage1","ntt_bpw","0 or [16,31]","option_stage1_ntt_bpw","int",true,true,0,31},
     {"stage1","ntt_profile","[0|1|2]","option_stage1_ntt_profile","int",true,true,0,2},
     {"stage1","ntt_tile","[0,12]","option_stage1_ntt_tile","int",true,true,0,12},

@@ -146,6 +146,8 @@ def main():
             (53281, 32, 26, 2, "weighted", 2560, 8, 8),
             (65521, 20, 26, 2, "weighted", 2560, 8, 6),
             (70001, 20, 26, 2, "weighted", 3072, 16, 6),
+            (131071, 20, 26, 2, "weighted", 6144, 16, 6),
+            (148021, 20, 26, 2, "weighted", 6144, 16, 6),
             (262139, 20, 26, 1, "weighted", 0, 4, 6),
             (65, 8, 9, 1, "linear", 0, 0, 6),
             (35, 128, 16, 1, "weighted", 0, 4, 6),
@@ -160,7 +162,7 @@ def main():
                 if p in (521, 607, 1279):
                     flow = int(re.search(r"\bdataflow=(\d+)", log)[1])
                     assert bool(flow & WARP_WEIGHTED_CARRY) == (p == 521), log
-                if length in (768, 1536, 3072) and kind:
+                if (length in (768, 1536, 3072) or p == 131071) and kind:
                     [flow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
                     assert bool(int(flow) & EDWARDS_2XY_FREQUENCY) == (p != 19937), log
                 if kind and p > 65:

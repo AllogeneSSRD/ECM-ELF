@@ -122,9 +122,9 @@ $E$、$G$、$H$ 的去权系数至多为 $2U$，$F$ 至多为 $4U$，且所有�
 
 ## Stage1 三平面加权卷积
 
-对于 $L=3W$、$W\in\{256,512,1024\}$，通用标量加权根 $\rho^L=2^p$ 只在 $p\equiv0\pmod3$ 时存在。取 $r=(-pW)\bmod3$，使 $p+Wr$ 可被 3 整除，再选择满足 $\lambda^W=2^{(-p-Wr)/3}$ 的 $\lambda$。在 $T^W=1$、$Z^3=2^r$ 的代数中，用 $X=\lambda TZ$ 表示 digit 的位置，故 $X^L=2^{-p}$。第 $i$ 个 digit 进入第 $i\bmod3$ 个平面的第 $i\bmod W$ 列，权重为 $2^{\lceil ip/L\rceil}\lambda^i 2^{r\lfloor i/3\rfloor}$。去权系数沿用现有整数上界，归一化因子为 $1/W$。
+对于 $L=3W$、$W=2^k$ 且 $8\le k\le17$，通用标量加权根 $\rho^L=2^p$ 只在 $p\equiv0\pmod3$ 时存在。取 $r=(-pW)\bmod3$，使 $p+Wr$ 可被 3 整除，再选择满足 $\lambda^W=2^{(-p-Wr)/3}$ 的 $\lambda$。在 $T^W=1$、$Z^3=2^r$ 的代数中，用 $X=\lambda TZ$ 表示 digit 的位置，故 $X^L=2^{-p}$。第 $i$ 个 digit 进入第 $i\bmod3$ 个平面的第 $i\bmod W$ 列，权重为 $2^{\lceil ip/L\rceil}\lambda^i 2^{r\lfloor i/3\rfloor}$。去权系数沿用现有整数上界，归一化因子为 $1/W$。
 
-三个平面各执行一趟 $W$ 点 NTT。满 tile 将打包与前向变换合并。逐频点在 $Z^3=2^r$ 下做三系数乘法或平方，分别需要六次和五次 Goldilocks 域乘。普通乘积在一个 CTA 内算出三个分量并进入各自的逆向 tile。满足 $4U<q$ 的原生 Edwards 倍点先生成四路组合频谱，再在各平面执行逆向 tile。归约在同一 CTA 内完成逆置换、去权、limb 汇集和梅森进位。进位复用已经用完的共享系数空间，3072 点上限处每个归约块的动态共享内存为 44,296 字节。`ntt_shape` 的前逆分解以 `3x(...)` 表示三个相同的二次幂平面，PFA 字段为 `0`。[权重表](../../src/ecm/stage1/cuda/ntt/weighted.cuh) · [变换和归约](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [位宽与选型](../usage/TUNE.md#ntt-and-transform-sizes)
+三个平面各执行一趟 $W$ 点 NTT。3072 点及以下可将打包与满 tile 的前向变换合并，并在一个 CTA 内完成去权和整条余数进位。6144 点及以上按列并行打包，limb 汇集直接从三平面读取去权系数，再走分段梅森进位。逐频点三系数乘法或平方分别需要六次和五次 Goldilocks 域乘。逆向 tile 不超过 10 层时可将频点乘积与逆向 tile 合并。更大的 tile 先生成频谱乘积，再按平面执行逆变换，使每个逆向块只需一个平面的共享内存。满足 $4U<q$ 的原生 Edwards 倍点先生成四路组合频谱，再调用平面逆向 tile。`ntt_shape` 的前逆分解以 `3x(...)` 表示三个相同的二次幂平面，PFA 字段为 `0`。[权重表](../../src/ecm/stage1/cuda/ntt/weighted.cuh) · [变换和归约](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [位宽与选型](../usage/TUNE.md#ntt-and-transform-sizes)
 
 ## Stage1 radix-5 PFA
 

@@ -554,6 +554,7 @@ const char* curve_name(const ecm_stage1::Stage1Request& request) {
 }
 
 Candidates production_shapes(unsigned p, Stage1NttOptions options, bool native_edwards) {
+    using ecm_stage1::ntt_max_exp;
     const auto bound = native_edwards ? WeightedBound::UnsignedProducts : WeightedBound::Conservative;
     Candidates shapes;
     if (!options.automatic) {
@@ -571,8 +572,11 @@ Candidates production_shapes(unsigned p, Stage1NttOptions options, bool native_e
     auto mixed = candidate(p, options, true, bound);
     if (mixed && ecm_stage1::stage1_ntt_radix5(mixed->shape.length)) shapes[Mixed] = mixed;
     if (!options.length && native_edwards) {
-        // Start comparisons after the preceding weighted plan's continuous 4U bound.
-        constexpr std::pair<unsigned, unsigned> cubic_ranges[] = {{768, 13313}, {1536, 26113}, {3072, 63489}};
+        // Consider the wide family once the preceding radix-5 length reaches its limit.
+        constexpr std::pair<unsigned, unsigned> cubic_ranges[] = {{768, 13313}, {1536, 26113}, {3072, 63489},
+            {6144, ntt_max_exp(5120, true, true) + 1}, {12288, ntt_max_exp(10240, true, true) + 1},
+            {24576, ntt_max_exp(20480, true, true) + 1}, {49152, ntt_max_exp(40960, true, true) + 1},
+            {98304, ntt_max_exp(81920, true, true) + 1}, {196608, ntt_max_exp(163840, true, true) + 1}};
         for (const auto& [length, first] : cubic_ranges) {
             if (p < first || p > ecm_stage1::ntt_max_exp(length, true, options.tight_weighted_bound)) continue;
             options.length = length;

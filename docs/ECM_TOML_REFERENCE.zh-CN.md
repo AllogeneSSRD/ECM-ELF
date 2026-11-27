@@ -495,7 +495,7 @@ auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积
 ntt_length = 0
 ```
 
-类型 `int` · 范围 `0, 2^k in [2,524288], 3*2^k in [768,3072] (weighted), or 5*2^k in [2560,163840] (weighted)` · Worker 覆盖 `[worker.N] ntt_length` · 级别 `高级`。
+类型 `int` · 范围 `0, 2^k in [2,524288], 3*2^k in [768,393216] (weighted), or 5*2^k in [2560,163840] (weighted)` · Worker 覆盖 `[worker.N] ntt_length` · 级别 `高级`。
 
 变换长度。0 推导安全长度。加权卷积支持所列 radix-3 和 radix-5 长度。
 

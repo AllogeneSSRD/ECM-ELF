@@ -42,6 +42,8 @@ Pminus1=[AID,]1,2,p,-1,B1,B2[,how_far_factored][,B2_start][,"factors"]
 
 ## 实现与实测
 
+- 0.76.8 将 radix-3 从 3072 点扩到 393216 点。七个新增长度均通过 GMP 完整余数对拍，覆盖原生系数上限附近、直接提交、Graph2/4、不同逆向 tile、窄尾 limb 和任意底数扩展。6144 点经调优选中后可批量处理 P−1 队列。单路复测覆盖四组二次幂和三平面长度。[调优用法](../usage/TUNE.md#ntt-and-transform-sizes) · [P−1 单路数据](../performance/STAGE1_MERSENNE_NTT.md#p1-宽-radix-3-单路对照) · [余数核对](../../data/experiments/radix3_wide_0768/oracle.py)
+
 - 0.76.7 完成时在任务目录归档 Prime95 端点，配置外部交接目录时两端写入同样的字节。完成档写入后清理当前 B1 的计算断点。扩展完成旧 B1 时先归档旧端点并保存增量起点，再清理已经用完的旧断点。队列回归覆盖独立目录、阻塞交接后的续发和命中。原生 GUI 回归核对秒/曲线、ETA 和完成/命中计数，M37、B1=3 的完成值为 `1 / 1`。[使用说明](../usage/STAGE1.md#pm1-stage1) · [队列回归](../../tools/test/test_pm1_stage1_queue.py) · [GUI 回归](../../tools/test/gui_v2/test_pm1_progress.py)
 
 - 0.76.6 将“完成旧 B1”的起始工作量写入 `extension.progress`，在两个阶段内续算时都恢复同一进度总量，ETA 继续使用每路实际剩余迭代。旧版 `extension.pm1` 直接按已保存的二进制游标恢复。生产四路存档的副本从 51,183,616 / 115,428,096 iter（44.34%）开始。端到端回归在两个阶段分别停止并续算，与独立模幂逐字节对拍。扩展的四位幂表通过 768、65536、163840、262144 点的 GMP 对拍。[续算日志](../../data/experiments/pm1_extend_0766/production_checkpoint_copy/worker.log) · [进度与 ETA](../usage/GUI_V2.md#pm1-progress) · [回归](../../tools/test/test_pm1_stage1_extend.py)
