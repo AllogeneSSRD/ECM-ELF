@@ -179,6 +179,7 @@ struct CompletedWorktodo {
     std::string pm1_add_file, pm1_line, pm1_save_path;
     uint64_t pm1_save_hash = 0;
     bool pm1_superseded = false; // Transient result of rechecking the live queue.
+    bool queue_advance_started = false; // Keep queue edits serialized until this receipt is acknowledged.
 };
 
 // Durable completion responsibility. Leave the receipt until checkpoint cleanup
@@ -187,7 +188,9 @@ struct CompletedWorktodo {
 bool ecm_worktodo_store_completion(const std::string& receipt, const CompletedWorktodo&,
                                    std::string& err);
 bool ecm_worktodo_commit_completion(const std::string& receipt, const std::string& queue,
-                                    int worker, CompletedWorktodo& completed, std::string& err);
+                                    int worker, CompletedWorktodo& completed, std::string& err,
+                                    bool record_only = false);
+bool ecm_worktodo_receipt_has_advance(const std::string& receipt);
 
 // Atomically add one Stage2 assignment to a worker section. The queue edit is
 // serialized with ecm_worktodo_advance; an active or finished identical line

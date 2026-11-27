@@ -1330,8 +1330,15 @@ static bool pm1_bound_increased(const std::string& queue, int worker, const std:
     return true;
 }
 
+static constexpr std::string_view advance_marker = "\nECM-ADVANCE\n";
+
+bool ecm_worktodo_receipt_has_advance(const std::string& receipt) {
+    return ecm_io::read_file(std::filesystem::u8path(receipt)).find(advance_marker) != std::string::npos;
+}
+
 bool ecm_worktodo_commit_completion(const std::string& receipt, const std::string& queue,
-                                    int worker, CompletedWorktodo& c, std::string& err) {
+                                    int worker, CompletedWorktodo& c, std::string& err,
+                                    bool record_only) {
     try {
         const auto bytes = ecm_io::read_file(std::filesystem::u8path(receipt));
         std::istringstream in(bytes);
@@ -1352,9 +1359,12 @@ bool ecm_worktodo_commit_completion(const std::string& receipt, const std::strin
             throw std::runtime_error("invalid Pminus1 worktodo destination in receipt: " + receipt);
         QueueEditLock lock(queue);
         if (!lock.valid()) throw std::runtime_error(lock.error);
-        const auto evidence = bytes.find("\nECM-ADVANCE\n");
+        const auto evidence = bytes.find(advance_marker);
         if (evidence != bytes.npos) {
-            std::istringstream versions(bytes.substr(evidence + 13));
+            c.queue_advance_started = true;
+            if (record_only)
+                return true;
+            std::istringstream versions(bytes.substr(evidence + advance_marker.size()));
             uint64_t before = 0, after = 0;
             if (!(versions >> before >> after))
                 throw std::runtime_error("invalid queue commit evidence: " + receipt);
@@ -1383,13 +1393,13 @@ bool ecm_worktodo_commit_completion(const std::string& receipt, const std::strin
         }
         if (!ecm_append_text_line_unique(c.finished, c.record))
             throw std::runtime_error("cannot publish finished record: " + c.finished);
-        // Stage1 has a verified endpoint. Record it even when the receiver
-        // cannot yet pick up Stage2. Replay can retry delivery without adding
-        // the finished line again.
+        if (record_only)
+            return true;
         if (pm1)
             publish_pm1_completion(c, receipt, payload);
         const auto action = c.replacement.empty() ? WorktodoAction::Remove :
                             c.append_replacement ? WorktodoAction::AppendToWorker : WorktodoAction::Replace;
+        c.queue_advance_started = true;
         if (!advance_locked(queue, worker, c.ticket, action, c.replacement, receipt, payload))
             throw std::runtime_error(
                 "cannot match/advance completed task; result and completion receipt retained: " +

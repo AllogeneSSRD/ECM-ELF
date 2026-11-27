@@ -15,6 +15,7 @@ using ecm_stage1_app::resolve_rel_local;
 using ecm_stage1_app::stage1_result_settings;
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstdio>
@@ -26,6 +27,7 @@ using ecm_stage1_app::stage1_result_settings;
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -282,19 +284,28 @@ static const char* prime95_unsupported(const NormalizedStage1Task& task) {
     return nullptr;
 }
 
-static bool finish_record(const QueuePaths& paths, bool* superseded = nullptr) {
-    const auto receipt = paths.worktodo + ".stage1_completed_worker" + std::to_string(paths.worker);
+static std::string completion_receipt(const QueuePaths& paths) {
+    return paths.worktodo + ".stage1_completed_worker" + std::to_string(paths.worker);
+}
+
+static bool finish_record(const QueuePaths& paths, const std::string& receipt,
+                          bool* superseded, bool& queue_uncertain) {
     if (!std::filesystem::exists(receipt))
         return true;
     CompletedWorktodo completed;
     std::string error;
-    if (!ecm_worktodo_commit_completion(receipt, paths.worktodo, paths.worker, completed, error)) {
+    const bool record_only = queue_uncertain;
+    if (!ecm_worktodo_commit_completion(receipt, paths.worktodo, paths.worker, completed, error,
+                                        record_only)) {
+        queue_uncertain |= completed.queue_advance_started;
         ecm_ts_fprintf(stderr, "FATAL: %s\n", error.c_str());
         return false;
     }
     if (completed.pm1_superseded) {
         if (superseded) *superseded = true;
         ecm_ts_fprintf(stdout, "P-1 Stage1 B1 increased in worktodo; saved endpoint ready for extension\n");
+    } else if (record_only) {
+        return true;
     }
     if (!completed.checkpoint.empty()) {
         ecm_stage1_checkpoint::Context cleanup;
@@ -311,10 +322,45 @@ static bool finish_record(const QueuePaths& paths, bool* superseded = nullptr) {
     std::error_code ec;
     std::filesystem::remove(receipt, ec);
     if (ec) {
+        queue_uncertain |= completed.queue_advance_started;
         ecm_ts_fprintf(stderr, "FATAL: cannot acknowledge completion: %s\n", ec.message().c_str());
         return false;
     }
     return true;
+}
+
+static bool finish_record(const QueuePaths& paths) {
+    bool queue_uncertain = false;
+    return finish_record(paths, completion_receipt(paths), nullptr, queue_uncertain);
+}
+
+static bool recover_completion_receipts(const QueuePaths& paths) try {
+    namespace fs = std::filesystem;
+    const auto base = fs::u8path(completion_receipt(paths));
+    const auto prefix = base.filename().u8string() + ".pm1-";
+    std::vector<std::pair<bool, std::string>> receipts;
+    const auto collect = [&](const fs::path& receipt) {
+        auto path = receipt.u8string();
+        // Resolve a previously attempted queue write before processing other receipts.
+        const bool uncommitted = !ecm_worktodo_receipt_has_advance(path);
+        receipts.emplace_back(uncommitted, std::move(path));
+    };
+    if (fs::exists(base)) collect(base);
+    for (const auto& entry : fs::directory_iterator(base.parent_path())) {
+        const auto name = entry.path().filename().u8string();
+        if (name.compare(0, prefix.size(), prefix) == 0 && name.size() > prefix.size() &&
+            name.find_first_not_of("0123456789", prefix.size()) == name.npos &&
+            fs::is_regular_file(entry.symlink_status()))
+            collect(entry.path());
+    }
+    std::sort(receipts.begin(), receipts.end());
+    bool ok = true, queue_uncertain = false;
+    for (const auto& entry : receipts)
+        if (!finish_record(paths, entry.second, nullptr, queue_uncertain)) ok = false;
+    return ok;
+} catch (const std::exception& e) {
+    ecm_ts_fprintf(stderr, "FATAL: cannot recover Stage1 completion receipts: %s\n", e.what());
+    return false;
 }
 
 // Error reporting must not throw again while counting unreadable responsibility
@@ -945,14 +991,14 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
     if (!opt.persistence.tmp_dir.empty() && opt.persistence.tmp_dir != exe_dir)
         ecm_sync::backup_saves(opt.persistence.tmp_dir, sync1, sync2, /*full=*/true, 0);
 
-    if (!finish_record(
-            {worktodo_path, finished_path, exe_dir, sync1, sync2, worker, cfg.sync_mode == "full"}))
+    const auto receipt_paths = QueuePaths{worktodo_path, finished_path, exe_dir, sync1, sync2,
+                                         worker, cfg.sync_mode == "full"};
+    if (!recover_completion_receipts(receipt_paths))
         return 1;
 
     bool saw_task = false;
     int processed = 0;
-    const bool full_sync = (cfg.sync_mode == "full");
-    const QueuePaths paths{worktodo_path, finished_path, exe_dir, sync1, sync2, worker, full_sync};
+    const QueuePaths& paths = receipt_paths;
     const auto read_task = [&](QueueItem& item) -> QueueReadStatus {
         std::string line;
         std::string read_error;
@@ -1051,19 +1097,46 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
             for (size_t lane=0;lane<tasks.size();++lane)
                 pending.push_back(std::async(tasks.size()==1 ? std::launch::deferred : std::launch::async,
                                              compute,lane));
-            const auto receipt = worktodo_path + ".stage1_completed_worker" + std::to_string(worker);
-            for (size_t lane=0;lane<pending.size();++lane) {
-                auto done=pending[lane].get();
-                if (!done) return QueueReadStatus::Error;
-                if (!ecm_worktodo_store_completion(receipt,*done,error)) throw std::runtime_error(error);
+            const auto base = completion_receipt(paths);
+            bool failed = false, queue_uncertain = false;
+            const auto complete_lane = [&](size_t lane) {
+                auto done = pending[lane].get();
+                if (!done) {
+                    failed = true;
+                    return;
+                }
+                const auto receipt = tasks.size() == 1 ? base : base + ".pm1-" + std::to_string(tasks[lane].p);
+                if (tasks.size() > 1 && conflicts_with_output(receipt))
+                    throw std::runtime_error("P-1 completion receipt conflicts with an output path");
+                if (!ecm_worktodo_store_completion(receipt, *done, error)) throw std::runtime_error(error);
                 bool superseded = false;
-                if (!finish_record(paths, &superseded)) return QueueReadStatus::Error;
-                if (superseded) continue;
+                if (!finish_record(paths, receipt, &superseded, queue_uncertain)) {
+                    failed = true;
+                    return;
+                }
+                if (superseded || queue_uncertain) return;
                 ecm_ts_fprintf(stdout,"P-1 Stage1 handoff M%u B1=%llu %s\n",tasks[lane].p,
                                (unsigned long long)tasks[lane].b1,done->pm1_line.empty() ? "save only" : "published to Prime95");
                 ecm_ts_fprintf(stdout,"stage1_task_done: processed=%d\n",++processed);
+            };
+            for (size_t remaining = pending.size(); remaining;) {
+                const auto before = remaining;
+                for (size_t lane = 0; lane < pending.size(); ++lane) {
+                    auto& future = pending[lane];
+                    if (!future.valid() || future.wait_for(std::chrono::seconds(0)) == std::future_status::timeout)
+                        continue;
+                    --remaining;
+                    try {
+                        complete_lane(lane);
+                    } catch (const std::exception& e) {
+                        failed = true;
+                        ecm_ts_fprintf(stderr, "FATAL: P-1 M%u: %s\n", tasks[lane].p, e.what());
+                    }
+                }
+                if (remaining == before)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
-            return QueueReadStatus::Completed;
+            return failed ? QueueReadStatus::Error : QueueReadStatus::Completed;
 #else
             input_error("Pminus1 requires ecm_cuda; worktodo retained");
             return QueueReadStatus::Error;

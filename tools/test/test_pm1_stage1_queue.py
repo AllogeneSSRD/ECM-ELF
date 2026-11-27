@@ -101,7 +101,7 @@ def blocked_handoff(exe, directory):
 
 def new_receiver(exe, directory):
     directory.mkdir(parents=True)
-    receiver = directory / "new" / "prime95" / "worktodo.txt"
+    receiver = directory / "new" / "接收目录" / "worktodo.txt"
     saves = directory / "separate-saves"
     config = directory / "ecm.toml"
     config.write_text('config_version=4\n[shared]\nlog_file=""\n[stage1]\n'

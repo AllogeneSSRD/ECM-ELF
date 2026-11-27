@@ -5,11 +5,13 @@ import math
 import re
 import struct
 import subprocess
+import time
 import tomllib
 import zlib
 from pathlib import Path
 
 from test_pm1_stage1_queue import saved_residue
+from test_stage1_ntt_task_batches import pausable_process
 
 
 def check(exe, root):
@@ -114,7 +116,7 @@ def check(exe, root):
     assert re.findall(r"stage1_task_done: processed=(\d+)", log) == ["1","2","3","4","5"]
     assert "unread.save" in queue.read_text() and "1,2,53,-1" in queue.read_text()
     finished = (root / "finished.txt").read_text().splitlines()
-    assert [r.split(" #")[0] for r in finished] == lines
+    assert sorted(r.split(" #")[0] for r in finished) == sorted(lines)
     for p,b1 in tasks:
         residue = saved_residue(root/"pm1"/f"M{p}-B1-{b1}", p, b1)
         assert residue == pow(3, 2*p*math.lcm(*range(1,b1+1)), 2**p-1)
@@ -136,6 +138,7 @@ def check(exe, root):
         queue.write_text("Pminus1=1,2,37,-1,17,0\nPminus1=1,2,41,-1,31,0\n")
         return run(name)
     set_rates(70,100)
+    check_batch_completion(exe, root / "batch_completion", profile)
     limits(2,0,"ntt_max_batch_pm1=1")
     run("lowered_tune", *tune_two, success=False)
     assert "batch=2" not in run_two("lowered_queue")
@@ -190,6 +193,53 @@ def check(exe, root):
         assert winner["repeats"] == 3 and winner["b1"] == duplicate[col("b1")]
         assert "2/4:13" not in winner.get("tested_groups", "")
     print("P-1 tune matrix, independent resume, queue boundaries and batch threshold passed")
+
+
+def check_batch_completion(exe, directory, profile):
+    directory.mkdir()
+    config = directory / "ecm.toml"
+    queue = directory / "worktodo.txt"
+    finished = directory / "finished.txt"
+    receiver = directory / "receiver"
+    cfg = ('config_version=4\n[shared]\nlog_file=""\nfinished_file="finished.txt"\n'
+           f'tune_file={json.dumps(profile.as_posix())}\n[stage1]\nntt_max_batch=2\n'
+           f'prime95_worktodo_file={json.dumps((receiver / "worktodo.txt").as_posix())}\n'
+           '[stage2]\nstage2_after_factored=1\n')
+    config.write_text(cfg)
+    slow, fast = "Pminus1=1,2,37,-1,100000,100001", "Pminus1=1,2,41,-1,3,1000"
+    queue.write_text(slow + "\n" + fast + "\n")
+    log = directory / "stop.log"
+    cmd = [exe, "--config", config]
+    with pausable_process(cmd, directory, None, log) as (proc, stop):
+        until = time.monotonic() + 30
+        while b"P-1 Stage1 complete M41 " not in log.read_bytes():
+            assert time.monotonic() < until and proc.poll() is None, log.read_bytes()
+            time.sleep(.01)
+        stop()
+        assert proc.wait(timeout=90) != 0
+    assert b"batch=2 available=2" in log.read_bytes()
+    assert finished.exists(), "completed lane was discarded after an earlier lane stopped"
+    assert finished.read_text().splitlines() == [fast + " # P-1 Stage1 no factor"]
+    add = receiver / "worktodo.add"
+    assert add.read_text().strip() == fast and queue.read_text().strip() == slow
+
+    alternate = receiver / "worktodo.add.txt"
+    alternate.write_text("# occupied\n")
+    other = "Pminus1=1,2,43,-1,2,1000"
+    queue.write_text(other + "\n" + fast + "\n")
+    blocked = subprocess.run(cmd, cwd=directory, capture_output=True, timeout=90)
+    (directory / "blocked.log").write_bytes(blocked.stdout + blocked.stderr)
+    assert blocked.returncode != 0 and b"batch=2 available=2" in blocked.stdout
+    assert sorted(line.split(" #")[0] for line in finished.read_text().splitlines()) == sorted((fast, other))
+    assert len(list(directory.glob("worktodo.txt.stage1_completed_worker1*"))) == 2
+    assert queue.read_text().splitlines() == [other, fast]
+    add.unlink()
+    alternate.unlink()
+    replay = subprocess.run(cmd, cwd=directory, capture_output=True, timeout=90)
+    (directory / "replay.log").write_bytes(replay.stdout + replay.stderr)
+    assert replay.returncode == 0 and b"START:" not in replay.stdout, replay.stdout + replay.stderr
+    assert sorted((add.read_text().strip(), alternate.read_text().strip())) == sorted((fast, other))
+    assert len(finished.read_text().splitlines()) == 2 and not queue.read_text().strip()
 
 
 if __name__ == "__main__":
