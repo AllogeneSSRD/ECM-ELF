@@ -10,7 +10,7 @@ int main() {
     const std::vector<uint32_t> exponent{0, ~0u, 0x7201ABEF, ~0u, 0, ~0u, ~0u, 0x7fff};
     std::array<uint64_t,SlotCount> registers{};
     Pm1Progress saved{1,{3},0};
-    registers[Current] = registers[Three] = 3;
+    registers[Current] = registers[PowerBase] = 3;
     unsigned calls = 0, verified_count = 0;
     const auto step = [&](bool bit) {
         auto& x = registers[Current];

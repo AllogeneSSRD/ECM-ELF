@@ -930,14 +930,11 @@ static void append_to_worker(std::vector<std::string>& lines, int worker, const 
     lines.insert(lines.begin() + static_cast<std::vector<std::string>::difference_type>(insertion), line);
 }
 
-bool ecm_worktodo_advance(const std::string& path, int worker, const std::string& first_line,
+static bool advance_locked(const std::string& path, int worker, const std::string& first_line,
                           WorktodoAction action, const std::string& replacement,
                           const std::string& receipt, const std::string& receipt_payload) {
     if ((action == WorktodoAction::Replace || action == WorktodoAction::AppendToWorker) &&
         (replacement.empty() || replacement.find_first_of("\r\n") != std::string::npos))
-        return false;
-    QueueEditLock lock(path);
-    if (!lock.valid())
         return false;
     std::string before;
     try {
@@ -1005,6 +1002,13 @@ bool ecm_worktodo_advance(const std::string& path, int worker, const std::string
     } catch (...) {
         return false;
     }
+}
+
+bool ecm_worktodo_advance(const std::string& path, int worker, const std::string& ticket,
+                          WorktodoAction action, const std::string& replacement,
+                          const std::string& receipt, const std::string& payload) {
+    QueueEditLock lock(path);
+    return lock.valid() && advance_locked(path, worker, ticket, action, replacement, receipt, payload);
 }
 
 bool ecm_worktodo_list_workers(const std::string& path, std::vector<uint32_t>& workers,
@@ -1252,12 +1256,17 @@ bool ecm_worktodo_store_completion(const std::string& receipt, const CompletedWo
 // our private, same-directory staging name in the same operation that makes the
 // line visible. Its absence *after* PREPARED is therefore a delivery receipt
 // even if the recipient has since removed the public file.
+static std::filesystem::path pm1_staging_path(const CompletedWorktodo& c, const std::string& receipt) {
+    auto staged = std::filesystem::u8path(c.pm1_add_file);
+    staged += ".pm1-" + std::to_string(ecm_io::fingerprint(
+        ecm_io::file_identity(std::filesystem::u8path(receipt)))) + ".ready";
+    return staged;
+}
+
 static void publish_pm1_completion(const CompletedWorktodo& c, const std::string& receipt,
                                    std::string& payload) {
     const auto target = std::filesystem::u8path(c.pm1_add_file);
-    auto staged = target;
-    staged += ".pm1-" + std::to_string(ecm_io::fingerprint(
-        ecm_io::file_identity(std::filesystem::u8path(receipt)))) + ".ready";
+    const auto staged = pm1_staging_path(c, receipt);
     std::filesystem::create_directories(target.parent_path());
     ecm_io::FileLock writer(target.u8string());
     const bool prepared = payload.find("\nPM1-PREPARED\n") != payload.npos;
@@ -1272,7 +1281,8 @@ static void publish_pm1_completion(const CompletedWorktodo& c, const std::string
         // still installed. Once sent, the receiver owns subsequent changes.
         ecm_io::FileLock save_writer(c.pm1_save_path);
         const auto save = std::filesystem::u8path(c.pm1_save_path);
-        constexpr uint64_t max_bytes = (ecm_stage1::stage1_ntt_max_exponent + 7) / 8 + 128;
+        // A native DONE endpoint may carry Prime95's optional JSON trailer.
+        constexpr uint64_t max_bytes = (ecm_stage1::stage1_ntt_max_exponent + 7) / 8 + (1u << 20) + 128;
         if (!std::filesystem::is_regular_file(save) || std::filesystem::file_size(save) > max_bytes ||
             ecm_io::fingerprint(ecm_io::read_file(save)) != c.pm1_save_hash)
             throw std::runtime_error("Pminus1 Stage1 save missing or changed before delivery: " +
@@ -1288,6 +1298,36 @@ static void publish_pm1_completion(const CompletedWorktodo& c, const std::string
                                      "completion retained: " + receipt);
     }
     ecm_io::sync_publication_directory(target);
+}
+
+// An edit in the worker's section can supersede a running Stage1. Validate the
+// whole assignment and compare every field apart from B1 before retiring its receipt.
+static bool pm1_bound_increased(const std::string& queue, int worker, const std::string& ticket) {
+    const auto fields_without_b1 = [](const std::string& line) {
+        auto fields = split_csv(line.substr(8));
+        const bool has_id = assignment_id(fields.front()) || no_assignment_id(fields.front());
+        fields.erase(fields.begin() + (has_id ? 5 : 4));
+        return fields;
+    };
+    Pm1Task old;
+    std::string error;
+    if (!ecm_parse_pm1_line(ticket, old, error)) return false;
+    const auto identity = fields_without_b1(old.raw_line);
+    std::istringstream input(ecm_io::read_file(std::filesystem::u8path(queue)));
+    std::string raw;
+    int section = 1;
+    size_t matches = 0;
+    while (std::getline(input, raw)) {
+        if (classify_line(raw, &section, nullptr) != LineKind::Task || !worker_matches(section, worker)) continue;
+        const auto line = ecm_queue::task_text(raw);
+        if (line == old.raw_line) return false;
+        Pm1Task candidate;
+        if (ecm_is_pm1_line(line) && ecm_parse_pm1_line(line, candidate, error) &&
+            candidate.b1 > old.b1 && fields_without_b1(line) == identity) ++matches;
+    }
+    if (matches != 1)
+        throw std::runtime_error("cannot identify edited Pminus1 assignment; completion retained: " + queue);
+    return true;
 }
 
 bool ecm_worktodo_commit_completion(const std::string& receipt, const std::string& queue,
@@ -1310,6 +1350,8 @@ bool ecm_worktodo_commit_completion(const std::string& receipt, const std::strin
                     c.pm1_line.find_first_of("\r\n") != std::string::npos ||
                     ecm_io::same_file_resource(std::filesystem::u8path(queue), std::filesystem::u8path(c.pm1_add_file))))
             throw std::runtime_error("invalid Pminus1 worktodo destination in receipt: " + receipt);
+        QueueEditLock lock(queue);
+        if (!lock.valid()) throw std::runtime_error(lock.error);
         const auto evidence = bytes.find("\nECM-ADVANCE\n");
         if (evidence != bytes.npos) {
             std::istringstream versions(bytes.substr(evidence + 13));
@@ -1326,13 +1368,26 @@ bool ecm_worktodo_commit_completion(const std::string& receipt, const std::strin
                                          receipt);
         }
         auto payload = evidence == bytes.npos ? bytes : bytes.substr(0, evidence);
+        const bool cancelled = bytes.find("\nPM1-SUPERSEDED\n") != bytes.npos;
+        const bool prepared = pm1 && bytes.find("\nPM1-PREPARED\n") != bytes.npos;
+        if (cancelled || (evidence == bytes.npos && ecm_is_pm1_line(c.ticket) &&
+            (!prepared || std::filesystem::exists(pm1_staging_path(c, receipt))) &&
+            pm1_bound_increased(queue, worker, c.ticket))) {
+            // A full receiver mailbox can leave the old line privately staged.
+            // Persist cancellation first so deleting that file cannot look like delivery on replay.
+            if (prepared && !cancelled)
+                ecm_io::write_atomic(std::filesystem::u8path(receipt), payload + "\nPM1-SUPERSEDED\n");
+            if (pm1) std::filesystem::remove(pm1_staging_path(c, receipt));
+            c.pm1_superseded = true;
+            return true;
+        }
         if (pm1)
             publish_pm1_completion(c, receipt, payload);
         if (!ecm_append_text_line_unique(c.finished, c.record))
             throw std::runtime_error("cannot publish finished record: " + c.finished);
         const auto action = c.replacement.empty() ? WorktodoAction::Remove :
                             c.append_replacement ? WorktodoAction::AppendToWorker : WorktodoAction::Replace;
-        if (!ecm_worktodo_advance(queue, worker, c.ticket, action, c.replacement, receipt, payload))
+        if (!advance_locked(queue, worker, c.ticket, action, c.replacement, receipt, payload))
             throw std::runtime_error(
                 "cannot match/advance completed task; result and completion receipt retained: " +
                 queue);

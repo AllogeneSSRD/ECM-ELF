@@ -282,7 +282,7 @@ static const char* prime95_unsupported(const NormalizedStage1Task& task) {
     return nullptr;
 }
 
-static bool finish_record(const QueuePaths& paths) {
+static bool finish_record(const QueuePaths& paths, bool* superseded = nullptr) {
     const auto receipt = paths.worktodo + ".stage1_completed_worker" + std::to_string(paths.worker);
     if (!std::filesystem::exists(receipt))
         return true;
@@ -291,6 +291,10 @@ static bool finish_record(const QueuePaths& paths) {
     if (!ecm_worktodo_commit_completion(receipt, paths.worktodo, paths.worker, completed, error)) {
         ecm_ts_fprintf(stderr, "FATAL: %s\n", error.c_str());
         return false;
+    }
+    if (completed.pm1_superseded) {
+        if (superseded) *superseded = true;
+        ecm_ts_fprintf(stdout, "P-1 Stage1 B1 increased in worktodo; saved endpoint ready for extension\n");
     }
     if (!completed.checkpoint.empty()) {
         ecm_stage1_checkpoint::Context cleanup;
@@ -990,8 +994,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
             namespace fs = std::filesystem;
             auto options = opt;
             options.execution.ntt.max_batch = cfg.pm1_batch_limit();
-            auto tasks = ecm_pm1::batch_prefix(worktodo_path, source_line, std::move(task), options.execution.ntt,
-                                             !cfg.p95_sync_dir.empty() || !cfg.p95_worktodo_path.empty());
+            auto tasks = ecm_pm1::batch_prefix(worktodo_path, source_line, std::move(task), options.execution.ntt);
             std::vector<unsigned> exponents;
             for (const auto& lane : tasks) exponents.push_back(lane.p);
             auto plan = ecm_mersenne_ntt::select_pm1_batch(opt.execution.device_index, exponents, options.execution.ntt);
@@ -1053,7 +1056,9 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                 auto done=pending[lane].get();
                 if (!done) return QueueReadStatus::Error;
                 if (!ecm_worktodo_store_completion(receipt,*done,error)) throw std::runtime_error(error);
-                if (!finish_record(paths)) return QueueReadStatus::Error;
+                bool superseded = false;
+                if (!finish_record(paths, &superseded)) return QueueReadStatus::Error;
+                if (superseded) continue;
                 ecm_ts_fprintf(stdout,"P-1 Stage1 handoff M%u B1=%llu %s\n",tasks[lane].p,
                                (unsigned long long)tasks[lane].b1,done->pm1_line.empty() ? "save only" : "published to Prime95");
                 ecm_ts_fprintf(stdout,"stage1_task_done: processed=%d\n",++processed);

@@ -42,6 +42,9 @@ Pminus1=[AID,]1,2,p,-1,B1,B2[,how_far_factored][,B2_start][,"factors"]
 
 ## 实现与实测
 
+- 0.76.0 支持提高 worktodo 中的 B1。增量指数按 Prime95 31.6 的 `ecm.cpp::calc_exp2` 和 PrMers 的 `RunPM1.cpp::buildE_incremental_fast` 取两界 LCM 之商，Gerbicz 校验使用旧端点作底数。原始指数与增量指数分别使用 GpuOwl 和本机扩展断点。恢复顺序、可读取的 Prime95 状态及运行中编辑约定见 [Stage1 使用说明](../usage/STAGE1.md#pm1-stage1)。[端到端回归](../../tools/test/test_pm1_stage1_extend.py)
+- 使用 Prime95 接收端留下的 M400381 DONE 存档（B_done=500、C_done=89850）扩展至 B1=1000。K 长 715 位，GPU 推进 714 次迭代，GCD 得 671839319。原生完成档与同版本从头计算的 50,128 字节逐字节一致，SHA-256 为 `c41604c4f5d64296aa62a7067da072b7fbc2f085d1a99c8a582499888977bf63`。[扩展记录](../../data/experiments/pm1_extend_0760/prime95_native/worker.log) · [从头计算记录](../../data/experiments/pm1_extend_0760/queue/p95_forced/worker.log)
+
 - 0.75.5 的 worker 按批汇总已校验指数位，区分续算位置和本次新增迭代。混合断点 GPU 回归核对总迭代数和逐条队列计数，原生 GUI 用 M400381 核对实际交接 B2、运行中 ETA 和文件日志节流。[显示口径](../usage/GUI_V2.md) · [双任务回归](../../tools/test/test_pm1_stage1_tune.py) · [原生界面回归](../../tools/test/gui_v2/test_pm1_progress.py)
 
 - 0.75.4 按长度在最小参测批量上预选 Graph，再扫描批量和 NTT 形状。同长度报告分别列出最快配置和达到目标吞吐的最小批量。GPU 回归覆盖缓存命中后实际复测最佳配置、固定 Graph、多长度报告及旧格式 19 重复行合并。163840 和 262144 点、批量 1–2 的同参数连跑中，第二轮每个长度各实测一次，矩阵两轮均为 20 行。[调优说明](../usage/TUNE.md#pm1-stage1-tune) · [冷启动记录](../../data/experiments/pm1_tune_0754/large_final/cold.log) · [复测记录](../../data/experiments/pm1_tune_0754/large_final/hot.log)

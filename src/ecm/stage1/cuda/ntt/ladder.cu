@@ -693,6 +693,7 @@ struct Pm1Request {
     Pm1Progress& progress;
     const std::function<bool(const Pm1Progress&)>& verified;
     const Pm1Probe* probe = nullptr;
+    const std::vector<uint32_t>* base = nullptr;
 };
 
 static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
@@ -1472,11 +1473,16 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         const auto restore = [&](const std::vector<uint32_t>& host) {
             CK(cudaMemcpyAsync(slot(Current),host.data(),bytes,cudaMemcpyHostToDevice,q));
         };
-        CK(cudaMemsetAsync(slot(Three),0,bytes,q));
-        CK(cudaMemsetAsync(slot(Three),3,1,q));
-        const auto step = [&](bool times_three) {
+        if (pm1->base) {
+            CK(cudaMemcpyAsync(slot(PowerBase),pm1->base->data(),bytes,cudaMemcpyHostToDevice,q));
+        } else {
+            CK(cudaMemsetAsync(slot(PowerBase),0,bytes,q));
+            CK(cudaMemsetAsync(slot(PowerBase),3,1,q));
+        }
+        const auto step = [&](bool multiply_base) {
             product(Current, Current, Current);
-            if (times_three) {
+            if (multiply_base && pm1->base) product(Current, Current, PowerBase);
+            else if (multiply_base) {
                 // Work on canonical limbs so the squared coefficient bound stays valid.
                 add_inputs(std::false_type{},1,{{Current},{Current},{Scratch},0},{});
                 add_inputs(std::false_type{},1,{{Current},{Scratch},{Current},0},{});
@@ -2008,16 +2014,18 @@ Run pm1_probe_lane(int device, unsigned p, const ecm_stage1::Stage1NttOptions& o
 
 Pm1Progress pm1_stage1(int device, unsigned p, const std::vector<uint32_t>& exponent,
                        Pm1Progress start, const ecm_stage1::Stage1NttOptions& options,
-                       const std::function<bool(const Pm1Progress&)>& verified) {
+                       const std::function<bool(const Pm1Progress&)>& verified,
+                       const std::vector<uint32_t>* extension_base) {
     const uint64_t bits = pm1_detail::exponent_bits(exponent);
     if (p < ecm_stage1::stage1_ntt_min_exponent || p > ecm_stage1::stage1_ntt_max_exponent ||
         !start.k || start.k > bits || start.residue.size() != (p + 31) / 32 ||
+        (extension_base && extension_base->size()!=start.residue.size()) ||
         std::none_of(start.residue.begin(),start.residue.end(),[](uint32_t word){ return word != 0; }))
         throw std::invalid_argument("invalid P-1 Stage1 checkpoint or modulus");
     auto weighted = options;
     weighted.weighted = true;
     Control control;
-    const Pm1Request request{exponent,start,verified};
+    const Pm1Request request{exponent,start,verified,nullptr,extension_base};
     run_ladder(device,p,1,start.residue,{},0,weighted,&control,1,nullptr,nullptr,&request);
     return start;
 }

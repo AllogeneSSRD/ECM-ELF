@@ -178,6 +178,7 @@ struct CompletedWorktodo {
     bool append_replacement = false;
     std::string pm1_add_file, pm1_line, pm1_save_path;
     uint64_t pm1_save_hash = 0;
+    bool pm1_superseded = false; // Transient result of rechecking the live queue.
 };
 
 // Durable completion responsibility. Leave the receipt until checkpoint cleanup

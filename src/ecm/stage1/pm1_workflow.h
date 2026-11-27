@@ -16,7 +16,7 @@ struct Outcome {
 };
 // Read only the contiguous Pminus1 prefix starting at the selected queue row.
 std::vector<Pm1Task> batch_prefix(const std::string& path, size_t source_line, Pm1Task first,
-                                  const ecm_stage1::Stage1NttOptions&, bool shared_prime95_dir);
+                                  const ecm_stage1::Stage1NttOptions&);
 
 class BatchProgress {
     using Clock = std::chrono::steady_clock;

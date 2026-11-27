@@ -7,7 +7,7 @@
 
 namespace ecm_mersenne_ntt::pm1_detail {
 
-enum Slot : unsigned { Current, BlockStart, Product, BlockEnd, Left, Three, Scratch, SlotCount };
+enum Slot : unsigned { Current, BlockStart, Product, BlockEnd, Left, PowerBase, Scratch, SlotCount };
 
 inline uint64_t exponent_bits(const std::vector<uint32_t>& e) {
     if (e.empty() || !e.back()) throw std::invalid_argument("invalid P-1 exponent words");
@@ -27,8 +27,8 @@ inline void add_chunk(mpz_ptr sum, mpz_ptr scratch, const std::vector<uint32_t>&
 }
 
 // For subblock endpoints u_j and chunks c_j:
-// u_0 * P^(2^L) * 3^(sum c_j) = P * u_m, where P = product(u_0 ... u_(m-1)).
-// 'step' maps Current to Current^2 or 3*Current^2; the remaining operations
+// u_0 * P^(2^L) * base^(sum c_j) = P * u_m, where P = product(u_0 ... u_(m-1)).
+// 'step' maps Current to Current^2 or base*Current^2; the remaining operations
 // are infrequent copies, canonical modular products and checkpoint readbacks.
 template<class Step, class Copy, class Mul, class Read, class Restore>
 void replay(const std::vector<uint32_t>& exponent, Pm1Progress& saved,
@@ -59,11 +59,11 @@ void replay(const std::vector<uint32_t>& exponent, Pm1Progress& saved,
         copy(BlockEnd, Current);
         mul(Left, Product, BlockEnd);
 
-        // Split the chunk sum at bit L. Start from P * 3^(sum >> L),
-        // then consume exactly L low bits with the same square/optional-3 step.
+        // Split the chunk sum at bit L. Start from P * base^(sum >> L),
+        // then consume exactly L low bits with the same square/optional-multiply step.
         mpz_fdiv_q_2exp(chunk.v, sum.v, length);
         if (mpz_sgn(chunk.v)) {
-            copy(Current, Three);
+            copy(Current, PowerBase);
             for (size_t i = mpz_sizeinbase(chunk.v, 2) - 1; i > 0; --i)
                 step(mpz_tstbit(chunk.v, i - 1));
             mul(Current, Current, Product);

@@ -35,6 +35,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include <algorithm>
 #include <vector>
 #include <stdexcept>
 
@@ -219,7 +220,7 @@ static unsigned bitlen_u64(uint64_t v)
 
 } /* namespace */
 
-bool ecm_build_lcm_exponent(mpz_t s, uint64_t B1, uint64_t torsion)
+static bool build_lcm_interval(mpz_t s, uint64_t B1, uint64_t torsion, uint64_t completed)
 {
     mpz_set_ui(s, torsion ? (unsigned long)torsion : 1);
     if (B1 < 2) return true;
@@ -253,7 +254,7 @@ bool ecm_build_lcm_exponent(mpz_t s, uint64_t B1, uint64_t torsion)
     do {   /* one-pass body, so the failure path has a single exit */
         /* 2 is the only even prime: handle it directly so the sieve can be odds-only. */
         {
-            const uint64_t pp = highest_power(2, B1);
+            const uint64_t pp = highest_power(2, B1) / (completed>=2 ? highest_power(2,completed) : 1);
             if (pp <= UINT32_MAX)
                 block.mul_u32(static_cast<uint32_t>(pp));
             else
@@ -262,7 +263,7 @@ bool ecm_build_lcm_exponent(mpz_t s, uint64_t B1, uint64_t torsion)
 
         if (root < 3) {
             for (uint64_t p = 3; p <= B1; p += 2) {
-                const uint64_t pp = highest_power(p, B1);
+                const uint64_t pp = highest_power(p, B1) / (p<=completed ? highest_power(p,completed) : 1);
                 if (block.needs_flush()) Folder::flush(&block, &tree, scratch);
                 if (pp <= 0xFFFFFFFFull) {
                     block.mul_u32((uint32_t)pp);
@@ -303,7 +304,17 @@ bool ecm_build_lcm_exponent(mpz_t s, uint64_t B1, uint64_t torsion)
             break;
         }
 
-        uint64_t lo = 3;
+        // Primes already covered contribute only newly crossed powers. All
+        // other factors come from the segmented sieve above the old bound.
+        for (const auto p : base_primes) {
+            if (p>completed) break;
+            const auto extra=highest_power(p,B1)/highest_power(p,completed);
+            if (extra==1) continue;
+            if (block.needs_flush()) Folder::flush(&block,&tree,scratch);
+            if (extra<=UINT32_MAX) block.mul_u32(uint32_t(extra));
+            else tree.add_u64(extra);
+        }
+        uint64_t lo = std::max<uint64_t>(3,(completed+1)|1);
         while (lo <= B1) {
             const uint64_t span = (uint64_t)(EXP_SEGMENT_ODDS - 1u) * 2ull;
             /* NOTE: clamp with a comparison, never with `B1 - span` -- that underflows for
@@ -387,6 +398,13 @@ bool ecm_build_lcm_exponent(mpz_t s, uint64_t B1, uint64_t torsion)
     return ok;
 }
 
+bool ecm_build_lcm_exponent(mpz_t s, uint64_t B1, uint64_t torsion) {
+    return build_lcm_interval(s,B1,torsion,0);
+}
+
+bool ecm_build_lcm_extension(mpz_t s, uint64_t old_b1, uint64_t new_b1) {
+    return old_b1>=2 && old_b1<=new_b1 && build_lcm_interval(s,new_b1,1,old_b1);
+}
 
 uint32_t EcmEdwardsNaf::read(const std::vector<uint32_t> &words,uint64_t bit,unsigned width) {
     const size_t i=size_t(bit/32);const unsigned offset=unsigned(bit%32);

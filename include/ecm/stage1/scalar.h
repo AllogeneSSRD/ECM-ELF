@@ -6,6 +6,7 @@
 // s = torsion * product(p^floor(log_p B1), p <= B1); torsion 0 means 1.
 // False for B1 > 5e9 or allocation failure; s remains at torsion on failure.
 bool ecm_build_lcm_exponent(mpz_t s, uint64_t B1, uint64_t torsion);
+bool ecm_build_lcm_extension(mpz_t s, uint64_t old_b1, uint64_t new_b1);
 
 // Width-w NAF, MSB-first progress columns. Nonzero and code bit planes are
 // ordinary host values used to prepare CPU/GPU layouts; w is in [2,12].
