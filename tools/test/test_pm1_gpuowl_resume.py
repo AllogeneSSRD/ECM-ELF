@@ -4,8 +4,10 @@ import re
 import struct
 import subprocess
 import tempfile
+import time
 import zlib
 from pathlib import Path
+from test_stage1_ntt_task_batches import pausable_process
 
 
 def run(program, args, work, name):
@@ -73,14 +75,24 @@ checkpoint_interval_seconds = 0.001
 exponent_cache_dir = "off"
 ntt_convolution = "weighted"
 ''', encoding="utf-8")
-    log = run(worker, ["--config", str(cfg)], work, "worker")
-    assert f"k={initial_k}/744" in log, log[-2000:]
-    assert checkpoint(task / end)[1] == expected
+    stopped = work / 'worker_partial.log'
+    with pausable_process([worker, '--config', cfg], work, None, stopped) as (process, stop):
+        deadline = time.monotonic() + 60
+        while b'pm1_stage1_progress:' not in stopped.read_bytes():
+            assert time.monotonic() < deadline and process.poll() is None
+            time.sleep(.002)
+        stop()
+        assert process.wait(timeout=90) != 0
+    assert f"k={initial_k}/744" in stopped.read_text(errors='replace')
 
     middle = sorted((checkpoint(file)[0], file) for file in saves.glob("*.p1"))
     outgoing_k, outgoing = next(pair for pair in middle if initial_k < pair[0] < 744)
     (destination / "p1-400381").mkdir()
     (destination / "p1-400381" / outgoing.name).write_bytes(outgoing.read_bytes())
+    run(worker, ["--config", str(cfg)], work, "worker")
+    native = (task / 'm0400381').read_bytes()
+    assert int.from_bytes(native[80:], 'little') == int.from_bytes(expected, 'little')
+    assert not saves.exists()
     log = run(gpuowl, owl_args, destination, "resumed")
     assert re.search(rf"OK\s+{outgoing_k} P-1 loaded:", log), log[-2000:]
     assert checkpoint(destination / end)[1] == expected

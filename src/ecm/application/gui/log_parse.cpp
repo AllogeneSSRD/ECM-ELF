@@ -609,6 +609,7 @@ ParsedLine parse_line(const std::string &line) {
         if (read_kv_int(p,"target_B1",value) && value>0) pr.pm1_target_b1=value;
         read_kv_token(p,"phase",pr.pm1_phase);
         read_after(p," iter_per_s=",pr.iter_per_s);
+        read_after(p," s_per_curve=",pr.s_per_curve);
         read_after(p," elapsed=",pr.elapsed_s);
         if (!read_after(p," ETA=",pr.eta_s)) pr.eta_s=-1;
         out.kind=LogKind::Progress;
@@ -635,6 +636,9 @@ ParsedLine parse_line(const std::string &line) {
                     out.factor=out.hit.factor=factor;
                     out.hit.execution_target="gpu";
                     out.hit.curve_model="P-1";
+                    constexpr auto start = std::string_view("P-1 Stage1 complete ").size();
+                    const auto end_of_task = std::min(pos, p.find(" lane=", start));
+                    out.hit.task_key=p.substr(start,end_of_task-start);
                 }
             }
         }

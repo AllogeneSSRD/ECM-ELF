@@ -326,7 +326,7 @@ void write_extension_progress(const fs::path& root, unsigned p, uint64_t b1,
 
 fs::path write_prime95(const fs::path& dir, unsigned p, uint64_t b1,
                        const std::vector<uint32_t>& residue, uint64_t* fingerprint,
-                       const Prime95Save* previous) {
+                       const Prime95Save* previous, const fs::path& archive_dir) {
     const auto path = dir / prime95_name(p);
     if (b1 < 2 || !canonical(p, residue))
         throw std::invalid_argument("invalid Prime95 P-1 completion state");
@@ -359,29 +359,49 @@ fs::path write_prime95(const fs::path& dir, unsigned p, uint64_t b1,
     binary::u64(bytes, ieee754_one); // percent complete
     binary::u32(bytes, checksum);
     bytes += body;
-    if (fingerprint)
-        *fingerprint = ecm_io::fingerprint(bytes);
-
     if (!dir.empty())
         fs::create_directories(dir);
     ecm_io::FileLock lock(path.u8string());
+    bool replace = true;
     if (fs::exists(path)) {
-        if (fs::file_size(path) == bytes.size() && ecm_io::read_file(path) == bytes)
-            return path;
-        if (!previous || previous->b1 > b1 ||
-            (previous->b1 == b1 && previous->residue != residue) ||
-            fs::file_size(path) > 12ull * residue.size() + (1u << 20) + 128 ||
-            ecm_io::fingerprint(ecm_io::read_file(path)) != previous->fingerprint)
+        if (fs::file_size(path) > 12ull * residue.size() + (1u << 20) + 128)
             throw std::runtime_error("different Prime95 save already occupies " + path.u8string());
-        if (previous->done && previous->b1 == b1) {
-            if (fingerprint)
-                *fingerprint = previous->fingerprint;
-            return path;
+        auto original = ecm_io::read_file(path);
+        if (original == bytes) replace = false;
+        else {
+            if (!previous || previous->b1 > b1 ||
+                (previous->b1 == b1 && previous->residue != residue) ||
+                ecm_io::fingerprint(original) != previous->fingerprint)
+                throw std::runtime_error("different Prime95 save already occupies " + path.u8string());
+            if (previous->done && previous->b1 == b1) {
+                bytes = std::move(original);
+                replace = false;
+            }
         }
     } else if (previous) {
         throw std::runtime_error("Prime95 save disappeared during extension: " + path.u8string());
     }
-    ecm_io::write_atomic(path, bytes);
+    if (!archive_dir.empty()) {
+        const auto archive = archive_dir / path.filename();
+        if (!ecm_io::same_file_resource(path, archive)) {
+            fs::create_directories(archive_dir);
+            ecm_io::FileLock archive_lock(archive.u8string());
+            const auto saved = load_prime95(archive, p);
+            if (saved && (saved->b1 > b1 || (saved->b1 == b1 && saved->residue != residue)))
+                throw std::runtime_error("different Prime95 save already occupies " + archive.u8string());
+            if (!saved || ecm_io::read_file(archive) != bytes) ecm_io::write_atomic(archive, bytes);
+        }
+    }
+    if (replace) ecm_io::write_atomic(path, bytes);
+    if (fingerprint) *fingerprint = ecm_io::fingerprint(bytes);
     return path;
+}
+
+void remove_pm1_checkpoints(const fs::path& root, unsigned p) {
+    const auto dir = root / ("p1-" + std::to_string(p));
+    if (fs::is_directory(fs::symlink_status(dir))) fs::remove_all(dir);
+    for (const auto* file : {"extension.pm1", "extension.progress",
+                             "extension.pm1.publish.tmp", "extension.progress.publish.tmp"})
+        fs::remove(root / file);
 }
 } // namespace ecm_pm1

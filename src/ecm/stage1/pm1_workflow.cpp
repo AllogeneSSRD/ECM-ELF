@@ -50,7 +50,9 @@ void BatchProgress::start(size_t index, uint64_t done, uint64_t total, uint64_t 
                           uint64_t target_b1, const char* phase) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (begin_==Clock::time_point{}) begin_=Clock::now();
-    lanes_.at(index)={done,total,old_b1,target_b1,phase,ecm_stage1_gpu_progress::SpeedWindow{}};
+    auto& lane = lanes_.at(index);
+    const auto start_cursor = lane.phase ? lane.start_cursor : done;
+    lane={done,total,old_b1,target_b1,start_cursor,phase,ecm_stage1_gpu_progress::SpeedWindow{}};
     report(true);
 }
 
@@ -66,12 +68,14 @@ void BatchProgress::report(bool force) {
     const auto now=Clock::now();
     if (!force && now-last_<std::chrono::milliseconds(250)) return;
     uint64_t done=0, total=0;
-    double eta=0, rate=0;
+    double eta=0, rate=0, task_equivalents=0;
     bool known=true, finishing_old=false;
     for (const auto& lane:lanes_) {
         if (!lane.phase) return;
         done+=lane.cursor;
         total+=lane.total;
+        if (lane.total > lane.start_cursor)
+            task_equivalents += double(lane.cursor - lane.start_cursor) / double(lane.total - lane.start_cursor);
         finishing_old=finishing_old || std::string_view(lane.phase)=="finish_old";
         if (lane.cursor<lane.total) {
             rate+=lane.speed.speed();
@@ -82,14 +86,15 @@ void BatchProgress::report(bool force) {
     // If K is 1, the old phase reaches the final cursor before the phase change.
     if (done==total && finishing_old) return;
     const double elapsed=std::chrono::duration<double>(now-begin_).count();
+    const double seconds_per_task = task_equivalents > 0 ? elapsed / task_equivalents : 0;
     char remaining[64]="--";
     if (known) std::snprintf(remaining,sizeof(remaining),"%.1fs",eta);
     const auto& first=lanes_.front();
     ecm_ts_fprintf(stdout,"pm1_stage1_progress: iter=%llu/%llu %.2f%% iter_per_s=%.3f elapsed=%.1fs ETA=%s"
-                   " first_iter=%llu old_B1=%llu target_B1=%llu phase=%s\n",
+                   " first_iter=%llu old_B1=%llu target_B1=%llu phase=%s s_per_curve=%.3f\n",
                    (unsigned long long)done,(unsigned long long)total,total ? 100.*done/total : 100.,
                    1000.*rate,elapsed,remaining,(unsigned long long)first.total,
-                   (unsigned long long)first.old_b1,(unsigned long long)first.target_b1,first.phase);
+                   (unsigned long long)first.old_b1,(unsigned long long)first.target_b1,first.phase,seconds_per_task);
     last_=now;
 }
 
@@ -254,15 +259,20 @@ Outcome run(const Pm1Task& task, uint64_t b2, const ecm_stage1::Stage1Options& o
     const auto name = prime95_name(task.p);
     const auto destination = prime95_dir / name;
     const auto existing = load_prime95(destination, task.p);
+    const auto local = ecm_io::same_file_resource(destination, owl_root / name)
+                           ? existing : load_prime95(owl_root / name, task.p);
     if (existing && existing->b1 > task.b1)
         throw std::runtime_error("requested B1 is below the existing Prime95 endpoint: " +
                                  destination.u8string());
 
     Phase current{owl_root, task.b1};
     std::optional<Phase> prior;
+    bool prior_owned = false;
     std::optional<Prime95Save> source;
     auto display = load_extension_progress(owl_root, task.p, task.b1);
-    if (!load_phase(current, task.p)) {
+    if (local && local->done && local->b1 == task.b1) {
+        source = local;
+    } else if (!load_phase(current, task.p)) {
         const auto roots = previous_roots(owl_root, task.p, task.b1);
         // Reuse the old phase chosen when this expansion began, even if its
         // endpoint was already saved before the new exponent could start.
@@ -270,7 +280,10 @@ Outcome run(const Pm1Task& task, uint64_t b2, const ecm_stage1::Stage1Options& o
             if (const auto found = roots.find(display->from); found != roots.end()) {
                 prior_lease.acquire((found->second / owner).u8string(), 0);
                 Phase candidate{found->second, found->first};
-                if (load_phase(candidate, task.p)) prior = std::move(candidate);
+                if (load_phase(candidate, task.p)) {
+                    prior = std::move(candidate);
+                    prior_owned = true;
+                }
                 else prior_lease.release();
             }
             if (!prior) display.reset();
@@ -289,6 +302,7 @@ Outcome run(const Pm1Task& task, uint64_t b2, const ecm_stage1::Stage1Options& o
                 if (!load_phase(candidate, task.p))
                     throw std::runtime_error("P-1 checkpoint disappeared");
                 prior = std::move(candidate);
+                prior_owned = true;
                 break;
             }
             if (!prior)
@@ -338,6 +352,10 @@ Outcome run(const Pm1Task& task, uint64_t b2, const ecm_stage1::Stage1Options& o
         const uint64_t old_b1 = current.extension ? current.extension->from : 0;
         uint64_t offset = display && display->from == old_b1 ? display->old_iterations : 0;
         if (prior) {
+            if (!prior_owned) {
+                prior_lease.acquire((prior->root / owner).u8string(), 0);
+                if (!load_phase(*prior, task.p)) throw std::runtime_error("P-1 checkpoint disappeared");
+            }
             prepare(*prior, task, options);
             const auto saved_b2 = prior->owl ? prior->owl->b2 : b2;
             const auto remaining = prior->bits - prior->cursor();
@@ -352,7 +370,14 @@ Outcome run(const Pm1Task& task, uint64_t b2, const ecm_stage1::Stage1Options& o
                                                                             : std::move(prior->owl->residue), 0};
             if (old.k != prior->bits || ecm_stage1_stop_requested())
                 return {};
+            const auto old_archive = load_prime95(prior->root / name, task.p);
+            write_prime95(prior->root, task.p, prior->bound, old.residue, nullptr,
+                          old_archive ? &*old_archive : nullptr);
             current.extension->base = std::move(old.residue);
+            current.extension->bits = current.bits;
+            current.extension->residue = current.extension->base;
+            write_extension(owl_root, task.p, task.b1, *current.extension);
+            remove_pm1_checkpoints(prior->root, task.p);
             prior.reset();
         }
         state = advance(current, task, b2, options, progress, lane, offset, 0, old_b1);
@@ -360,7 +385,8 @@ Outcome run(const Pm1Task& task, uint64_t b2, const ecm_stage1::Stage1Options& o
             return {};
     }
     Outcome result;
-    auto path = write_prime95(prime95_dir, task.p, task.b1, state.residue, &result.save_hash, existing ? &*existing : nullptr);
+    auto path = write_prime95(prime95_dir, task.p, task.b1, state.residue, &result.save_hash,
+                              existing ? &*existing : nullptr, owl_root);
     Integer g;
     mpz_import(g.v, state.residue.size(), -1, sizeof(uint32_t), 0, 0, state.residue.data());
     mpz_sub_ui(g.v, g.v, 1);
@@ -371,6 +397,7 @@ Outcome run(const Pm1Task& task, uint64_t b2, const ecm_stage1::Stage1Options& o
         std::vector<char> digits(mpz_sizeinbase(g.v, 10) + 2);
         result.factor = mpz_get_str(digits.data(), 10, g.v);
     }
+    remove_pm1_checkpoints(owl_root, task.p);
     ecm_ts_fprintf(stdout, "P-1 Stage1 complete M%u B1=%llu lane=%zu result=%s save=%s\n", task.p,
                    (unsigned long long)task.b1,lane+1,
                    result.whole_target ? "gcd=target" :

@@ -1066,9 +1066,11 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                 auto add = receiver.empty() ? save_dir / "worktodo.txt" : receiver;
                 add.replace_extension(".add");
                 const auto save = save_dir / ecm_pm1::prime95_name(task.p);
-                if (conflicts_with_output(save.u8string()) || same_path(save.u8string(), worktodo_path) ||
-                    same_path(save.u8string(), receiver.u8string()))
-                    throw std::runtime_error("Prime95 save conflicts with an input or output path");
+                for (const auto& endpoint : {save, root / save.filename()}) {
+                    if (conflicts_with_output(endpoint.u8string()) || same_path(endpoint.u8string(), worktodo_path) ||
+                        same_path(endpoint.u8string(), receiver.u8string()))
+                        throw std::runtime_error("Prime95 save conflicts with an input or output path");
+                }
                 const auto outcome = ecm_pm1::run(task, b2, options, root, save_dir,progress,lane);
                 if (!outcome.completed)
                     return {};

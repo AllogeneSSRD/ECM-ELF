@@ -91,6 +91,9 @@ def check(exe, output):
     def verify(directory, bound, residue, shared=False, prior_finished=()):
         target = directory if shared else root(directory, bound)
         assert (target / filename).read_bytes() == prime_file(p, bound, residue)
+        assert (root(directory, bound) / filename).read_bytes() == (target / filename).read_bytes()
+        assert not list(root(directory, bound).glob('extension.*'))
+        assert not (root(directory, bound) / f'p1-{p}').exists()
         assert (target / "worktodo.add").read_text().strip() == row(bound)
         assert not (directory / "worktodo.txt").read_text().strip()
         records = (directory / "finished.txt").read_text().splitlines()
@@ -144,8 +147,8 @@ def check(exe, output):
     assert samples[0] == ("0", str(total), str(total), "finish_old")
     assert (str(old_left), str(total), str(total), "extend") in samples
     assert samples[-1] == (str(total), str(total), str(total), "extend")
-    finished_owl = owl / f"{p}-{exponent.bit_length():09d}.p1"
-    assert int.from_bytes(finished_owl.read_bytes().split(b"\n", 1)[1][4:], "little") == pow(3, exponent, modulus)
+    assert not owl.exists()
+    assert (root(directory, old) / filename).read_bytes() == prime_file(p, old, pow(3, exponent, modulus))
     verify(directory, new, pow(3, 2 * p * lcm(new), modulus))
     assert not (root(directory, old) / "worktodo.add").exists()
 
@@ -161,6 +164,8 @@ def check(exe, output):
         data += base.to_bytes(16, "little") + residue.to_bytes(16, "little")
         root(directory, intermediate).mkdir(parents=True)
         (root(directory, intermediate) / "extension.pm1").write_bytes(data + struct.pack("<I", crc32c(data)))
+        if not reraised:
+            legacy = data + struct.pack("<I", crc32c(data))
         log = run(directory)
         assert f"k={pos}/{bits}" in log
         assert "graph=4 cached_powers=15" in log, log
@@ -206,11 +211,12 @@ def check(exe, output):
     (directory / filename).write_bytes(native)
     assert "using completed Prime95 endpoint" in run(directory)
     assert (directory / filename).read_bytes() == native
+    assert (root(directory, 17) / filename).read_bytes() == native
     assert (directory / "worktodo.add").read_text().strip() == row(17)
 
     directory = setup("damaged_extension", 59)
     root(directory, 59).mkdir(parents=True)
-    damaged = bytearray((root(output / "resume_extension", 59) / "extension.pm1").read_bytes())
+    damaged = bytearray(legacy)
     damaged[-1] ^= 1
     (root(directory, 59) / "extension.pm1").write_bytes(damaged)
     assert "invalid P-1 extension checkpoint" in run(directory, success=False)

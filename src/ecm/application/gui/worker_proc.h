@@ -132,6 +132,7 @@ private:
     bool saw_queue_done_ = false;
     long long completed_tasks_=0;
     std::set<std::string> task_factors_;
+    std::set<std::string> pm1_hits_;
     Stage2Status stage2_status_;
     Stage1NttStatus stage1_ntt_status_;
     unsigned long long restart_at_ms_ = 0;

@@ -22,6 +22,7 @@ class BatchProgress {
     using Clock = std::chrono::steady_clock;
     struct Lane {
         uint64_t cursor=0, total=0, old_b1=0, target_b1=0;
+        uint64_t start_cursor=0;
         const char* phase=nullptr;
         ecm_stage1_gpu_progress::SpeedWindow speed;
     };

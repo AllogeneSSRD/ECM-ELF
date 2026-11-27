@@ -498,8 +498,9 @@ void WorkerController::tick() {
                 w.last_traced_pct = w.progress.pct;
                 char buf[220];
                 if(w.progress.pm1)
-                    std::snprintf(buf,sizeof(buf),"P-1 progress pct=%.1f iter=%llu/%llu iter_per_s=%.3f eta=%.1f",
-                                  w.progress.pct,w.progress.pm1_done,w.progress.pm1_total,w.progress.iter_per_s,w.progress.eta_s);
+                    std::snprintf(buf,sizeof(buf),"P-1 progress pct=%.1f iter=%llu/%llu iter_per_s=%.3f eta=%.1f s_per_curve=%.3f",
+                                  w.progress.pct,w.progress.pm1_done,w.progress.pm1_total,w.progress.iter_per_s,w.progress.eta_s,
+                                  w.progress.s_per_curve);
                 else std::snprintf(buf, sizeof(buf),
                               "progress pct=%.1f s_per_curve=%.3f eta=%.1f done=%llu total=%llu bits=%llu gpu=%d",
                               w.progress.pct, w.progress.s_per_curve, w.progress.eta_s,
@@ -552,6 +553,9 @@ void WorkerController::tick() {
         }
         w.hits += static_cast<long long>(d.hits.size());
         w.tasks_done += d.tasks_done;
+        if (d.tasks_done || !d.hits.empty())
+            trace("worker " + std::to_string(w.index) + ": done=" + std::to_string(w.tasks_done) +
+                  " hits=" + std::to_string(w.hits));
         for (const HitInfo &h : d.hits) {
             notify({WorkerNotice::Kind::Hit,w.index,h.factor,now});   // highlight the row for 5 s
         }

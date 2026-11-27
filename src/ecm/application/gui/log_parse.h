@@ -87,6 +87,7 @@ struct HitInfo {
     std::string curve_model;
     std::string execution_target;
     std::string save;                    // save-file name (may be empty)
+    std::string task_key;                // P-1 modulus and B1 for retry deduplication.
 };
 
 struct Stage2Event {

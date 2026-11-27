@@ -1276,10 +1276,17 @@ void App::draw_logs(const ui::Fonts& fonts,const ecmgui::WorkerView* active_work
         const auto progress=ui::worker_progress(*active_worker,zh);
         const auto task=ui::worker_task(*active_worker,zh);
         const bool pm1=ecmgui::task_display(active_worker->task).pm1;
-        ImGui::PushTextWrapPos(0);ImGui::TextColored(active_worker->stage2?p.stage2:p.stage1,
-            pm1?"%s | %s | %s | %s iter/s | ETA %s":ecmgui_v2::ui::text("logs.worker_summary",zh),
-            active_worker->stage2?"Stage 2":"Stage 1",task.c_str(),progress.label.c_str(),
-            (pm1?progress.iterations:progress.speed).c_str(),progress.eta_detail.c_str());ImGui::PopTextWrapPos();
+        ImGui::PushTextWrapPos(0);
+        if (pm1) {
+            ImGui::TextColored(p.stage1,"Stage 1 | %s | %s | %s iter/s | %s s/curve | ETA %s | %s %lld / %lld",
+                task.c_str(),progress.label.c_str(),progress.iterations.c_str(),progress.speed.c_str(),
+                progress.eta_detail.c_str(),ui::text("worker.completed_hits",zh),active_worker->tasks_done,active_worker->hits);
+        } else {
+            ImGui::TextColored(active_worker->stage2?p.stage2:p.stage1,ui::text("logs.worker_summary",zh),
+                active_worker->stage2?"Stage 2":"Stage 1",task.c_str(),progress.label.c_str(),
+                progress.speed.c_str(),progress.eta_detail.c_str());
+        }
+        ImGui::PopTextWrapPos();
         if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",active_worker->task.c_str(),ui::worker_phase(*active_worker,zh).c_str());
         if(active_worker->stage2){
             const auto& status=active_worker->stage2_status;

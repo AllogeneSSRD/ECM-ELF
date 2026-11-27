@@ -1,10 +1,9 @@
-"""Run the CUDA Pminus1 worker and independently check both native save formats."""
+"""Run the CUDA Pminus1 worker and independently check its archive and handoff."""
 import argparse
 import json
 import math
 import struct
 import subprocess
-import zlib
 from pathlib import Path
 
 
@@ -16,17 +15,9 @@ def saved_residue(root, p, b1):
     assert (state, b_done, c_done, have_x) == (5, b1, b1, 1)
     assert len(prime) == 80 + words * 4
     assert (sum(n for n, in struct.iter_unpack("<I", prime[52:])) + words) & 0xffffffff == checksum
-    residue = int.from_bytes(prime[80:], "little")
-    bits = (2 * p * math.lcm(*range(1, b1 + 1))).bit_length()
-    files = list((root / f"p1-{p}").glob("*.p1"))
-    for path in files:
-        header, data = path.read_bytes().split(b"\n", 1)
-        if f" k={bits} bits={bits} ".encode() in header:
-            assert len(data) == 4 + 4 * ((p + 31) // 32)
-            assert zlib.crc32(data[4:]) == int.from_bytes(data[:4], "little")
-            assert int.from_bytes(data[4:], "little") == residue
-            return residue
-    raise AssertionError("missing completed GpuOwl checkpoint")
+    assert not (root / f"p1-{p}").exists()
+    assert not list(root.glob("extension.*"))
+    return int.from_bytes(prime[80:], "little")
 
 
 def run(exe, directory, p, b1, b2, ratio, after, factor, tail="", whole=False,
@@ -114,7 +105,9 @@ def new_receiver(exe, directory):
     run = subprocess.run([str(exe), "--config", str(config)], cwd=directory, capture_output=True, timeout=120)
     (directory / "worker.log").write_bytes(run.stdout + run.stderr)
     assert run.returncode == 0, run.stdout + run.stderr
-    assert (saves / "m0000037").is_file()
+    local = directory / "pm1" / "M37-B1-2"
+    assert saved_residue(local, 37, 2) == pow(3, 148, 2**37 - 1)
+    assert (local / "m0000037").read_bytes() == (saves / "m0000037").read_bytes()
     assert receiver.with_suffix(".add").read_text().splitlines() == [line]
     assert not receiver.exists() and not queue.read_text().strip()
     assert (directory / "worktodo.finished.txt").read_text().splitlines() == [line + " # P-1 Stage1 no factor"]

@@ -21,11 +21,15 @@ def main():
     for name in ("exe", "worker", "out"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--extend", action="store_true")
+    parser.add_argument("--hit", action="store_true")
     args = parser.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True)
     cfg, queue, screen, audit = (out / name for name in ("ecm.toml", "worktodo.txt", "worker.log", "gui.log"))
     p, old, target = 400381, 14000, 28000 if args.extend else 25000
+    if args.hit:
+        assert not args.extend
+        p, target = 37, 3
     queue.write_text(f"[Worker #1]\nPminus1=1,2,{p},-1,{target},0\n")
     if args.extend:
         exponent = 2 * p * lcm(old)
@@ -66,12 +70,15 @@ def main():
                              re.search(r"log_detail: worker=1 table_eta=([1-9]\d* s) \| log_eta=\1", trace)):
                 seen = True
             log = screen.read_text(encoding="utf-8", errors="replace") if screen.exists() else ""
-            if "queue done, 1 task" in log:
+            if "queue done, 1 task" in log and f"worker 1: done=1 hits={int(args.hit)}" in trace:
                 break
             time.sleep(.15)
         else:
             raise AssertionError(log[-2000:])
-        assert seen, trace[-3000:]
+        if not args.hit:
+            assert seen, trace[-3000:]
+        assert re.search(r'P-1 progress .*s_per_curve=(?:[1-9]\d*\.\d+|0\.\d*[1-9]\d*)', trace), trace[-3000:]
+        assert f"worker 1: done=1 hits={int(args.hit)}" in trace, trace[-3000:]
         assert f"P-1 Stage1 handoff M{p} B1={target} save only" in log
         samples = re.findall(r"pm1_stage1_progress: iter=(\d+)/(\d+) [^\r\n]+", log)
         assert len(samples) == 1 and samples[0][0] == samples[0][1], samples

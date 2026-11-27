@@ -42,5 +42,7 @@ void write_extension_progress(const std::filesystem::path& root, unsigned p, uin
                               const ExtensionProgress& progress);
 std::filesystem::path write_prime95(const std::filesystem::path& dir, unsigned p,
                                     uint64_t b1, const std::vector<uint32_t>& residue,
-                                    uint64_t* fingerprint = nullptr, const Prime95Save* previous = nullptr);
+                                    uint64_t* fingerprint = nullptr, const Prime95Save* previous = nullptr,
+                                    const std::filesystem::path& archive_dir = {});
+void remove_pm1_checkpoints(const std::filesystem::path& root, unsigned p);
 } // namespace ecm_pm1
