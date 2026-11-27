@@ -315,6 +315,7 @@ WorkerView WorkerController::make_worker(int index) const {
                 path_resolve(path_dir(ini_path_),ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,index));
     } else {
         auto& handoff = w.stage1_handoff;
+        handoff.pm1_prime95=stage1.handoff_mode_pm1=="prime95";
         handoff.legacy = !shared_log;
         if (shared_log) {
             handoff.local = stage1.handoff_mode == "ecm-elf";
@@ -464,7 +465,7 @@ void WorkerController::tick() {
         w.progress_lines += d.progress_lines;
         if(d.stage1_task_started) {
             w.progress={};w.resume_pct=-1;w.last_traced_pct=-1;
-            w.hist_s_per_curve.clear();w.stage1_ntt={};
+            w.hist_s_per_curve.clear();w.pm1_iter_history.clear();w.stage1_ntt={};
         }
         if(d.stage1_ntt.valid)w.stage1_ntt=d.stage1_ntt;
         if (d.last_progress.valid) {
@@ -481,6 +482,10 @@ void WorkerController::tick() {
                 w.hist_s_per_curve.push_back(static_cast<float>(w.progress.s_per_curve));
             }
             const std::size_t cap = 600;
+            if(w.progress.pm1_total && w.progress.iter_per_s>0) {
+                w.pm1_iter_history.push_back(static_cast<float>(w.progress.iter_per_s));
+                if(w.pm1_iter_history.size()>cap) w.pm1_iter_history.erase(w.pm1_iter_history.begin());
+            }
             if (w.hist_s_per_curve.size() > cap) {
                 w.hist_s_per_curve.erase(
                     w.hist_s_per_curve.begin(),
@@ -492,7 +497,10 @@ void WorkerController::tick() {
             if (w.progress.pct - w.last_traced_pct >= 1.0 || w.last_traced_pct < 0.0) {
                 w.last_traced_pct = w.progress.pct;
                 char buf[220];
-                std::snprintf(buf, sizeof(buf),
+                if(w.progress.pm1_total)
+                    std::snprintf(buf,sizeof(buf),"P-1 progress pct=%.1f iter=%llu/%llu iter_per_s=%.3f eta=%.1f",
+                                  w.progress.pct,w.progress.pm1_done,w.progress.pm1_total,w.progress.iter_per_s,w.progress.eta_s);
+                else std::snprintf(buf, sizeof(buf),
                               "progress pct=%.1f s_per_curve=%.3f eta=%.1f done=%llu total=%llu bits=%llu gpu=%d",
                               w.progress.pct, w.progress.s_per_curve, w.progress.eta_s,
                               w.progress.curves_done, w.progress.curves_total, w.progress.bits,
@@ -502,6 +510,7 @@ void WorkerController::tick() {
         }
         if (!d.last_start_line.empty()) {
             w.task = d.last_start_line;
+            w.effective_config=effective_config_text(w);
             trace("worker " + std::to_string(w.index) + ": task " + w.task);
         }
         if (!w.stage2 && (d.handoff.bits || !d.last_start_line.empty()))
@@ -601,7 +610,7 @@ std::string WorkerController::effective_config_text(const WorkerView& worker) co
     const int worker_index=worker.index;
     const auto section="workers."+std::to_string(worker_index);
     std::ostringstream out;
-    out<<"next task = "<<(worker.stage2?"ECMSTAGE2":"ECMSTAGE1")<<"\n"
+    out<<"next task = "<<(worker.stage2?"ECMSTAGE2":task_display(worker.task).pm1?"Pminus1":"ECMSTAGE1")<<"\n"
        <<"exe = "<<worker.exe<<"\n";
     std::set<std::string> keys;
     for(const auto &binding:ecm_config::stage1_bindings)keys.insert(binding.key);

@@ -45,6 +45,7 @@ struct ProgressInfo {
     unsigned long long curves_total = 0; // only in the stage1: form
     unsigned long long bits = 0;         // "+789 bits"
     unsigned long long columns = 0;      // "+256 columns" (GPU Edwards NAF)
+    unsigned long long pm1_done = 0, pm1_total = 0; // Verified exponent iterations across the batch.
 };
 
 // NTT Stage1 reports scalar columns/bits within a curve batch. Keep the two

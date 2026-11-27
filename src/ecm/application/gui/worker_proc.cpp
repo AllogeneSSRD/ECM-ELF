@@ -383,7 +383,8 @@ void WorkerProc::drain(DrainedOutput &out) {
                 out.events.push_back(pl.text);       // timestamped, ANSI-free
                 if (pl.queue_done) saw_queue_done_ = true;
                 if (!pl.start_line.empty()) out.last_start_line = pl.start_line;
-                if (!pl.hit.factor.empty() && task_factors_.insert(pl.hit.factor).second) out.hits.push_back(pl.hit);
+                if (!pl.hit.factor.empty() && (pl.hit.curve_model=="P-1" || task_factors_.insert(pl.hit.factor).second))
+                    out.hits.push_back(pl.hit);
                 if (pl.p95.valid) out.p95.push_back(pl.p95);
                 break;
             case LogKind::Raw:

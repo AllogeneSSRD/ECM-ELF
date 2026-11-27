@@ -66,6 +66,11 @@ enum class ProgressLine { None, Intermediate, Complete };
 ProgressLine classify_progress_line(const char* text) {
     constexpr std::string_view ntt_prefix = "stage1_ntt_progress: ";
     const std::string_view line(text);
+    if (line.rfind("pm1_stage1_progress: iter=",0)==0) {
+        unsigned long long done=0,total=0;
+        if (std::sscanf(text,"pm1_stage1_progress: iter=%llu/%llu",&done,&total)==2 && total && done<=total)
+            return done==total ? ProgressLine::Complete : ProgressLine::Intermediate;
+    }
     if (line.substr(0, ntt_prefix.size()) == ntt_prefix) {
         const auto progress = line.substr(ntt_prefix.size());
         size_t field_size = 0;

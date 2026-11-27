@@ -50,13 +50,14 @@ inline WorkerProgress worker_progress(const ecmgui::WorkerView& worker,bool zh) 
     if(!worker.stage2&&std::isfinite(p.iter_per_s)&&p.iter_per_s>0){std::snprintf(text,sizeof(text),"%.0f",p.iter_per_s);out.iterations=text;}
     if(p.valid&&std::isfinite(p.pct)) {
         const double pct=std::clamp(p.pct,0.,100.);out.fraction=static_cast<float>(pct/100.);
-        if(p.curves_total&&(worker.stage2||!worker.stage1_ntt.valid))std::snprintf(text,sizeof(text),"%llu / %llu  (%.1f%%)",p.curves_done,p.curves_total,pct);
+        if(p.pm1_total)std::snprintf(text,sizeof(text),"%.1f%%  %llu / %llu iter",pct,p.pm1_done,p.pm1_total);
+        else if(p.curves_total&&(worker.stage2||!worker.stage1_ntt.valid))std::snprintf(text,sizeof(text),"%llu / %llu  (%.1f%%)",p.curves_done,p.curves_total,pct);
         else std::snprintf(text,sizeof(text),"%.1f%%",pct);
         out.label=text;
         if(std::isfinite(p.s_per_curve)&&p.s_per_curve>0){
             std::snprintf(text,sizeof(text),"%.2f",p.s_per_curve);out.speed=text;
         }
-        if((worker.stage2&&worker.stage2_status.queue_events?!worker.stop_requested:p.s_per_curve>0)&&
+        if((worker.stage2&&worker.stage2_status.queue_events?!worker.stop_requested:(p.pm1_total || p.s_per_curve>0))&&
             std::isfinite(p.eta_s)&&p.eta_s>=0){
             out.eta=eta_text(p.eta_s);out.eta_detail=eta_text(p.eta_s,true);
         }
@@ -76,9 +77,15 @@ inline std::string worker_device_name(const ecmgui::WorkerView& worker) {
 inline std::string worker_task(const ecmgui::WorkerView& worker,bool zh) {
     const auto task=ecmgui::task_display(worker.task);
     if(!task.valid)return text("worker.no_task",zh);
-    std::string line=task.number;
+    std::string line=task.pm1?"P-1 "+task.number:task.number;
     if(task.from_save)line+=" (Stage1 save)";
     if(task.has_factors)line+=" / "+std::string(text("worker.known_factors",zh));
+    if(task.pm1) {
+        const auto b2=worker.stage1_execution.details.find("B2");
+        const auto batch=worker.stage1_execution.details.find("batch");
+        if(batch!=worker.stage1_execution.details.end() && batch->second!="1") line+="  [1/"+batch->second+"]";
+        return line+"  B1="+task.b1+"  B2="+(b2==worker.stage1_execution.details.end()?task.b2:b2->second);
+    }
     const auto curves=worker.stage2&&worker.stage2_status.valid?worker.stage2_status.total:
         worker.stage1_ntt.valid?worker.stage1_ntt.total:task.curves;
     line+="  curves = "+(curves?std::to_string(curves):std::string("--"));
@@ -88,6 +95,8 @@ inline std::string worker_task(const ecmgui::WorkerView& worker,bool zh) {
 inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bool zh, bool details = false) {
     if (!execution.valid())
         return {};
+    if (execution.details.count("method") && execution.details.at("method")=="pm1")
+        return "Stage1 CUDA/NTT | length="+execution.details.at("length")+" | batch="+execution.details.at("batch");
     std::string line = std::string(!details && execution.backend=="ntt" ? "Stage1" : text("worker.stage1_execution", zh)) + " ";
     line += text(execution.curve == "ed" ? "worker.curve_edwards" : "worker.curve_montgomery", zh);
     if (execution.curve == "mont")
@@ -252,6 +261,11 @@ inline std::string stage1_handoff(const ecmgui::Stage1HandoffPlan& plan,
     return line;
 }
 
+inline std::string worker_handoff(const ecmgui::WorkerView& worker,bool zh,bool details=false) {
+    if(ecmgui::task_display(worker.task).pm1)
+        return std::string("Stage2 → ")+(worker.stage1_handoff.pm1_prime95?"Prime95":text("worker.stage1_handoff_off",zh));
+    return stage1_handoff(worker.stage1_handoff,worker.stage1_execution,zh,details);
+}
 inline std::string stage2_shape(const ecmgui::Stage2Curve& s) {
     if(!s.valid)return {};
     const auto value=[](unsigned long long n){return n?std::to_string(n):std::string("--");};

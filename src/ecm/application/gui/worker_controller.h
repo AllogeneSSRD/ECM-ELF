@@ -16,6 +16,7 @@ const char *state_key(WorkerRunState state);
 const WorkerRunState *all_worker_states(int *count);
 
 struct Stage1HandoffPlan {
+    bool pm1_prime95=true;
     bool local = false, prime95 = false, local_fallback = false, edwards_only = false, legacy = false;
     std::string local_queue, local_workers, prime95_queue, prime95_workers, prime95_save_dir;
     std::vector<Stage2WorkerRule> local_worker_rules;
@@ -59,6 +60,7 @@ struct WorkerView {
     // s/curve, and "bigger is worse" is the axis the operator compares against the ETA
     // (user request 2026-09-29: "曲线/秒 改为 秒/曲线").
     std::vector<float> hist_s_per_curve;
+    std::vector<float> pm1_iter_history;
     unsigned long long last_sample_ms = 0;
     bool duplicate_device = false;    // another worker uses the same device (warning)
     bool old_driver = false;          // worker exe printed "No input number on stdin"

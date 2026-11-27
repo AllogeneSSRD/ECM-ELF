@@ -946,6 +946,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
         return 1;
 
     bool saw_task = false;
+    int processed = 0;
     const bool full_sync = (cfg.sync_mode == "full");
     const QueuePaths paths{worktodo_path, finished_path, exe_dir, sync1, sync2, worker, full_sync};
     const auto read_task = [&](QueueItem& item) -> QueueReadStatus {
@@ -995,13 +996,16 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
             for (const auto& lane : tasks) exponents.push_back(lane.p);
             auto plan = ecm_mersenne_ntt::select_pm1_batch(opt.execution.device_index, exponents, options.execution.ntt);
             tasks.resize(plan.batch);
-            ecm_ts_fprintf(stdout,"pm1_stage1_batch: length=%u batch=%u available=%u target=%u%%\n",
-                           plan.ntt.length,plan.batch,plan.available,plan.ntt.batch_target_percent);
             options.execution.ntt = plan.ntt;
             const bool needs_ratio = std::any_of(tasks.begin(),tasks.end(),[](const auto& lane){return !lane.b2;});
             const auto ratio = needs_ratio ? ecm_config::read_stage2(ecm_config::selected_entries(
                 parsed_config.lines, worker, {"b2_ratio"}, ini)).b2_ratio : 0;
-            const auto compute = [&](const Pm1Task& task) -> std::optional<CompletedWorktodo> {
+            ecm_ts_fprintf(stdout,"pm1_stage1_batch: length=%u batch=%u available=%u target=%u%% B2=%llu\n",
+                           plan.ntt.length,plan.batch,plan.available,plan.ntt.batch_target_percent,
+                           (unsigned long long)pm1_effective_b2(tasks.front(),ratio));
+            ecm_pm1::BatchProgress progress(tasks.size());
+            const auto compute = [&](size_t lane) -> std::optional<CompletedWorktodo> {
+                const auto& task=tasks[lane];
                 const auto b2 = pm1_effective_b2(task, ratio);
                 const auto root = fs::u8path(ini_dir) / "pm1" /
                     ("M" + std::to_string(task.p) + "-B1-" + std::to_string(task.b1));
@@ -1017,7 +1021,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                 if (conflicts_with_output(save.u8string()) || same_path(save.u8string(), worktodo_path) ||
                     same_path(save.u8string(), receiver.u8string()))
                     throw std::runtime_error("Prime95 save conflicts with an input or output path");
-                const auto outcome = ecm_pm1::run(task, b2, options, root, save_dir);
+                const auto outcome = ecm_pm1::run(task, b2, options, root, save_dir,progress,lane);
                 if (!outcome.completed)
                     return {};
                 CompletedWorktodo done;
@@ -1041,15 +1045,18 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                 return done;
             };
             std::vector<std::future<std::optional<CompletedWorktodo>>> pending;
-            for (const auto& lane : tasks)
+            for (size_t lane=0;lane<tasks.size();++lane)
                 pending.push_back(std::async(tasks.size()==1 ? std::launch::deferred : std::launch::async,
-                                             compute,std::cref(lane)));
+                                             compute,lane));
             const auto receipt = worktodo_path + ".stage1_completed_worker" + std::to_string(worker);
-            for (auto& lane : pending) {
-                auto done=lane.get();
+            for (size_t lane=0;lane<pending.size();++lane) {
+                auto done=pending[lane].get();
                 if (!done) return QueueReadStatus::Error;
                 if (!ecm_worktodo_store_completion(receipt,*done,error)) throw std::runtime_error(error);
                 if (!finish_record(paths)) return QueueReadStatus::Error;
+                ecm_ts_fprintf(stdout,"P-1 Stage1 handoff M%u B1=%llu %s\n",tasks[lane].p,
+                               (unsigned long long)tasks[lane].b1,done->pm1_line.empty() ? "save only" : "published to Prime95");
+                ecm_ts_fprintf(stdout,"stage1_task_done: processed=%d\n",++processed);
             }
             return QueueReadStatus::Completed;
 #else
@@ -1141,7 +1148,6 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
         }
         return QueueReadStatus::Ready;
     };
-    int processed = 0;
     for (;;) {
         if (ecm_stage1_stop_requested())
             return 1;
@@ -1158,7 +1164,6 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
         if (read == QueueReadStatus::Empty)
             break;
         if (read == QueueReadStatus::Completed) {
-            ++processed;
             continue;
         }
         if (read == QueueReadStatus::MarkError) {

@@ -11,6 +11,8 @@ struct TaskDisplay {
     unsigned long long curves=0;
     unsigned long long mersenne_bits=0;
     std::string number;
+    bool pm1=false;
+    std::string b1,b2;
 };
 // Presentation only: never return the raw assignment, AID, factor values or path.
 inline TaskDisplay task_display(const std::string &line) {
@@ -23,7 +25,7 @@ inline TaskDisplay task_display(const std::string &line) {
     auto keyword=trim(line.substr(0,eq));
     for(char &c:keyword)c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     if(keyword=="ECMSTAGE2PART")keyword="ECMSTAGE2";
-    if(keyword!="ECM" && keyword!="ECM2" && keyword!="ECMSTAGE1" && keyword!="ECMSTAGE2" && keyword!="ECMSTAGE2N")return out;
+    if(keyword!="ECM" && keyword!="ECM2" && keyword!="ECMSTAGE1" && keyword!="ECMSTAGE2" && keyword!="ECMSTAGE2N" && keyword!="PMINUS1")return out;
     std::vector<std::string> values;std::vector<bool> quoted;
     std::string value;bool in_quote=false,had_quote=false;
     for(size_t i=eq+1;i<=line.size();++i) {
@@ -56,6 +58,20 @@ inline TaskDisplay task_display(const std::string &line) {
     };
     size_t offset=0;
     const bool hex_aid=values[0].size()==32 && values[0].find_first_not_of("0123456789abcdefABCDEF")==values[0].npos;
+    if(keyword=="PMINUS1") {
+        offset=(hex_aid || values[0].empty() || values[0]=="N/A" || values[0]=="n/a") ? 1 : 0;
+        if(values.size()<offset+6 || values[offset]!="1" || values[offset+1]!="2" || values[offset+3]!="-1" ||
+           !count(values[offset+2]) || !count(values[offset+4]) || values[offset+5].empty() ||
+           values[offset+5].find_first_not_of("0123456789")!=std::string::npos)return out;
+        out.valid=out.pm1=true;
+        out.has_aid=hex_aid;
+        out.has_factors=values.size()>offset+6 && quoted.back() && !values.back().empty();
+        out.number="M"+values[offset+2];
+        out.mersenne_bits=count(values[offset+2]);
+        out.b1=values[offset+4];
+        out.b2=values[offset+5];
+        return out;
+    }
     if(keyword=="ECMSTAGE2N") {
         if(values[0].empty()||values[0]=="N/A"||hex_aid||(values.size()>1&&!numeric(values[1])))offset=1;
         if(offset>=values.size()||values[offset].empty())return out;
@@ -89,6 +105,7 @@ inline TaskDisplay task_display(const std::string &line) {
 inline std::string task_caption(const std::string &line,const std::string &factor_label,
                                const std::string &aid_label,const std::string &unavailable) {
     const auto d=task_display(line);if(!d.valid)return unavailable;
-    return d.number+(d.has_factors?" / "+factor_label:"")+(d.has_aid?"  |  "+aid_label:"");
+    const auto number=d.pm1?"P-1 "+d.number+"  B1="+d.b1+"  B2="+d.b2:d.number;
+    return number+(d.has_factors?" / "+factor_label:"")+(d.has_aid?"  |  "+aid_label:"");
 }
 } // namespace ecmgui

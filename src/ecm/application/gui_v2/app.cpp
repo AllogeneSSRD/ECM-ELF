@@ -830,7 +830,7 @@ std::string App::worker_summary(const ecmgui::WorkerView& worker,bool zh)const {
             summary+="\n"+construction;
         }
     } else {
-        summary += "  |  " + ui::stage1_handoff(worker.stage1_handoff, worker.stage1_execution, zh);
+        summary += "  |  " + ui::worker_handoff(worker, zh);
         const auto execution = ui::stage1_execution(worker.stage1_execution, zh);
         if (!execution.empty())
             summary += "\n" + execution;
@@ -937,7 +937,9 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
         std::vector<SummaryRow> summaries;auto* table_draw=ImGui::GetWindowDrawList();
         const auto table_clip_min=ImGui::GetWindowDrawList()->GetClipRectMin(),table_clip_max=ImGui::GetWindowDrawList()->GetClipRectMax();
         float body_top=table_clip_min.y;
-        const char* labels[]{"#",ecmgui_v2::ui::text("worker.action",zh),ecmgui_v2::ui::text("worker.device",zh),ecmgui_v2::ui::text("worker.state",zh),ecmgui_v2::ui::text("worker.progress",zh),ecmgui_v2::ui::text("metrics.iterations_per_second",zh),ecmgui_v2::ui::text("metrics.seconds_per_curve",zh),"ETA",ecmgui_v2::ui::text("worker.completed_hits",zh)};
+        const bool has_pm1=std::any_of(controller.workers().begin(),controller.workers().end(),
+            [](const auto& worker){return ecmgui::task_display(worker.task).pm1;});
+        const char* labels[]{"#",ecmgui_v2::ui::text("worker.action",zh),ecmgui_v2::ui::text("worker.device",zh),ecmgui_v2::ui::text("worker.state",zh),ecmgui_v2::ui::text("worker.progress",zh),has_pm1?"iter/s":ecmgui_v2::ui::text("metrics.iterations_per_second",zh),ecmgui_v2::ui::text("metrics.seconds_per_curve",zh),"ETA",ecmgui_v2::ui::text("worker.completed_hits",zh)};
         for(int i=0;i<9;++i){const bool stretch=i!=0&&(compress_columns||i==4);
             ImGui::TableSetupColumn(labels[i],stretch?ImGuiTableColumnFlags_WidthStretch:ImGuiTableColumnFlags_WidthFixed,stretch?widths[i]:widths[i]*scale);}
         ImGui::TableHeadersRow();
@@ -992,7 +994,9 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
             const auto progress_shown=ui::fitted_label(progress.label.c_str(),ImGui::GetContentRegionAvail().x-8*scale);
             ImGui::ProgressBar(progress.fraction,{-1,control_height},progress_shown.c_str());ImGui::PopStyleColor();
             if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",progress.label.c_str());
-            ImGui::TableSetColumnIndex(5);value_cell(progress.iterations,p.fg);
+            ImGui::TableSetColumnIndex(5);
+            value_cell(has_pm1 && !ecmgui::task_display(worker.task).pm1 && progress.iterations!="--" ?
+                       progress.iterations+" /c" : progress.iterations,p.fg);
             ImGui::TableSetColumnIndex(6);value_cell(progress.speed,p.fg);
             ImGui::TableSetColumnIndex(7);value_cell(progress.eta,p.fg);
             ImGui::TableSetColumnIndex(8);value_cell(std::to_string(worker.tasks_done)+" / "+std::to_string(worker.hits),p.fg);
@@ -1069,15 +1073,19 @@ void App::draw_worker_speed(const ui::Fonts& fonts) {
         const auto title=worker.name+" / "+(worker.stage2?"Stage2":"Stage1");
         const auto shown=ui::fitted_label(title.c_str(),ImGui::GetContentRegionAvail().x);
         ImGui::TextUnformatted(shown.c_str());if(ImGui::IsItemHovered())ImGui::SetTooltip("#%d %s",worker.index,title.c_str());
-        worker_speed_samples+=worker.hist_s_per_curve.size();ui::ChartMetrics metrics;
-        if(!worker.hist_s_per_curve.empty()){
-            std::vector<ui::ChartSeries> series{{ecmgui_v2::ui::text("metrics.seconds_per_curve",zh),worker.stage2?p.stage2:p.stage1,{}}};
-            for(size_t i=0;i<worker.hist_s_per_curve.size();++i)series[0].points.push_back({static_cast<double>(i+1),worker.hist_s_per_curve[i]});
-            const auto value=ui::worker_progress(worker,zh).speed+" s/curve";
+        const bool pm1=ecmgui::task_display(worker.task).pm1;
+        const auto& samples=pm1?worker.pm1_iter_history:worker.hist_s_per_curve;
+        worker_speed_samples+=samples.size();ui::ChartMetrics metrics;
+        if(!samples.empty()){
+            const char* unit=pm1?"iter/s":"s/curve";
+            std::vector<ui::ChartSeries> series{{pm1?unit:ecmgui_v2::ui::text("metrics.seconds_per_curve",zh),worker.stage2?p.stage2:p.stage1,{}}};
+            for(size_t i=0;i<samples.size();++i)series[0].points.push_back({static_cast<double>(i+1),samples[i]});
+            const auto progress=ui::worker_progress(worker,zh);
+            const auto value=(pm1?progress.iterations:progress.speed)+" "+unit;
             ui::ChartFormat format;format.legend_controls=false;format.show_y_ticks=false;format.show_axis_titles=false;
-            format.auto_y=state.ui_worker_chart_auto_y;format.integer_x=true;format.corner_text=value.c_str();format.y_format="%.2f s/curve";format.x_format="%.0f";format.metrics=&metrics;
-            ui::chart("workspace-speed",series,ecmgui_v2::ui::text("chart.sample",zh),"s/curve",zh,0,88,format);
-        }else {ImGui::PushTextWrapPos(0);ImGui::TextDisabled("%s",ecmgui_v2::ui::text("worker.waiting_curve_time",zh));ImGui::PopTextWrapPos();}
+            format.auto_y=state.ui_worker_chart_auto_y;format.integer_x=true;format.corner_text=value.c_str();format.y_format=pm1?"%.0f iter/s":"%.2f s/curve";format.x_format="%.0f";format.metrics=&metrics;
+            ui::chart("workspace-speed",series,ecmgui_v2::ui::text("chart.sample",zh),unit,zh,0,88,format);
+        }else {ImGui::PushTextWrapPos(0);ImGui::TextDisabled("%s",ecmgui_v2::ui::text(pm1?"waiting_for_progress":"worker.waiting_curve_time",zh));ImGui::PopTextWrapPos();}
         ImGui::EndGroup();worker_chart_rects.push_back({top,ImGui::GetItemRectMax()});worker_chart_metrics.push_back(metrics);ImGui::PopID();
     };
     if(worker_chart_columns==2){
@@ -1165,7 +1173,7 @@ void App::draw_inspector(const ui::Fonts& fonts) {
             const auto execution = ui::stage1_execution(worker->stage1_execution, zh, true);
             if (!execution.empty())
                 ImGui::TextWrapped("%s", execution.c_str());
-            ImGui::TextWrapped("%s", ui::stage1_handoff(worker->stage1_handoff, worker->stage1_execution, zh, true).c_str());
+            ImGui::TextWrapped("%s", ui::worker_handoff(*worker, zh, true).c_str());
         }
         if (ImGui::Button(ecmgui_v2::ui::text("open_worker_folder",zh))) ecmgui::open_in_explorer(worker->working_dir);
         ImGui::TextWrapped("%s", worker->effective_config.c_str());
@@ -1267,7 +1275,11 @@ void App::draw_logs(const ui::Fonts& fonts,const ecmgui::WorkerView* active_work
     if(active_worker){
         const auto progress=ui::worker_progress(*active_worker,zh);
         const auto task=ui::worker_task(*active_worker,zh);
-        ImGui::PushTextWrapPos(0);ImGui::TextColored(active_worker->stage2?p.stage2:p.stage1,ecmgui_v2::ui::text("logs.worker_summary",zh),active_worker->stage2?"Stage 2":"Stage 1",task.c_str(),progress.label.c_str(),progress.speed.c_str(),progress.eta_detail.c_str());ImGui::PopTextWrapPos();
+        const bool pm1=ecmgui::task_display(active_worker->task).pm1;
+        ImGui::PushTextWrapPos(0);ImGui::TextColored(active_worker->stage2?p.stage2:p.stage1,
+            pm1?"%s | %s | %s | %s iter/s | ETA %s":ecmgui_v2::ui::text("logs.worker_summary",zh),
+            active_worker->stage2?"Stage 2":"Stage 1",task.c_str(),progress.label.c_str(),
+            (pm1?progress.iterations:progress.speed).c_str(),progress.eta_detail.c_str());ImGui::PopTextWrapPos();
         if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",active_worker->task.c_str(),ui::worker_phase(*active_worker,zh).c_str());
         if(active_worker->stage2){
             const auto& status=active_worker->stage2_status;
@@ -1295,7 +1307,7 @@ void App::draw_logs(const ui::Fonts& fonts,const ecmgui::WorkerView* active_work
             const auto execution = ui::stage1_execution(active_worker->stage1_execution, zh, true);
             if (!execution.empty())
                 ImGui::TextWrapped("%s", execution.c_str());
-            ImGui::TextWrapped("%s", ui::stage1_handoff(active_worker->stage1_handoff, active_worker->stage1_execution, zh, true).c_str());
+            ImGui::TextWrapped("%s", ui::worker_handoff(*active_worker, zh, true).c_str());
         }
     }
     auto found=log_views_.find(log_id);if(found==log_views_.end())found=log_views_.emplace(log_id,LogView{state.ui_raw_log,state.ui_follow_log,true}).first;

@@ -570,6 +570,49 @@ ParsedLine parse_line(const std::string &line) {
     out.text = strip_ansi(line);
     split_timestamp(out.text, out.timestamp, out.plain);
     const std::string &p = out.plain;
+    if (starts_with(p,"pm1_stage1_batch:")) {
+        long long length=0,batch=0;
+        if (read_kv_int(p,"length",length) && length>0 && read_kv_int(p,"batch",batch) && batch>0) {
+            out.stage1.backend="ntt";
+            out.stage1.details={{"method","pm1"},{"length",std::to_string(length)},{"batch",std::to_string(batch)}};
+            const auto pos=p.find(" B2=");
+            if (pos!=p.npos) {
+                const auto start=pos+4, end=p.find_first_not_of("0123456789",start);
+                if (end!=start) out.stage1.details["B2"]=p.substr(start,end-start);
+            }
+            out.kind=LogKind::Event;
+        }
+        return out;
+    }
+    if (starts_with(p,"pm1_stage1_progress:")) {
+        auto& pr=out.progress;
+        if (std::sscanf(p.c_str(),"pm1_stage1_progress: iter=%llu/%llu",&pr.pm1_done,&pr.pm1_total)!=2 ||
+            !pr.pm1_total || pr.pm1_done>pr.pm1_total) return out;
+        pr.valid=pr.gpu=true;
+        pr.pct=100.*pr.pm1_done/pr.pm1_total;
+        read_after(p," iter_per_s=",pr.iter_per_s);
+        read_after(p," elapsed=",pr.elapsed_s);
+        if (!read_after(p," ETA=",pr.eta_s)) pr.eta_s=-1;
+        out.kind=LogKind::Progress;
+        return out;
+    }
+    if (starts_with(p,"P-1 Stage1 ") || starts_with(p,"P-1 verified ")) {
+        out.kind=LogKind::Event;
+        if (starts_with(p,"P-1 Stage1 complete ")) {
+            const auto pos=p.find(" result=");
+            if (pos!=p.npos) {
+                const auto begin=pos+8, end=p.find(' ',begin);
+                const auto factor=p.substr(begin,end-begin);
+                if (!factor.empty() && factor.find_first_not_of("0123456789")==factor.npos) {
+                    out.is_hit=true;
+                    out.factor=out.hit.factor=factor;
+                    out.hit.execution_target="gpu";
+                    out.hit.curve_model="P-1";
+                }
+            }
+        }
+        return out;
+    }
     if (starts_with(p, "stage1_handoff:")) {
         long long bits = 0, worker = 0;
         if (read_kv_int(p, "bits", bits) && bits > 0 &&

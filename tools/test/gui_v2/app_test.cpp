@@ -731,6 +731,24 @@ int main(int argc,char** argv){
         return 0;
     }
     pause_schedule_rules();
+    std::string localization_error;assert(ecmgui_v2::ui::load_languages(ecmgui::exe_dir()+"/localization/v2",localization_error));
+    {
+        ecmgui::WorkerView worker;
+        worker.task="Pminus1=0123456789abcdef0123456789abcdef,1,2,37,-1,17,0,60,0,\"223\"";
+        worker.stage1_execution=ecmgui::parse_line("pm1_stage1_batch: length=2 batch=2 available=2 target=95% B2=1700").stage1;
+        assert(ecmgui_v2::ui::worker_task(worker,false)=="P-1 M37 / Known factors  [1/2]  B1=17  B2=1700");
+        assert(ecmgui_v2::ui::stage1_execution(worker.stage1_execution,false)=="Stage1 CUDA/NTT | length=2 | batch=2");
+        assert(ecmgui_v2::ui::worker_handoff(worker,false)=="Stage2 → Prime95");
+        worker.progress=ecmgui::parse_line("pm1_stage1_progress: iter=23/100 23.00% iter_per_s=0.000 elapsed=0.0s ETA=--").progress;
+        auto display=ecmgui_v2::ui::worker_progress(worker,false);
+        assert(display.label=="23.0%  23 / 100 iter" && display.iterations=="--" && display.eta=="--");
+        worker.progress=ecmgui::parse_line("pm1_stage1_progress: iter=3000000000/6000000000 50.00% iter_per_s=512.000 elapsed=10.0s ETA=72.0s").progress;
+        display=ecmgui_v2::ui::worker_progress(worker,false);
+        assert(display.fraction==.5f && display.iterations=="512" && display.speed=="--" && display.eta_detail=="72 s (1 m 12 s)");
+        assert(ecmgui::parse_line("P-1 Stage1 complete M37 B1=17 lane=1 result=223 save=m0000037").hit.factor=="223");
+        assert(!ecmgui::parse_line("P-1 Stage1 complete M37 result=gcd=target save=m0000037").is_hit);
+        assert(ecmgui::parse_line("P-1 verified k=30/30 errors=0 M37 B1=17 lane=1").kind==ecmgui::LogKind::Event);
+    }
     {ecmgui::WorkerView worker;worker.stage2=true;auto& status=worker.stage2_status;
      const auto apply=[&](const char* line){status.apply(ecmgui::parse_line(line).stage2);};
      apply("stage2_plan: save=f.save requested=5 available=5 completed=2 B2=1000 D=210");
@@ -746,7 +764,6 @@ int main(int argc,char** argv){
      assert(status.progress(false).s_per_curve==0&&ecmgui_v2::ui::worker_progress(worker,false).speed=="--");
      apply("stage2_plan: save=next.save requested=5 available=5 completed=0 B2=1000 D=210");
      assert(status.progress(false).s_per_curve==0&&status.measured_curves==0);}
-    std::string localization_error;assert(ecmgui_v2::ui::load_languages(ecmgui::exe_dir()+"/localization/v2",localization_error));
     {ecmgui::WorkerView worker;worker.resume_pct=23.8;
      auto display=ecmgui_v2::ui::worker_progress(worker,false);assert(display.label=="23.8% (resumed)"&&display.eta=="--"&&display.fraction>.237f&&display.fraction<.239f);
      worker.progress.valid=true;worker.progress.pct=50;worker.progress.curves_done=5;worker.progress.curves_total=10;worker.progress.s_per_curve=2;worker.progress.eta_s=65;

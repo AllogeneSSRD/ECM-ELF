@@ -1937,7 +1937,8 @@ void App::draw_workers_table() {
             }
             if (w.progress.valid) {
                 char overlay[80];std::snprintf(overlay,sizeof(overlay),"%llu / %llu",w.progress.curves_done,w.progress.curves_total);
-                bounded_progress(w.progress.pct/100.0,w.stage2?overlay:nullptr);
+                if(w.progress.pm1_total)std::snprintf(overlay,sizeof(overlay),"%llu / %llu iter",w.progress.pm1_done,w.progress.pm1_total);
+                bounded_progress(w.progress.pct/100.0,(w.stage2||w.progress.pm1_total)?overlay:nullptr);
             } else if (w.resume_pct >= 0.0) {
                 // Resumed run: the driver has not printed a progress line yet (its schedule
                 // is gated on the restored batch counter), but we know where it stands.
@@ -1959,7 +1960,9 @@ void App::draw_workers_table() {
 
             ImGui::TableSetColumnIndex(5);
             if (i == 0) speed_x = ImGui::GetCursorScreenPos().x;
-            if (w.progress.s_per_curve > 0.0) {
+            if(w.progress.pm1_total && w.progress.iter_per_s>0) {
+                ImGui::Text("%.0f iter/s",w.progress.iter_per_s);
+            } else if (w.progress.s_per_curve > 0.0) {
                 ImGui::Text("%.2f s/c", w.progress.s_per_curve);
             } else {
                 ImGui::TextUnformatted("-");
@@ -1967,7 +1970,7 @@ void App::draw_workers_table() {
 
             ImGui::TableSetColumnIndex(6);
             if (i == 0) eta_x = ImGui::GetCursorScreenPos().x;
-            if (w.progress.eta_s > 0.0) ImGui::Text("%.0f s", w.progress.eta_s);
+            if (w.progress.eta_s > 0.0 || (w.progress.pm1_total && w.progress.eta_s==0)) ImGui::Text("%.0f s", w.progress.eta_s);
             else ImGui::TextUnformatted("-");
 
             ImGui::TableSetColumnIndex(7);
@@ -2469,13 +2472,23 @@ void App::draw_worker_panes() {
         // chart of it carried no information. The speed chart is seconds per curve (the unit
         // the driver prints and the one the ETA is built from), not curves/second.
         if (w.progress.valid) {
-            ImGui::Text("%.1f%%   %.2f s/curve   ETA %.0f s", w.progress.pct,
-                        w.progress.s_per_curve, w.progress.eta_s);
-            if (!w.hist_s_per_curve.empty()) {
+            const bool pm1=w.progress.pm1_total!=0;
+            if(pm1) {
+                ImGui::Text("%llu / %llu iter  %.1f%%",w.progress.pm1_done,w.progress.pm1_total,w.progress.pct);
+                ImGui::SameLine();
+                if(w.progress.iter_per_s>0)ImGui::Text("%.0f iter/s",w.progress.iter_per_s);
+                else ImGui::TextUnformatted("-- iter/s");
+                ImGui::SameLine();
+                if(w.progress.eta_s>=0)ImGui::Text("ETA %.0f s",w.progress.eta_s);
+                else ImGui::TextUnformatted("ETA --");
+            } else ImGui::Text("%.1f%%   %.2f s/curve   ETA %.0f s", w.progress.pct,
+                               w.progress.s_per_curve, w.progress.eta_s);
+            const auto& samples=pm1?w.pm1_iter_history:w.hist_s_per_curve;
+            if (!samples.empty()) {
                 MetricPlot plot;
-                plot.id = "worker" + std::to_string(w.index) + "/s_per_curve";
+                plot.id = "worker" + std::to_string(w.index) + (pm1?"/iter_per_s":"/s_per_curve");
                 plot.label = loc_.t("workers", "speed_history");
-                plot.unit = "s/curve";
+                plot.unit = pm1?"iter/s":"s/curve";
                 plot.color = IM_COL32(180, 150, 255, 255);
                 plot.height = 62.0f;
                 // Two decimals: a curve takes tens of seconds on a big B1, and the useful
@@ -2484,7 +2497,7 @@ void App::draw_worker_panes() {
                 plot.fixed_range = false;
                 plot.decimals = 2;
                 plot.empty_text = loc_.t("workers", "collecting");
-                draw_metric_plot(plot, w.hist_s_per_curve);
+                draw_metric_plot(plot, samples);
             }
         }
         ImGui::TextDisabled("%s: %s", loc_.t("workers", "log_file").c_str(),file_name(w.log_file).c_str());
