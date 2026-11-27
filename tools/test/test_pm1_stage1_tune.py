@@ -38,7 +38,7 @@ def check(exe, root):
     assert "phase=coarse" in cold and "phase=fine" in cold
     assert cold.index("phase=graph") < cold.index("pm1_stage1_graph:") < cold.index("phase=fine")
     assert cold.count("phase=graph") == 1
-    graph = int(re.search(r"pm1_stage1_graph: length=2 batch=1 graph_bits=([01]) mode=tuned", cold)[1])
+    graph = int(re.search(r"pm1_stage1_graph: length=2 batch=1 graph_bits=([0124]) mode=tuned", cold)[1])
     best_batch = int(re.search(rf"pm1_stage1_length_done: .*length=2 phase=fine batch=(\d+) graph={graph} ", cold)[1])
     assert all(re.search(rf"\b{label}\s+2\s+62\s", cold) for label in ("Single","Max","Best","95%"))
     original = tomllib.loads(profile.read_text())["pm1"]["stage1"]["matrix"]
@@ -51,7 +51,7 @@ def check(exe, root):
 
     records = [dict(zip(columns, row)) for row in rows]
     assert len(set(decisions(original))) == len(rows)
-    assert {r["graph_bits"] for r in records if r["batch"] == 1} == {0, 1}
+    assert {r["graph_bits"] for r in records if r["batch"] == 1} == {0, 1, 2, 4}
     assert all(r["graph_bits"] == graph for r in records if r["batch"] != 1)
     fine = [r for r in records if "2/2:2" in r.get("tested_groups", "").split(",")]
     assert {r["batch"] for r in fine} == {1, 2}

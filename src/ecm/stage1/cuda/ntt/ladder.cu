@@ -834,7 +834,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             std::string_view(prop.name).find("RTX 4060 Laptop") != std::string_view::npos)
             profile = laptop_4060_profile(log, curves);
     }
-    const unsigned window = options.window >= 0 ? unsigned(options.window) : profile.window;
+    const unsigned window = pm1
+        ? (options.window >= 0 ? std::min(unsigned(options.window),pm1_max_graph_bits)
+                               : s.length >= pm1_grouped_graph_min_length ? pm1_max_graph_bits : 1u)
+        : (options.window >= 0 ? unsigned(options.window) : profile.window);
     const FuseOverrides overrides{options.tile ? int(options.tile) : profile.tile,
         options.outer_max ? int(options.outer_max) : profile.outer,
         options.warp_tail >= 0 ? options.warp_tail != 0 : profile.warp_tail};
@@ -1003,6 +1006,12 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         (cached_fused || (requested & FusedWeightedCarry));
     if (fused_weighted) result.dataflow |= FusedWeightedCarry;
     if (cached_fused) result.dataflow |= CachedFusedWeightedCarry;
+    // With >=16 bits between coefficient starts, a limb sees at most 12
+    // fragments across the two folds. Even after scaling by 3^15 the 64-bit
+    // sum fits, and the split multibit carry still leaves a one-bit ripple.
+    const bool pm1_scale = pm1 && !pm1->base && options.weighted && segmented &&
+        !fused_weighted && !radix5_limb_sums && !block_reduce && p / s.length >= 16;
+    if (pm1_scale) result.dataflow |= Pm1WindowScale;
     Plan pm1_plan{};
     if ((control && control->describe) || (pm1 && pm1->ready)) {
         const auto join = [](std::string& stages, int width) {
@@ -1292,14 +1301,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             return;
         }
         segment_limb_sums<SegmentInput::Add,select_coords,false><<<segment_grid(count),stage1_carry_segment,0,q>>>(
-            state.data,nullptr,carry_headers.data,s,ops,cursor);
+            state.data,nullptr,carry_headers.data,s,ops,cursor,1);
         finish_carries(count,ops.out,{},false,pending);
     };
     enum class ProductKind { Ordinary, EdwardsDouble, Dictionary };
     auto mul=[&](unsigned inputs, unsigned outputs, Indices in, Indices a, Indices b, Indices out,
                  bool build_e = false, bool add_bb = false, Cursor cursor = {},
                  unsigned pending_inputs = 0, unsigned pending_outputs = 0, unsigned fixed_offset = 0,
-                 ProductKind kind = ProductKind::Ordinary) {
+                 ProductKind kind = ProductKind::Ordinary, uint32_t output_scale = 1) {
         const bool combine_double = kind == ProductKind::EdwardsDouble;
         const bool fuse_dictionary = dictionary_tile && !pending_inputs && kind == ProductKind::Dictionary;
         if (fuse_dictionary) pack_outer_inputs(freq, inputs, in);
@@ -1389,10 +1398,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             constexpr auto mode = decltype(input)::value;
             if (route_output)
                 segment_limb_sums<mode,false,true><<<segment_grid(outputs),stage1_carry_segment,0,q>>>(
-                    state.data,freq,carry_headers.data,s,reduction,cursor);
+                    state.data,freq,carry_headers.data,s,reduction,cursor,output_scale);
             else
                 segment_limb_sums<mode,false,false><<<segment_grid(outputs),stage1_carry_segment,0,q>>>(
-                    state.data,freq,carry_headers.data,s,reduction,cursor);
+                    state.data,freq,carry_headers.data,s,reduction,cursor,output_scale);
         };
         constexpr std::true_type yes{};
         constexpr std::false_type no{};
@@ -1436,7 +1445,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                     weighted_limb_sums<<<limb_grid,weighted_limb_threads,limb_smem,q>>>(
                         freq,inverse,inverse_weights.data,digit_table.data,limb_table.data,p,s.words,s.length);
                 }
-                if (segmented) summarize(std::integral_constant<SegmentInput,SegmentInput::LimbSums>{});
+                if (output_scale != 1)
+                    summarize(std::integral_constant<SegmentInput,SegmentInput::ScaledLimbSums>{});
+                else if (segmented) summarize(std::integral_constant<SegmentInput,SegmentInput::LimbSums>{});
                 else if (route_output && cached) reduce(yes,yes,yes);
                 else if (route_output) reduce(yes,yes,no);
                 else if (cached) reduce(yes,no,yes);
@@ -1482,50 +1493,75 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             CK(cudaMemsetAsync(slot(PowerBase),0,bytes,q));
             CK(cudaMemsetAsync(slot(PowerBase),3,1,q));
         }
+        const auto square = [&](uint32_t scale = 1) {
+            mul(1,1,{Current},{0},{0},{Current},false,false,{},0,0,0,ProductKind::Ordinary,scale);
+            CK(cudaGetLastError());
+        };
         const auto step = [&](bool multiply_base) {
-            product(Current, Current, Current);
+            square(pm1_scale && multiply_base ? 3 : 1);
             if (multiply_base && pm1->base) product(Current, Current, PowerBase);
-            else if (multiply_base) {
+            else if (multiply_base && !pm1_scale) {
                 // Work on canonical limbs so the squared coefficient bound stays valid.
                 add_inputs(std::false_type{},1,{{Current},{Current},{Scratch},0},{});
                 add_inputs(std::false_type{},1,{{Current},{Scratch},{Current},0},{});
                 CK(cudaGetLastError());
             }
         };
-        Graph steps[2];
+        const auto emit = [&](unsigned pattern, unsigned width) {
+            if (pm1_scale) {
+                // x -> x^(2^width) * 3^pattern. Only the last square scales
+                // its recovered limb sums, after the field arithmetic.
+                uint32_t scale = 1;
+                for (unsigned i = 0; i < pattern; ++i) scale *= 3;
+                for (unsigned i = 1; i < width; ++i) square();
+                square(scale);
+            } else {
+                while (width) step((pattern >> --width) & 1u);
+            }
+        };
+        Graph steps[2], groups[1u << pm1_max_graph_bits];
         if (window) {
-            for (unsigned bit = 0; bit < 2; ++bit) {
-                auto& graph = steps[bit];
+            const auto capture = [&](Graph& graph, unsigned pattern, unsigned width) {
                 CK(cudaStreamBeginCapture(q,cudaStreamCaptureModeThreadLocal));
-                step(bit);
+                emit(pattern,width);
                 CK(cudaStreamEndCapture(q,&graph.graph));
                 CK(cudaGraphInstantiateWithFlags(&graph.exec,graph.graph,0));
-            }
+                CK(cudaGraphUpload(graph.exec,q));
+            };
+            for (unsigned bit = 0; bit < 2; ++bit) capture(steps[bit],bit,1);
+            if (window > 1)
+                for (unsigned pattern = 0; pattern < (1u << window); ++pattern)
+                    capture(groups[pattern],pattern,window);
+            CK(cudaStreamSynchronize(q));
         }
         observe_memory();
-        const auto advance_bit = [&](bool bit) {
-            if (window) CK(cudaGraphLaunch(steps[bit].exec,q));
-            else step(bit);
+        const auto advance = [&](unsigned pattern,unsigned width) {
+            if (window > 1 && width == window)
+                CK(cudaGraphLaunch(groups[pattern].exec,q));
+            else if (window)
+                while (width) CK(cudaGraphLaunch(steps[(pattern >> --width) & 1u].exec,q));
+            else emit(pattern,width);
         };
         setup_guard.unlock();
         if (pm1->ready) (*pm1->ready)(pm1_plan);
         if (pm1->probe) {
-            // Check both production bit paths against the full GMP residue
-            // before any stream enters the timed group.
-            advance_bit(false);
-            advance_bit(true);
+            // Check the maximum window multiplier against GMP before timing.
+            const auto width = std::max(window,1u);
+            const auto power = 1u << width;
+            advance(power-1,width);
             ecm_edwards::Integer expected,modulus,actual;
             mpz_import(expected.v,initial.size(),-1,4,0,0,initial.data());
             mpz_setbit(modulus.v,p);
             mpz_sub_ui(modulus.v,modulus.v,1);
-            mpz_powm_ui(expected.v,expected.v,4,modulus.v);
-            mpz_mul_ui(expected.v,expected.v,3);
+            mpz_powm_ui(expected.v,expected.v,power,modulus.v);
+            for (unsigned i = 1; i < power; ++i) mpz_mul_ui(expected.v,expected.v,3);
             mpz_mod(expected.v,expected.v,modulus.v);
             const auto check=read(Current);
             mpz_import(actual.v,check.size(),-1,4,0,0,check.data());
             if (mpz_cmp(actual.v,expected.v)!=0) throw std::runtime_error("P-1 tune residue mismatch");
-            (*pm1->probe)(q,advance_bit);
-        } else replay(pm1->exponent,pm1->progress,pm1->verified,advance_bit,copy,product,read,restore);
+            (*pm1->probe)(q,advance);
+        } else replay(pm1->exponent,pm1->progress,pm1->verified,std::max(window,1u),
+                      advance,copy,product,read,restore);
         CK(cudaStreamSynchronize(q));
         return result;
     }

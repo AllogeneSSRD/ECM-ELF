@@ -37,7 +37,9 @@ int main() {
         ++verified_count;
         return true;
     };
-    replay(exponent,saved,verified,step,copy,mul,read,restore);
+    replay(exponent,saved,verified,4,[&](unsigned pattern,unsigned width) {
+        while (width) step((pattern >> --width) & 1);
+    },copy,mul,read,restore);
     if (saved.k != bits || saved.errors != 2 || verified_count < 2) return 1;
     std::printf("P-1 Gerbicz: %u verified endpoints, %u recovered faults\n",verified_count,saved.errors);
 }

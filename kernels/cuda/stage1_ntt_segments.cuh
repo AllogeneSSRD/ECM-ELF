@@ -116,7 +116,7 @@ __device__ __forceinline__ uint32_t stage1_segment_word(
     return (row[word] + unsigned(word % stage1_carry_segment < limit)) & mask;
 }
 
-enum class SegmentInput { Add, Linear, LimbSums };
+enum class SegmentInput { Add, Linear, LimbSums, ScaledLimbSums };
 
 // Linear coefficients start at j*bpw and occupy at most 64 bits. Split each
 // coefficient at limb boundaries before adding, folding the upper p bits
@@ -143,7 +143,7 @@ __global__ void linear_limb_sums(WeightedWord* sums, const WeightedWord* coeffic
 
 template<SegmentInput Input, bool Select, bool Routed>
 __global__ void segment_limb_sums(uint32_t* state, const unsigned long long* products, unsigned* headers,
-                                 Shape s, Sums ops, Cursor cursor) {
+                                 Shape s, Sums ops, Cursor cursor, uint32_t scale) {
     const unsigned op = blockIdx.y / s.curves, curve = blockIdx.y % s.curves;
     const unsigned slot = output_slot<Routed>(ops.out.x[op],cursor);
     const size_t row = size_t(slot) * s.curves + curve;
@@ -151,9 +151,10 @@ __global__ void segment_limb_sums(uint32_t* state, const unsigned long long* pro
     const uint32_t mask = i < s.words ? limb_mask(s,i) : 0;
     unsigned long long value = 0; // Inactive lanes propagate.
     if (i < s.words) {
-        if constexpr (Input == SegmentInput::LimbSums) {
+        if constexpr (Input == SegmentInput::LimbSums || Input == SegmentInput::ScaledLimbSums) {
             const auto* sums = products + size_t(blockIdx.y) * s.words;
-            value = weighted_limb(sums,s.words,s.p - 32 * (s.words - 1),i,mask);
+            value = weighted_limb<Input == SegmentInput::ScaledLimbSums>(
+                sums,s.words,s.p - 32 * (s.words - 1),i,mask,scale);
         } else if constexpr (Input == SegmentInput::Linear) {
             value = linear_fold_limb(products + size_t(blockIdx.y) * s.length, s, i, mask);
         } else {

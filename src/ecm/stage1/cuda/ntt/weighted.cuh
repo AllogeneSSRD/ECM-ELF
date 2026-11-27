@@ -178,14 +178,16 @@ void weighted_limb_sums(WeightedWord* out, const WeightedWord* coefficients,
 
 // Transfer every multi-bit carry once. The only narrow limb is the last;
 // any extra carry from it is fed into limb zero before the one-bit scan.
+template<bool Scaled = false>
 __device__ inline WeightedWord weighted_limb(const WeightedWord* sums,
-    unsigned words, unsigned tail_bits, unsigned i, uint32_t mask) {
+    unsigned words, unsigned tail_bits, unsigned i, uint32_t mask, uint32_t scale = 1) {
     const unsigned last = words - 1;
+    const auto sum = [&](unsigned at) { return Scaled ? sums[at] * scale : sums[at]; };
     const WeightedWord tail_mask = (WeightedWord(1) << tail_bits) - 1;
-    const WeightedWord tail = (sums[last] & tail_mask) +
-        (last ? sums[last - 1] >> 32 : sums[last] >> tail_bits);
+    const WeightedWord tail = (sum(last) & tail_mask) +
+        (last ? sum(last - 1) >> 32 : sum(last) >> tail_bits);
     const WeightedWord value = i == last ? tail & tail_mask :
-        (sums[i] & mask) + (i ? sums[i - 1] >> 32 : sums[last] >> tail_bits);
+        (sum(i) & mask) + (i ? sum(i - 1) >> 32 : sum(last) >> tail_bits);
     return value + (i == 0 ? tail >> tail_bits : 0);
 }
 

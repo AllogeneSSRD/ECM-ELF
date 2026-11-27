@@ -28,11 +28,21 @@ inline void add_chunk(mpz_ptr sum, mpz_ptr scratch, const std::vector<uint32_t>&
 
 // For subblock endpoints u_j and chunks c_j:
 // u_0 * P^(2^L) * base^(sum c_j) = P * u_m, where P = product(u_0 ... u_(m-1)).
-// 'step' maps Current to Current^2 or base*Current^2; the remaining operations
-// are infrequent copies, canonical modular products and checkpoint readbacks.
+// Each group consumes high-to-low exponent bits within one Gerbicz chunk.
+template<class Bit, class Step>
+void advance_bits(unsigned count, unsigned group_bits, Bit bit, Step step) {
+    while (count) {
+        const auto width = std::min(count, group_bits);
+        unsigned pattern = 0;
+        for (unsigned i = 0; i < width; ++i)
+            pattern = 2 * pattern + unsigned(bit(--count));
+        step(pattern, width);
+    }
+}
+
 template<class Step, class Copy, class Mul, class Read, class Restore>
 void replay(const std::vector<uint32_t>& exponent, Pm1Progress& saved,
-            const std::function<bool(const Pm1Progress&)>& verified,
+            const std::function<bool(const Pm1Progress&)>& verified, unsigned group_bits,
             Step step, Copy copy, Mul mul, Read read, Restore restore) {
     const uint64_t bits = exponent_bits(exponent);
     // Bound the delay to the next verified checkpoint even for long assignments.
@@ -51,10 +61,12 @@ void replay(const std::vector<uint32_t>& exponent, Pm1Progress& saved,
         for (unsigned j = 0; j < chunks; ++j) {
             if (j) mul(Product, Product, Current);
             add_chunk(sum.v, chunk.v, exponent, bits - k - length, length);
-            for (unsigned i = 0; i < length; ++i) {
-                const uint64_t at = bits - ++k;
-                step((exponent[at / 32] >> (at % 32)) & 1u);
-            }
+            const auto low = bits - k - length;
+            advance_bits(length, group_bits, [&](unsigned i) {
+                const auto at = low + i;
+                return (exponent[at / 32] >> (at % 32)) & 1u;
+            }, step);
+            k += length;
         }
         copy(BlockEnd, Current);
         mul(Left, Product, BlockEnd);
@@ -64,11 +76,11 @@ void replay(const std::vector<uint32_t>& exponent, Pm1Progress& saved,
         mpz_fdiv_q_2exp(chunk.v, sum.v, length);
         if (mpz_sgn(chunk.v)) {
             copy(Current, PowerBase);
-            for (size_t i = mpz_sizeinbase(chunk.v, 2) - 1; i > 0; --i)
-                step(mpz_tstbit(chunk.v, i - 1));
+            advance_bits(unsigned(mpz_sizeinbase(chunk.v, 2) - 1), group_bits,
+                         [&](unsigned i) { return mpz_tstbit(chunk.v, i); }, step);
             mul(Current, Current, Product);
         } else copy(Current, Product);
-        for (unsigned i = length; i; --i) step(mpz_tstbit(sum.v, i - 1));
+        advance_bits(length, group_bits, [&](unsigned i) { return mpz_tstbit(sum.v, i); }, step);
         mul(Current, Current, BlockStart);
         const auto check = read(Current);
         const bool nonzero = std::any_of(check.begin(), check.end(), [](uint32_t word){ return word != 0; });

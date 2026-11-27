@@ -23,18 +23,26 @@ public:
     unsigned steps = 8;
     size_t peak_bytes = 0;
 
-    void measure(unsigned lane, cudaStream_t stream, const std::function<void(bool)>& step,
+    void measure(unsigned lane, cudaStream_t stream, const Pm1Advance& step, unsigned group_bits,
                  unsigned repeats, unsigned target_ms, size_t initial_free,
                  const std::vector<uint8_t>& exponent_bits) {
         cudaEvent_t end;
         CK(cudaEventCreate(&end));
         struct EndEvent { cudaEvent_t value; ~EndEvent() { cudaEventDestroy(value); } } cleanup{end};
         size_t cursor = size_t(lane)*exponent_bits.size()/elapsed.size();
-        const auto iterate = [&] {
-            step(exponent_bits[cursor]!=0);
-            if (++cursor==exponent_bits.size()) cursor=0;
+        const auto iterate = [&](unsigned count) {
+            while (count) {
+                const unsigned width = std::min(count, group_bits);
+                unsigned pattern = 0;
+                for (unsigned i = 0; i < width; ++i) {
+                    pattern = 2 * pattern + exponent_bits[cursor];
+                    if (++cursor == exponent_bits.size()) cursor = 0;
+                }
+                step(pattern, width);
+                count -= width;
+            }
         };
-        for (unsigned i=0;i<8;++i) iterate();
+        iterate(8);
         CK(cudaStreamSynchronize(stream));
         for (unsigned group=0;group<=repeats;++group) {
             rendezvous([&] {
@@ -46,7 +54,7 @@ public:
                 CK(cudaEventRecord(start,stream));
             });
             CK(cudaStreamWaitEvent(stream,start,0));
-            for (unsigned i=0;i<steps;++i) iterate();
+            iterate(steps);
             CK(cudaEventRecord(end,stream));
             CK(cudaEventSynchronize(end));
             CK(cudaEventElapsedTime(&elapsed[lane],start,end));

@@ -38,7 +38,7 @@ enum Dataflow : unsigned {
     FixedWideInverse = 262144, FixedWideForward = 524288, WarpWeightedCarry = 1048576,
     PackedWeightedOuter = 2097152, FixedCarryOffsets = 4194304, DictionaryProductTile = 8388608,
     Radix5InverseLimbSums = 16777216, Radix5ForwardOuter = 33554432,
-    BlockWeightedCarry = 67108864
+    BlockWeightedCarry = 67108864, Pm1WindowScale = 134217728
 };
 inline constexpr unsigned experimental_dataflow_limit = (BlockWeightedCarry << 1) - 1;
 inline constexpr unsigned radix5_limb_min_digit_bits = 12;

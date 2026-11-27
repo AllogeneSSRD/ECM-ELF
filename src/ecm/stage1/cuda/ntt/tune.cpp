@@ -1,5 +1,6 @@
 #include "tune.h"
 #include "batch_timing.h"
+#include "pm1.h"
 #include "pm1_timing.h"
 #include "ecm/stage1/ntt_target.h"
 #include "ladder.h"
@@ -1638,7 +1639,8 @@ Pm1BatchPlan select_pm1_batch(int index, const std::vector<unsigned>& exponents,
     using ecm_stage2::tune::real;
     auto weighted=base;
     weighted.weighted=true;
-    if (weighted.window>0 || (weighted.window<0 && weighted.profile)) weighted.window=1;
+    if (weighted.window>0) weighted.window=std::min(weighted.window,int(pm1_max_graph_bits));
+    if (weighted.window<0 && weighted.profile) weighted.window=pm1_max_graph_bits;
     if (weighted.length) weighted.automatic=false;
     Pm1BatchPlan selected{1,1,weighted};
     const auto fallback=[&](unsigned p) {
@@ -1708,6 +1710,13 @@ Pm1BatchPlan select_pm1_batch(int index, const std::vector<unsigned>& exponents,
         rates[batch]={cached->rate,unsigned(uint(*row,"repeats"))};
         plans[batch]=cached->options;
         plans[batch].bpw=base.bpw;
+        // Legacy single-bit rows still provide the launch shape and batch.
+        // Use the grouped default until this shape has been measured on the
+        // scaled-carry path, unless the user explicitly fixed the window.
+        if (weighted.window<0 && cached->options.window==1 &&
+            common>=pm1_grouped_graph_min_length && largest/common>=16 &&
+            !(uint(*row,"dataflow") & Pm1WindowScale))
+            plans[batch].window=pm1_max_graph_bits;
     }
     unsigned batch=0;
     const auto full=rates.find(selected.available);
@@ -1738,7 +1747,7 @@ Measurement measure_pm1(const Device& device, unsigned p, const Stage1NttOptions
                 try {
                     Plan plan;
                     return pm1_probe_lane(device.index,p,options,plan,[&](auto stream,const auto& step) {
-                        group.measure(lane,stream,step,repeats,target_ms,initial_free,bits);
+                        group.measure(lane,stream,step,std::max(1u,plan.window),repeats,target_ms,initial_free,bits);
                     });
                 } catch (...) { group.cancel(std::current_exception()); throw; }
             }));
@@ -1783,9 +1792,8 @@ int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1:
             bits[i]=uint8_t((mpz_getlimbn(exponent.v,mp_size_t(bit/GMP_NUMB_BITS))>>(bit%GMP_NUMB_BITS))&1);
         }
         auto options=shape->value().options;
-        // P-1 captures one zero-bit and one one-bit graph. Every positive
-        // window setting therefore has exactly one exponent bit per launch.
-        options.window=base.window==0 ? 0 : 1;
+        options.window=base.window<0 ? (base.profile ? int(pm1_max_graph_bits) : 1)
+                                     : std::min(base.window,int(pm1_max_graph_bits));
         Plan plan;
         const auto dry=pm1_probe_lane(device.index,p,options,plan,{});
         const unsigned cap=unsigned(std::min<size_t>({base.max_batch,grid.batch.last,device.budget/dry.owned_bytes}));
@@ -1886,7 +1894,7 @@ int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1:
         const auto probe_batch=*anchors.begin();
         if (base.window<0 && !base.profile) {
             double best_rate=0;
-            for (const int window:{0,1}) {
+            for (const int window:{0,1,2,int(pm1_max_graph_bits)}) {
                 auto candidate=options;
                 candidate.window=window;
                 fits([&] {

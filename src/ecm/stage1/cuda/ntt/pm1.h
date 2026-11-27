@@ -4,6 +4,8 @@
 
 namespace ecm_mersenne_ntt {
 struct Plan;
+inline constexpr unsigned pm1_max_graph_bits = 4;
+inline constexpr unsigned pm1_grouped_graph_min_length = 16384;
 
 // k includes the leading bit. Residues use ceil(p/32) little-endian words.
 struct Pm1Progress {
