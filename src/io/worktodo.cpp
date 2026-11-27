@@ -1195,6 +1195,22 @@ bool ecm_worktodo_append_unique(const std::string& path, const std::string& fini
     return true;
 }
 
+// Caller holds the writer lock for this file.
+static void append_unique_locked(const std::filesystem::path& file, const std::string& line) {
+    auto bytes = std::filesystem::exists(file) ? ecm_io::read_file(file) : std::string{};
+    std::istringstream in(bytes);
+    std::string old;
+    while (std::getline(in, old)) {
+        if (!old.empty() && old.back() == '\r')
+            old.pop_back();
+        if (old == line)
+            return;
+    }
+    if (!bytes.empty() && bytes.back() != '\n')
+        bytes += '\n';
+    ecm_io::write_atomic(file, bytes + line + "\n");
+}
+
 bool ecm_append_text_line_unique(const std::string& path, const std::string& line) {
     try {
         const auto file = std::filesystem::u8path(path);
@@ -1203,18 +1219,7 @@ bool ecm_append_text_line_unique(const std::string& path, const std::string& lin
         QueueEditLock lock(path);
         if (!lock.valid())
             return false;
-        auto bytes = std::filesystem::exists(file) ? ecm_io::read_file(file) : std::string{};
-        std::istringstream in(bytes);
-        std::string old;
-        while (std::getline(in, old)) {
-            if (!old.empty() && old.back() == '\r')
-                old.pop_back();
-            if (old == line)
-                return true;
-        }
-        if (!bytes.empty() && bytes.back() != '\n')
-            bytes += '\n';
-        ecm_io::write_atomic(file, bytes + line + "\n");
+        append_unique_locked(file, line);
         return true;
     } catch (...) {
         return false;
@@ -1252,11 +1257,13 @@ bool ecm_worktodo_store_completion(const std::string& receipt, const CompletedWo
     }
 }
 
-// A Prime95 process may consume worktodo.add immediately. A rename consumes
-// our private, same-directory staging name in the same operation that makes the
-// line visible. Its absence *after* PREPARED is therefore a delivery receipt
-// even if the recipient has since removed the public file.
-static std::filesystem::path pm1_staging_path(const CompletedWorktodo& c, const std::string& receipt) {
+static constexpr std::string_view pm1_legacy_prepared = "\nPM1-PREPARED\n";
+static constexpr std::string_view pm1_published = "\nPM1-PUBLISHED\n";
+
+// Legacy receipts used a per-task staging file. A prepared receipt whose
+// staging file is absent was already delivered by the old rename protocol.
+static std::filesystem::path pm1_legacy_staging_path(const CompletedWorktodo& c,
+                                                    const std::string& receipt) {
     auto staged = std::filesystem::u8path(c.pm1_add_file);
     staged += ".pm1-" + std::to_string(ecm_io::fingerprint(
         ecm_io::file_identity(std::filesystem::u8path(receipt)))) + ".ready";
@@ -1264,21 +1271,14 @@ static std::filesystem::path pm1_staging_path(const CompletedWorktodo& c, const 
 }
 
 static void publish_pm1_completion(const CompletedWorktodo& c, const std::string& receipt,
-                                   std::string& payload) {
+                                   std::string& payload, const std::filesystem::path& legacy) {
+    if (!legacy.empty() && !std::filesystem::exists(legacy))
+        return;
     const auto target = std::filesystem::u8path(c.pm1_add_file);
-    const auto staged = pm1_staging_path(c, receipt);
-    std::filesystem::create_directories(target.parent_path());
-    ecm_io::FileLock writer(target.u8string());
-    const bool prepared = payload.find("\nPM1-PREPARED\n") != payload.npos;
-    if (!prepared) {
-        ecm_io::write_atomic(staged, c.pm1_line + "\n");
-        payload += "\nPM1-PREPARED\n";
-        ecm_io::write_atomic(std::filesystem::u8path(receipt), payload);
-    }
-    if (std::filesystem::exists(staged)) {
-        // A receiver may have advanced/deleted its save while the mailbox was
-        // occupied. Publish only the task whose original Stage1 endpoint is
-        // still installed. Once sent, the receiver owns subsequent changes.
+    if (payload.find(pm1_published) == payload.npos) {
+        std::filesystem::create_directories(target.parent_path());
+        ecm_io::FileLock writer(target.u8string());
+        // Publish only while the verified Stage1 endpoint is still installed.
         ecm_io::FileLock save_writer(c.pm1_save_path);
         const auto save = std::filesystem::u8path(c.pm1_save_path);
         // A native DONE endpoint may carry Prime95's optional JSON trailer.
@@ -1287,17 +1287,11 @@ static void publish_pm1_completion(const CompletedWorktodo& c, const std::string
             ecm_io::fingerprint(ecm_io::read_file(save)) != c.pm1_save_hash)
             throw std::runtime_error("Pminus1 Stage1 save missing or changed before delivery: " +
                                      c.pm1_save_path);
-        // Prime95 can already have read an existing .add and still be about to
-        // unlink its pathname. Replacing that file would lose the new work.
-        // Prime95 reads .add.txt on the next pass when .add is absent.
-        auto alternate = target;
-        alternate += ".txt";
-        if (!ecm_io::publish_if_absent(staged, target) &&
-            !ecm_io::publish_if_absent(staged, alternate))
-            throw std::runtime_error("Pminus1 worktodo.add and .add.txt await receiver pickup; "
-                                     "completion retained: " + receipt);
+        append_unique_locked(target, c.pm1_line);
+        payload += pm1_published;
+        ecm_io::write_atomic(std::filesystem::u8path(receipt), payload);
     }
-    ecm_io::sync_publication_directory(target);
+    if (!legacy.empty()) std::filesystem::remove(legacy);
 }
 
 // An edit in the worker's section can supersede a running Stage1. Validate the
@@ -1379,15 +1373,18 @@ bool ecm_worktodo_commit_completion(const std::string& receipt, const std::strin
         }
         auto payload = evidence == bytes.npos ? bytes : bytes.substr(0, evidence);
         const bool cancelled = bytes.find("\nPM1-SUPERSEDED\n") != bytes.npos;
-        const bool prepared = pm1 && bytes.find("\nPM1-PREPARED\n") != bytes.npos;
+        const auto legacy = pm1 && bytes.find(pm1_legacy_prepared) != bytes.npos
+            ? pm1_legacy_staging_path(c, receipt) : std::filesystem::path{};
+        const bool published = pm1 && (bytes.find(pm1_published) != bytes.npos ||
+            (!legacy.empty() && !std::filesystem::exists(legacy)));
         if (cancelled || (evidence == bytes.npos && ecm_is_pm1_line(c.ticket) &&
-            (!prepared || std::filesystem::exists(pm1_staging_path(c, receipt))) &&
-            pm1_bound_increased(queue, worker, c.ticket))) {
-            // A full receiver mailbox can leave the old line privately staged.
-            // Persist cancellation first so deleting that file cannot look like delivery on replay.
-            if (prepared && !cancelled)
-                ecm_io::write_atomic(std::filesystem::u8path(receipt), payload + "\nPM1-SUPERSEDED\n");
-            if (pm1) std::filesystem::remove(pm1_staging_path(c, receipt));
+            !published && pm1_bound_increased(queue, worker, c.ticket))) {
+            if (!legacy.empty()) {
+                // Preserve the cancellation before removing the old staging file.
+                if (!cancelled)
+                    ecm_io::write_atomic(std::filesystem::u8path(receipt), payload + "\nPM1-SUPERSEDED\n");
+                std::filesystem::remove(legacy);
+            }
             c.pm1_superseded = true;
             return true;
         }
@@ -1396,7 +1393,7 @@ bool ecm_worktodo_commit_completion(const std::string& receipt, const std::strin
         if (record_only)
             return true;
         if (pm1)
-            publish_pm1_completion(c, receipt, payload);
+            publish_pm1_completion(c, receipt, payload, legacy);
         const auto action = c.replacement.empty() ? WorktodoAction::Remove :
                             c.append_replacement ? WorktodoAction::AppendToWorker : WorktodoAction::Replace;
         c.queue_advance_started = true;

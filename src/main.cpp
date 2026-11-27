@@ -1064,8 +1064,6 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                     : receiver.empty() ? root : receiver.parent_path();
                 auto add = receiver.empty() ? save_dir / "worktodo.txt" : receiver;
                 add.replace_extension(".add");
-                auto alternate_add = add;
-                alternate_add += ".txt";
                 const auto save = save_dir / ecm_pm1::prime95_name(task.p);
                 if (conflicts_with_output(save.u8string()) || same_path(save.u8string(), worktodo_path) ||
                     same_path(save.u8string(), receiver.u8string()))
@@ -1081,7 +1079,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                 if (cfg.handoff_mode_pm1 == "prime95" && (outcome.factor.empty() || after_factored)) {
                     if (!receiver.empty() && (!receiver.has_extension() || same_path(receiver.u8string(), add.u8string())))
                         throw std::runtime_error("Prime95 receiver needs a queue filename distinct from .add");
-                    for (const auto& path : {receiver, add, alternate_add}) {
+                    for (const auto& path : {receiver, add}) {
                         if (!path.empty() && (conflicts_with_output(path.u8string()) ||
                                               same_path(path.u8string(), worktodo_path)))
                             throw std::runtime_error("Pminus1 handoff conflicts with an input or output path");

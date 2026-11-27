@@ -75,26 +75,27 @@ def blocked_handoff(exe, directory):
     queue.write_text(line + "\n")
     finished = directory / "nested" / "custom.finished.txt"
     receipt = directory / "worktodo.txt.stage1_completed_worker1"
-    add, alternate = root / "worktodo.add", root / "worktodo.add.txt"
-    for mailbox in (add, alternate):
-        mailbox.write_text("# receiver busy\n")
+    add = root / "worktodo.add"
+    add.mkdir()
 
     command = [str(exe), "--config", str(config)]
     first = subprocess.run(command, cwd=directory, capture_output=True, timeout=120)
     (directory / "blocked.log").write_bytes(first.stdout + first.stderr)
-    assert first.returncode != 0 and b"await receiver pickup" in first.stderr
+    assert first.returncode != 0
     assert queue.read_text().strip() == line and receipt.exists()
     assert saved_residue(root, p, b1) == pow(3, 2 * p * b1, (1 << p) - 1)
     expected = [line + " # P-1 Stage1 no factor"]
     assert finished.exists(), "Stage1 saved its endpoint but omitted the finished record"
     assert finished.read_text().splitlines() == expected
 
-    alternate.unlink()
+    add.rmdir()
+    add.write_bytes(b"# existing assignment\r\n")
     second = subprocess.run(command, cwd=directory, capture_output=True, timeout=120)
     (directory / "replayed.log").write_bytes(second.stdout + second.stderr)
     assert second.returncode == 0, second.stdout + second.stderr
     assert finished.read_text().splitlines() == expected
-    assert alternate.read_text().strip() == line
+    assert add.read_bytes() == b"# existing assignment\r\n" + (line + "\n").encode()
+    assert not (root / "worktodo.add.txt").exists() and not list(root.glob("*.ready"))
     assert not queue.read_text().strip() and not receipt.exists()
     print(directory.name, "OK", flush=True)
 

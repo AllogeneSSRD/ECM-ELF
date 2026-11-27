@@ -36,12 +36,11 @@ static void test_pm1_queue(const fs::path& dir) {
     check(!ecm_parse_pm1_line("Pminus1=1,2,37,-1,100,0,\"223", task, error), "malformed quoted factors");
     const auto queue = dir/"input";
     const auto add = dir/"worktodo.add";
-    const auto alternate = dir/"worktodo.add.txt";
     const auto receipt = dir/"receipt";
     const auto finished = dir/"finished";
     put(queue, "[Worker #2]\n"+row+"\n"+row+"\n");
-    put(add, "[Worker #3]\n; preserve\n");
-    put(alternate, "; another assignment awaiting pickup\n");
+    const std::string prefix = "; preserve existing lines\r\n";
+    put(add, prefix);
     // A transient finished-file error must be fixed before publishing.
     fs::create_directory(finished);
     CompletedWorktodo completion{row, "done "+row, "", finished.string(), ""};
@@ -56,42 +55,46 @@ static void test_pm1_queue(const fs::path& dir) {
           error.find("cannot publish finished record") != error.npos,
           "finished-file error must retain assignment before delivery");
     fs::remove(finished);
-    check(!ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error) &&
-          error.find("await receiver pickup") != error.npos,
-          "both Prime95 mailboxes occupied: retain assignment");
-    check(get(finished) == completion.record + "\n", "busy receiver lost the finished record");
-    check(get(alternate) == "; another assignment awaiting pickup\n", "overwrote occupied .add.txt");
-    fs::remove(alternate);
     put(mfile, "mismatched save!!");
     check(!ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error) &&
-          error.find("missing or changed") != error.npos && !fs::exists(alternate),
+          error.find("missing or changed") != error.npos && get(add) == prefix,
           "Pminus1 recovery published a task for another save");
+    check(get(finished) == completion.record + "\n", "failed delivery lost the finished record");
     fs::remove(mfile);
     check(!ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error) &&
-          !fs::exists(alternate), "Pminus1 recovery published a task without its save");
+          get(add) == prefix, "Pminus1 recovery published a task without its save");
     put(mfile, "verified endpoint");
-    const auto prepared = get(receipt);
+    const auto prepared = get(receipt) + "\nPM1-PREPARED\n";
+    auto legacy = add;
+    legacy += ".pm1-" + std::to_string(ecm_io::fingerprint(ecm_io::file_identity(receipt))) + ".ready";
+    put(legacy, send+"\n");
+    put(receipt, prepared);
     const auto original_queue = get(queue);
     check(ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error),
-          "Pminus1 retry after mailbox clearance");
+          "Pminus1 legacy completion migration to an occupied .add");
     check(get(finished) == completion.record + "\n", "Pminus1 retry duplicated finished");
-    check(get(alternate) == send+"\n" && get(add) == "[Worker #3]\n; preserve\n",
-          "Pminus1 alternate slot / existing worker sections");
-    // Simulate an interruption after the staged rename and before queue advance.
+    check(get(add) == prefix + send + "\n" && !fs::exists(legacy) &&
+          !fs::exists(dir/"worktodo.add.txt"), "Pminus1 must preserve .add and clear legacy staging");
+    // An old PREPARED receipt without a staging file was already delivered.
     put(receipt, prepared);
     put(queue, original_queue);
-    fs::remove(add); // Prime95 picked up the transient .add.
-    fs::remove(alternate);
-    fs::remove(mfile); // Advancing the save after pickup belongs to the receiver.
+    fs::remove(mfile);
     check(ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error),
-          "resume Pminus1 completion after external pickup");
-    check(!fs::exists(add) && get(queue) == "[Worker #2]\n"+row+"\n", "Pminus1 duplicate/over-consumption");
+          "replay already delivered legacy Pminus1 receipt");
+    check(get(add) == prefix + send + "\n" && get(queue) == "[Worker #2]\n"+row+"\n",
+          "Pminus1 duplicate/over-consumption");
     fs::remove(receipt);
     put(mfile, "verified endpoint");
     check(ecm_worktodo_store_completion(receipt.string(), completion, error) &&
           ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error),
           "fresh identical Pminus1 assignment");
-    check(get(add) == send+"\n", "old receipt suppressed a fresh assignment");
+    check(get(add) == prefix+send+"\n", "identical assignment was appended twice");
+    put(receipt, get(receipt).substr(0, get(receipt).find("\nECM-ADVANCE\n")));
+    put(queue, "[Worker #2]\n"+row+"\n");
+    fs::remove(mfile);
+    check(ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error) &&
+          get(add) == prefix+send+"\n" && get(queue) == "[Worker #2]\n",
+          "replay newly published Pminus1 receipt after queue interruption");
 }
 int main(int argc,char **argv)try {
     const bool pm1_only = argc == 3 && std::string(argv[2]) == "--pm1-only";

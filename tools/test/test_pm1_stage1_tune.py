@@ -223,8 +223,8 @@ def check_batch_completion(exe, directory, profile):
     add = receiver / "worktodo.add"
     assert add.read_text().strip() == fast and queue.read_text().strip() == slow
 
-    alternate = receiver / "worktodo.add.txt"
-    alternate.write_text("# occupied\n")
+    add.unlink()
+    add.mkdir()
     other = "Pminus1=1,2,43,-1,2,1000"
     queue.write_text(other + "\n" + fast + "\n")
     blocked = subprocess.run(cmd, cwd=directory, capture_output=True, timeout=90)
@@ -233,13 +233,23 @@ def check_batch_completion(exe, directory, profile):
     assert sorted(line.split(" #")[0] for line in finished.read_text().splitlines()) == sorted((fast, other))
     assert len(list(directory.glob("worktodo.txt.stage1_completed_worker1*"))) == 2
     assert queue.read_text().splitlines() == [other, fast]
-    add.unlink()
-    alternate.unlink()
+    add.rmdir()
+    add.write_text("# existing\n")
     replay = subprocess.run(cmd, cwd=directory, capture_output=True, timeout=90)
     (directory / "replay.log").write_bytes(replay.stdout + replay.stderr)
     assert replay.returncode == 0 and b"START:" not in replay.stdout, replay.stdout + replay.stderr
-    assert sorted((add.read_text().strip(), alternate.read_text().strip())) == sorted((fast, other))
+    header, *rows = add.read_text().splitlines()
+    assert header == "# existing" and sorted(rows) == sorted((fast, other))
+    assert not (receiver / "worktodo.add.txt").exists() and not list(receiver.glob("*.ready"))
     assert len(finished.read_text().splitlines()) == 2 and not queue.read_text().strip()
+    third = "Pminus1=1,2,47,-1,2,1000"
+    published = add.read_bytes()
+    queue.write_text(third + "\n")
+    appended = subprocess.run(cmd, cwd=directory, capture_output=True, timeout=90)
+    assert appended.returncode == 0, appended.stdout + appended.stderr
+    assert add.read_bytes() == published + (third + "\n").encode()
+    assert len(finished.read_text().splitlines()) == 3 and not queue.read_text().strip()
+    assert not (receiver / "worktodo.add.txt").exists() and not list(receiver.glob("*.ready"))
 
 
 if __name__ == "__main__":

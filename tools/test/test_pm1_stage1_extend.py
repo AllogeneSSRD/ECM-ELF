@@ -207,19 +207,18 @@ def check(exe, output):
     assert f"k={pos}/{bits}" in run(directory)
     verify(directory, new, pow(seed, lcm(new) // lcm(7), modulus))
 
-    # The old assignment is still private if both receiver mailboxes were occupied.
+    # A write error leaves the old assignment pending and eligible for a B1 edit.
     old, new = 13, 21
     directory = setup("mailbox_edit", old)
     root(directory, old).mkdir(parents=True)
-    for mailbox in ("worktodo.add", "worktodo.add.txt"):
-        (root(directory, old) / mailbox).write_text("pending\n")
-    assert "await receiver pickup" in run(directory, success=False)
+    blocked_add = root(directory, old) / "worktodo.add"
+    blocked_add.mkdir()
+    run(directory, success=False)
     assert (directory / "finished.txt").read_text().splitlines() == [row(old) + " # P-1 Stage1 no factor"]
     (directory / "worktodo.txt").write_text(row(new) + "\n")
     run(directory)
     assert not list(root(directory, old).glob("*.ready"))
-    for mailbox in ("worktodo.add", "worktodo.add.txt"):
-        assert (root(directory, old) / mailbox).read_text() == "pending\n"
+    assert blocked_add.is_dir() and not (root(directory, old) / "worktodo.add.txt").exists()
     verify(directory, new, pow(3, 2 * p * lcm(new), modulus), prior_finished=(old,))
     print("P-1 B1 extension, checkpoint priority, repeated increase and live queue edit passed")
 
