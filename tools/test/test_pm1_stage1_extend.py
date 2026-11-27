@@ -88,12 +88,15 @@ def check(exe, output):
         assert (status == 0) == success, text
         return text
 
-    def verify(directory, bound, residue, shared=False):
+    def verify(directory, bound, residue, shared=False, prior_finished=()):
         target = directory if shared else root(directory, bound)
         assert (target / filename).read_bytes() == prime_file(p, bound, residue)
         assert (target / "worktodo.add").read_text().strip() == row(bound)
         assert not (directory / "worktodo.txt").read_text().strip()
-        assert (directory / "finished.txt").read_text().count(" # P-1 Stage1 ") == 1
+        records = (directory / "finished.txt").read_text().splitlines()
+        assert [record.split(" # P-1 Stage1 ")[0] for record in records] == [
+            *map(row, prior_finished), row(bound)
+        ]
 
     for name, old, new, k, state, version in [
         ("powers", 7, 9, 6, 5, 8), ("identity", 13, 14, 1, 5, 8),
@@ -211,12 +214,13 @@ def check(exe, output):
     for mailbox in ("worktodo.add", "worktodo.add.txt"):
         (root(directory, old) / mailbox).write_text("pending\n")
     assert "await receiver pickup" in run(directory, success=False)
+    assert (directory / "finished.txt").read_text().splitlines() == [row(old) + " # P-1 Stage1 no factor"]
     (directory / "worktodo.txt").write_text(row(new) + "\n")
     run(directory)
     assert not list(root(directory, old).glob("*.ready"))
     for mailbox in ("worktodo.add", "worktodo.add.txt"):
         assert (root(directory, old) / mailbox).read_text() == "pending\n"
-    verify(directory, new, pow(3, 2 * p * lcm(new), modulus))
+    verify(directory, new, pow(3, 2 * p * lcm(new), modulus), prior_finished=(old,))
     print("P-1 B1 extension, checkpoint priority, repeated increase and live queue edit passed")
 
 

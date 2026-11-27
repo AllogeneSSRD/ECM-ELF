@@ -221,6 +221,9 @@ bool p95_write_worktodo_add(const std::string& path,
     if (publication_uncertain)
         *publication_uncertain = false;
     try {
+        const auto mailbox = std::filesystem::u8path(path);
+        if (!mailbox.parent_path().empty())
+            std::filesystem::create_directories(mailbox.parent_path());
         // The feeder and Stage1 delivery both enter here. Different temporary
         // suffixes do not serialize their read-modify-write of worktodo.add.
         ecm_io::FileLock writer(path, ecm_io::FileLockDomain::Publication, 3000);
@@ -266,7 +269,7 @@ bool p95_write_worktodo_add(const std::string& path,
             for (const auto& line : section.lines)
                 out << line << "\n";
         }
-        ecm_io::write_atomic(std::filesystem::u8path(path), out.str(),
+        ecm_io::write_atomic(mailbox, out.str(),
                              tmp_suffix ? tmp_suffix : ".feeder.tmp");
         return true;
     } catch (const ecm_io::PublicationUncertain& e) {

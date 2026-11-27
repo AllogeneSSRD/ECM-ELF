@@ -42,7 +42,7 @@ static void test_pm1_queue(const fs::path& dir) {
     put(queue, "[Worker #2]\n"+row+"\n"+row+"\n");
     put(add, "[Worker #3]\n; preserve\n");
     put(alternate, "; another assignment awaiting pickup\n");
-    // A transient finished-file error interrupts completion after publishing.
+    // A transient finished-file error must be fixed before publishing.
     fs::create_directory(finished);
     CompletedWorktodo completion{row, "done "+row, "", finished.string(), ""};
     completion.pm1_add_file = add.string();
@@ -53,8 +53,13 @@ static void test_pm1_queue(const fs::path& dir) {
     completion.pm1_save_hash = ecm_io::fingerprint(get(mfile));
     check(ecm_worktodo_store_completion(receipt.string(), completion, error), "store Pminus1 intent");
     check(!ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error) &&
+          error.find("cannot publish finished record") != error.npos,
+          "finished-file error must retain assignment before delivery");
+    fs::remove(finished);
+    check(!ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error) &&
           error.find("await receiver pickup") != error.npos,
           "both Prime95 mailboxes occupied: retain assignment");
+    check(get(finished) == completion.record + "\n", "busy receiver lost the finished record");
     check(get(alternate) == "; another assignment awaiting pickup\n", "overwrote occupied .add.txt");
     fs::remove(alternate);
     put(mfile, "mismatched save!!");
@@ -65,14 +70,19 @@ static void test_pm1_queue(const fs::path& dir) {
     check(!ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error) &&
           !fs::exists(alternate), "Pminus1 recovery published a task without its save");
     put(mfile, "verified endpoint");
-    check(!ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error),
-          "Pminus1 fixture must stop after worktodo.add");
+    const auto prepared = get(receipt);
+    const auto original_queue = get(queue);
+    check(ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error),
+          "Pminus1 retry after mailbox clearance");
+    check(get(finished) == completion.record + "\n", "Pminus1 retry duplicated finished");
     check(get(alternate) == send+"\n" && get(add) == "[Worker #3]\n; preserve\n",
           "Pminus1 alternate slot / existing worker sections");
+    // Simulate an interruption after the staged rename and before queue advance.
+    put(receipt, prepared);
+    put(queue, original_queue);
     fs::remove(add); // Prime95 picked up the transient .add.
     fs::remove(alternate);
     fs::remove(mfile); // Advancing the save after pickup belongs to the receiver.
-    fs::remove(finished);
     check(ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error),
           "resume Pminus1 completion after external pickup");
     check(!fs::exists(add) && get(queue) == "[Worker #2]\n"+row+"\n", "Pminus1 duplicate/over-consumption");

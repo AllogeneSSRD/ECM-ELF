@@ -1381,10 +1381,13 @@ bool ecm_worktodo_commit_completion(const std::string& receipt, const std::strin
             c.pm1_superseded = true;
             return true;
         }
-        if (pm1)
-            publish_pm1_completion(c, receipt, payload);
         if (!ecm_append_text_line_unique(c.finished, c.record))
             throw std::runtime_error("cannot publish finished record: " + c.finished);
+        // Stage1 has a verified endpoint. Record it even when the receiver
+        // cannot yet pick up Stage2. Replay can retry delivery without adding
+        // the finished line again.
+        if (pm1)
+            publish_pm1_completion(c, receipt, payload);
         const auto action = c.replacement.empty() ? WorktodoAction::Remove :
                             c.append_replacement ? WorktodoAction::AppendToWorker : WorktodoAction::Replace;
         if (!advance_locked(queue, worker, c.ticket, action, c.replacement, receipt, payload))

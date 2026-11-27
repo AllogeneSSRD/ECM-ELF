@@ -15,10 +15,10 @@ def verify(build, root, stage2):
                  prime95_paths=True, blocked=False, expected="off", error=None,
                  local_queue="receiver.txt", log_file="", shared_extra="", stage1_extra="",
                  overrides="", extra_queue="", local_receiver=None, exponent=127, factors=None,
-                 repair_slice=False):
+                 repair_slice=False, receiver_exists=True):
         case = root / name
         bin_dir, config_dir, p95 = case / "bin", case / "config", case / "prime95"
-        for directory in (bin_dir, config_dir, p95):
+        for directory in (bin_dir, config_dir):
             directory.mkdir(parents=True)
         exe = bin_dir / "ecm.exe"
         shutil.copy2(worker, exe)
@@ -26,12 +26,15 @@ def verify(build, root, stage2):
         queue, config = config_dir / "worktodo.txt", config_dir / "ecm.toml"
         finished = config_dir / "finished.txt"
         add = p95 / "worktodo.add"
-        (p95 / "worktodo.txt").write_text("", encoding="ascii")
+        if receiver_exists:
+            p95.mkdir()
+            (p95 / "worktodo.txt").write_text("", encoding="ascii")
         save_name = f"{curve}_m{exponent}_100.save"
         task = f'ECMSTAGE1=1,2,{exponent},-1,"{save_name}",2000,0,1'
         if factors is not None:
             task += f',"{factors}"'
-        target = p95 / "saves" / save_name
+        save_dir = p95 / "saves" if receiver_exists else case / "separate-saves"
+        target = save_dir / save_name
         if blocked:
             target.mkdir(parents=True)
         settings = f"""config_version = 4
@@ -53,7 +56,7 @@ handoff_unsupported = "{fallback}"
             settings += f'handoff_worktodo_file = "{local_queue}"\nhandoff_workers = "2"\n'
         if prime95_paths:
             settings += (f'prime95_worktodo_file = "{(p95 / "worktodo.txt").as_posix()}"\n'
-                         f'prime95_save_dir = "{(p95 / "saves").as_posix()}"\n')
+                         f'prime95_save_dir = "{save_dir.as_posix()}"\n')
         config.write_text(settings + stage1_extra + overrides, encoding="ascii")
         queue.write_text(task + "\n" + extra_queue, encoding="ascii")
 
@@ -130,9 +133,11 @@ handoff_unsupported = "{fallback}"
                 run("restart")
                 run("replay")
             assert target.is_file()
+            assert receiver_exists == (p95 / "worktodo.txt").exists()
             assert add.read_text(encoding="utf-8").count("ECMSTAGE2=") == 1
             assert not any((bin_dir / "p95_add_pending.txt.handoff").glob("*.intent"))
 
+    scenario("prime95_new_receiver_directory", "prime95", expected="p95", receiver_exists=False)
     scenario("default_local", None, expected="in-place")
     scenario("explicit_off", "off")
     scenario("local_in_place", "ecm-elf", expected="in-place",
@@ -171,7 +176,7 @@ handoff_unsupported = "{fallback}"
              shared_extra='worker_count = 1\nqueue_skip = "stage2"',
              stage1_extra='handoff_workers = "auto"\n',
              error="automatic Stage2 handoff found no eligible worker")
-    print("Stage1 handoff modes: 19 queue scenarios passed")
+    print("Stage1 handoff modes: 20 queue scenarios passed")
 
 
 if __name__ == "__main__":
