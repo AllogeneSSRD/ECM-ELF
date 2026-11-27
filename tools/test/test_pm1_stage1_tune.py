@@ -31,7 +31,10 @@ def check(exe, root):
 
     run("reject_naf", "-tune", "pm1,naf=0", success=False)
     spec = "pm1,ntt,length=2,batch=1-2,time=0.02,repeat=1:2,find=95"
-    run("cold", "-tune", spec)
+    cold = run("cold", "-tune", spec)
+    assert "\x1b[" not in cold
+    assert "phase=coarse" in cold and "phase=fine" in cold
+    assert all(re.search(rf"\b{label}\s+2\s+62\s", cold) for label in ("Single","Max","Best","95%"))
     original = tomllib.loads(profile.read_text())["pm1"]["stage1"]["matrix"]
     columns, *rows = original
     assert "batch" in columns and not any("naf" in c or c == "curve" for c in columns)
@@ -40,7 +43,9 @@ def check(exe, root):
     for r in fine:
         expected = 1000 * r["batch"] * r["timed_steps"] / r["median_ms"]
         assert math.isclose(r["iter_per_s"], expected, rel_tol=1e-9)
-    run("hot", "-tune", spec)
+    hot = run("hot", "-tune", spec)
+    assert "length max_exp ntt_shape" not in hot and "pm1_stage1_round:" not in hot
+    assert re.search(r"pm1_stage1_tune: .*measured=0 reused=[1-9]", hot)
     assert tomllib.loads(profile.read_text())["pm1"]["stage1"]["matrix"] == original
     run("force", "-tune", spec + ",force")
     pm1 = tomllib.loads(profile.read_text())["pm1"]

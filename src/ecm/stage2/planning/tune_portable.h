@@ -854,7 +854,7 @@ struct Profile {
     };
     using Stage1RowIndex = std::map<Fields,std::vector<size_t>,Stage1DecisionLess>;
 
-    void update_pm1(Fields sample) {
+    bool update_pm1(Fields sample, double* previous_best=nullptr) {
         if (!conditions.count(uint(sample,"condition")) || text(sample,"ntt_type") != weighted_ntt_type ||
             sample.count("naf_window") || sample.count("curve") || sample.count("naf_memory_bytes"))
             throw std::runtime_error("invalid P-1 tuning condition or arithmetic");
@@ -867,10 +867,21 @@ struct Profile {
         const auto dominates=[](const Fields& a,const Fields& b) {
             return stage1_dominates(a,b) && uint(a,"peak_bytes")<=uint(b,"peak_bytes");
         };
-        for(const auto& old:pm1_stage1) if(same(old) && dominates(old,sample)) return;
+        bool kept=false;
+        if(previous_best) *previous_best=0;
+        for(const auto& old:pm1_stage1) {
+            if(!same(old)) continue;
+            if(previous_best) *previous_best=std::max(*previous_best,real(old,"iter_per_s"));
+            if(dominates(old,sample)) {
+                if(!previous_best) return false;
+                kept=true;
+            }
+        }
+        if(kept) return false;
         pm1_stage1.erase(std::remove_if(pm1_stage1.begin(),pm1_stage1.end(),
             [&](const Fields& old){return same(old) && dominates(sample,old);}),pm1_stage1.end());
         pm1_stage1.push_back(std::move(sample));
+        return true;
     }
     void update_stage1_ntt(Fields sample,bool observation=false,Stage1RowIndex* index=nullptr) {
         if (!sample.count("ntt_memory_bytes") && sample.count("owned_bytes"))

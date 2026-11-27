@@ -784,17 +784,7 @@ std::string throughput_change(double current, double previous) {
     return change;
 }
 
-void report_batches(const std::map<BatchRole,Score>& scores, const Score& old95, const Score& measured95, unsigned p, unsigned w, unsigned percent = 95) {
-    if (old95.rate > 0 && measured95.rate > 0) {
-        const auto& published = scores.at(Economical);
-        const bool changed = published.batch != old95.batch || published.rate != old95.rate;
-        const auto accent = changed ? EcmLogAccent::Improved : EcmLogAccent::Retained;
-        ecm_log_accent(accent,"stage1_ntt_95_compare: p=%u naf=%u length=%u batch=%u graph=%u\n",
-                       p,w,measured95.plan.length,measured95.batch,measured95.plan.window);
-        ecm_log_accent(accent,"%uc, %.9g vs %uc, %.9g (old)  %s, status=%s\n",
-                       measured95.batch,measured95.rate,old95.batch,old95.rate,
-                       throughput_change(measured95.rate,old95.rate).c_str(),changed ? "updated" : "kept");
-    }
+void report_batch_rows(const std::map<BatchRole,Score>& scores, unsigned percent, const char* batch_unit) {
     std::vector<std::array<std::string,8>> rows;
     std::array<int,6> widths{};
     const auto target_label = std::to_string(percent) + "%";
@@ -806,7 +796,7 @@ void report_batches(const std::map<BatchRole,Score>& scores, const Score& old95,
         std::ostringstream rate;
         rate << std::fixed << std::setprecision(0) << s.rate;
         rows.push_back({label,std::to_string(s.plan.length),std::to_string(s.plan.max_exp),
-                        tune_shape_descriptor(s.plan),std::to_string(s.batch)+"c",rate.str(),
+                        tune_shape_descriptor(s.plan),std::to_string(s.batch)+batch_unit,rate.str(),
                         std::to_string(s.plan.window),std::to_string(s.plan.dataflow)});
         for (size_t i=0; i<widths.size(); ++i)
             widths[i] = std::max(widths[i],int(rows.back()[i].size()));
@@ -815,6 +805,20 @@ void report_batches(const std::map<BatchRole,Score>& scores, const Score& old95,
         ecm_log_accent(EcmLogAccent::BatchResult,"%-*s %*s %*s %-*s %*s %*s iter/s graph_steps=%s dataflow=%s\n",
             widths[0],row[0].c_str(),widths[1],row[1].c_str(),widths[2],row[2].c_str(),
             widths[3],row[3].c_str(),widths[4],row[4].c_str(),widths[5],row[5].c_str(),row[6].c_str(),row[7].c_str());
+}
+
+void report_batches(const std::map<BatchRole,Score>& scores, const Score& old95, const Score& measured95, unsigned p, unsigned w, unsigned percent = 95) {
+    if (old95.rate > 0 && measured95.rate > 0) {
+        const auto& published = scores.at(Economical);
+        const bool changed = published.batch != old95.batch || published.rate != old95.rate;
+        const auto accent = changed ? EcmLogAccent::Improved : EcmLogAccent::Retained;
+        ecm_log_accent(accent,"stage1_ntt_95_compare: p=%u naf=%u length=%u batch=%u graph=%u\n",
+                       p,w,measured95.plan.length,measured95.batch,measured95.plan.window);
+        ecm_log_accent(accent,"%uc, %.9g vs %uc, %.9g (old)  %s, status=%s\n",
+                       measured95.batch,measured95.rate,old95.batch,old95.rate,
+                       throughput_change(measured95.rate,old95.rate).c_str(),changed ? "updated" : "kept");
+    }
+    report_batch_rows(scores,percent,"c");
 }
 
 enum class SamplePhase : unsigned { Coarse = 1, Fine = 2 };
@@ -1789,8 +1793,11 @@ int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1:
         std::set<unsigned> anchors;
         for (unsigned b=grid.batch.first;b<=cap;b=exhaustive || grid.batch_explicit ? b+1 : b*2) anchors.insert(b);
         if (cap>=grid.batch.first) anchors.insert(cap);
-        table_header();
-        const auto sample=[&](unsigned batch,Stage1NttOptions candidate,unsigned phase) {
+        ecm_log_accent(EcmLogAccent::Subtitle,"pm1_stage1_plan: p=%u B1=%llu length=%u capacity=%u\n",
+                       p,(unsigned long long)b1,plan.length,cap);
+        unsigned last_batch=0, last_phase=0, measured_count=0, reused_count=0;
+        std::map<unsigned,Score> fine_scores;
+        const auto sample=[&](unsigned batch,Stage1NttOptions candidate,unsigned phase) -> Score {
             if (ecm_stage1_stop_requested() || (deadline && now_s()>=deadline)) throw TimeLimit{};
             const unsigned repeats=phase==1 ? grid.coarse_repeats : grid.fine_repeats;
             Plan expected;
@@ -1808,9 +1815,21 @@ int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1:
                     uint(row,"sample_target_ms")<grid.group_ms || uint(row,"peak_bytes")>device.budget) continue;
                 cached_rate=std::max(cached_rate,real(row,"iter_per_s"));
             }
-            if (cached_rate) return cached_rate;
+            if (cached_rate) {
+                ++reused_count;
+                return {batch,expected,cached_rate};
+            }
             auto m=measure_pm1(device,p,candidate,batch,repeats,grid.group_ms,bits);
+            if (batch!=last_batch || phase!=last_phase) {
+                ecm_log_accent(EcmLogAccent::Subtitle,"pm1_stage1_round: length=%u batch=%u phase=%s\n",
+                               plan.length,batch,phase==1 ? "coarse" : "fine");
+                table_header();
+                last_batch=batch;
+                last_phase=phase;
+            }
+            ++measured_count;
             print_measurement(m,grid.group_ms,"");
+            const double rate=m.throughput()*m.steps;
             auto row=encode(m,m.steps);
             row.erase("naf_memory_bytes");
             row["condition"]=std::to_string(id);
@@ -1828,17 +1847,24 @@ int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1:
                 ecm_io::FileLock lock(base.tune_file);
                 auto latest=load(base.tune_file);
                 row["condition"]=std::to_string(latest.condition(identity));
-                latest.update_pm1(std::move(row));
+                double previous=0;
+                const bool accepted=latest.update_pm1(std::move(row),phase==2 ? &previous : nullptr);
                 ecm_io::write_atomic(base.tune_file,latest.serialize());
+                if (previous>0) {
+                    const char* status=accepted ? (rate>previous ? "updated" : "retained") : "kept";
+                    ecm_log_accent(accepted ? EcmLogAccent::Improved : EcmLogAccent::Retained,
+                                   "pm1_stage1_recheck: length=%u batch=%u %.9g vs %.9g (old)  %s, status=%s\n",
+                                   plan.length,batch,rate,previous,throughput_change(rate,previous).c_str(),status);
+                }
             }
-            return m.throughput()*m.steps;
+            return {batch,m.plan,rate};
         };
         const auto scan=[&](unsigned batch) {
             try {
                 auto best=options;
-                double rate=sample(batch,best,1);
+                double rate=sample(batch,best,1).rate;
                 auto compare=[&](Stage1NttOptions other) {
-                    const auto measured=sample(batch,other,1);
+                    const auto measured=sample(batch,other,1).rate;
                     if (measured>rate) { rate=measured; best=other; }
                 };
                 if (!base.tile && !base.profile && plan.tile>=5) { auto alt=best; alt.tile=plan.tile-2; compare(alt); }
@@ -1859,7 +1885,9 @@ int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1:
                     }
                 }
                 if (base.window<0 && !base.profile) { auto alt=best; alt.window=plan.window ? 0 : 1; compare(alt); }
-                rates[batch]={sample(batch,best,2),grid.fine_repeats};
+                const auto fine=sample(batch,best,2);
+                rates[batch]={fine.rate,grid.fine_repeats};
+                fine_scores.emplace(batch,fine);
                 found=true;
             } catch (const BudgetError&) { failed.insert(batch); }
             catch (const std::runtime_error& error) {
@@ -1879,8 +1907,16 @@ int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1:
                 else low=mid+1;
             }
         }
-        ecm_ts_fprintf(stdout,"pm1_stage1_tune: length=%u target=%u%% batch=%u\n",
-                       plan.length,percent,recommended_batch(rates,percent));
+        const auto selected=recommended_batch(rates,percent);
+        const auto best=std::max_element(fine_scores.begin(),fine_scores.end(),
+            [](const auto& a,const auto& b){return a.second.rate<b.second.rate;});
+        std::map<BatchRole,Score> roles{{Capacity,fine_scores.rbegin()->second},{Fastest,best->second},
+                                       {Economical,fine_scores.at(selected)}};
+        if (fine_scores.count(1)) roles.emplace(Single,fine_scores.at(1));
+        report_batch_rows(roles,percent,"");
+        ecm_log_accent(EcmLogAccent::Report,"pm1_stage1_tune: length=%u target=%u%% batch=%u measured=%u reused=%u\n",
+                       plan.length,percent,selected,measured_count,reused_count);
+        ecm_ts_fprintf(stdout,"============================================================\n");
     }
     if (!found) throw BudgetError("no P-1 NTT length or batch fits the grid and memory budget");
     return 0;
