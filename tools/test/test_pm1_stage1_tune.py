@@ -108,6 +108,8 @@ def check(exe, root):
     total = sum((2*p*math.lcm(*range(1, b1+1))).bit_length()-1 for p,b1 in tasks[:2])
     assert counts and counts == sorted(counts) and counts[-1] == (total, total)
     assert counts[0][0] >= k-1 and all(limit == total for _,limit in counts)
+    first = (2*tasks[0][0]*math.lcm(*range(1, tasks[0][1]+1))).bit_length()-1
+    assert {int(value) for value in re.findall(r" first_iter=(\d+)", mixed_batch)} == {first}
     assert re.search(rf"iter={total}/{total} 100.00% iter_per_s=[\d.]+ elapsed=[\d.]+s ETA=0.0s", mixed_batch)
     assert re.findall(r"stage1_task_done: processed=(\d+)", log) == ["1","2","3","4","5"]
     assert "unread.save" in queue.read_text() and "1,2,53,-1" in queue.read_text()

@@ -694,6 +694,7 @@ struct Pm1Request {
     const std::function<bool(const Pm1Progress&)>& verified;
     const Pm1Probe* probe = nullptr;
     const std::vector<uint32_t>* base = nullptr;
+    const std::function<void(const Plan&)>* ready = nullptr;
 };
 
 static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
@@ -1002,7 +1003,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         (cached_fused || (requested & FusedWeightedCarry));
     if (fused_weighted) result.dataflow |= FusedWeightedCarry;
     if (cached_fused) result.dataflow |= CachedFusedWeightedCarry;
-    if (control && control->describe) {
+    Plan pm1_plan{};
+    if ((control && control->describe) || (pm1 && pm1->ready)) {
         const auto join = [](std::string& stages, int width) {
             if (!stages.empty()) stages += '+';
             stages += std::to_string(width);
@@ -1029,7 +1031,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             plan.forward = "3x(" + plan.forward + ')';
             plan.inverse = "3x(" + plan.inverse + ')';
         }
-        control->describe(plan);
+        if (control && control->describe) control->describe(plan);
+        if (pm1 && pm1->ready) pm1_plan=std::move(plan);
     }
     if (describe_only) return result;
     // Plan setup uses legacy-stream table generation and stream capture. Keep
@@ -1505,6 +1508,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             else step(bit);
         };
         setup_guard.unlock();
+        if (pm1->ready) (*pm1->ready)(pm1_plan);
         if (pm1->probe) {
             // Check both production bit paths against the full GMP residue
             // before any stream enters the timed group.
@@ -2015,7 +2019,8 @@ Run pm1_probe_lane(int device, unsigned p, const ecm_stage1::Stage1NttOptions& o
 Pm1Progress pm1_stage1(int device, unsigned p, const std::vector<uint32_t>& exponent,
                        Pm1Progress start, const ecm_stage1::Stage1NttOptions& options,
                        const std::function<bool(const Pm1Progress&)>& verified,
-                       const std::vector<uint32_t>* extension_base) {
+                       const std::vector<uint32_t>* extension_base,
+                       const std::function<void(const Plan&)>& ready) {
     const uint64_t bits = pm1_detail::exponent_bits(exponent);
     if (p < ecm_stage1::stage1_ntt_min_exponent || p > ecm_stage1::stage1_ntt_max_exponent ||
         !start.k || start.k > bits || start.residue.size() != (p + 31) / 32 ||
@@ -2025,7 +2030,7 @@ Pm1Progress pm1_stage1(int device, unsigned p, const std::vector<uint32_t>& expo
     auto weighted = options;
     weighted.weighted = true;
     Control control;
-    const Pm1Request request{exponent,start,verified,nullptr,extension_base};
+    const Pm1Request request{exponent,start,verified,nullptr,extension_base,ready ? &ready : nullptr};
     run_ladder(device,p,1,start.residue,{},0,weighted,&control,1,nullptr,nullptr,&request);
     return start;
 }

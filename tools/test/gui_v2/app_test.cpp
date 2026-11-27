@@ -736,15 +736,26 @@ int main(int argc,char** argv){
         ecmgui::WorkerView worker;
         worker.task="Pminus1=0123456789abcdef0123456789abcdef,1,2,37,-1,17,0,60,0,\"223\"";
         worker.stage1_execution=ecmgui::parse_line("pm1_stage1_batch: length=2 batch=2 available=2 target=95% B2=1700").stage1;
-        assert(ecmgui_v2::ui::worker_task(worker,false)=="P-1 M37 / Known factors  [1/2]  B1=17  B2=1700");
-        assert(ecmgui_v2::ui::stage1_execution(worker.stage1_execution,false)=="Stage1 CUDA/NTT | length=2 | batch=2");
+        assert(ecmgui_v2::ui::worker_task(worker,false)=="P-1 M37 / Known factors  B1=17  B2=1700");
+        assert(ecmgui_v2::ui::stage1_execution(worker.stage1_execution,false)=="Stage1 CUDA/NTT | length=2");
         assert(ecmgui_v2::ui::worker_handoff(worker,false)=="Stage2 → Prime95");
         worker.progress=ecmgui::parse_line("pm1_stage1_progress: iter=23/100 23.00% iter_per_s=0.000 elapsed=0.0s ETA=--").progress;
         auto display=ecmgui_v2::ui::worker_progress(worker,false);
-        assert(display.label=="23.0%  23 / 100 iter" && display.iterations=="--" && display.eta=="--");
-        worker.progress=ecmgui::parse_line("pm1_stage1_progress: iter=3000000000/6000000000 50.00% iter_per_s=512.000 elapsed=10.0s ETA=72.0s").progress;
+        assert(display.label=="23.0%" && display.iterations=="--" && display.eta=="--");
+        assert(ecmgui_v2::ui::pm1_batch(worker).label=="Pminus1 1–2  23 / 100 iter");
+        const auto plan=ecmgui::parse_line("pm1_stage1_ntt: length=2 bpw=20 shape=ibdwt:1:1:1:0 graph=0").stage1;
+        worker.stage1_execution.details.insert(plan.details.begin(),plan.details.end());
+        worker.progress=ecmgui::parse_line("pm1_stage1_progress: iter=3000000000/6000000000 50.00% iter_per_s=512.000 elapsed=10.0s ETA=72.0s first_iter=4000000000 old_B1=11 target_B1=17 phase=finish_old").progress;
         display=ecmgui_v2::ui::worker_progress(worker,false);
         assert(display.fraction==.5f && display.iterations=="512" && display.speed=="--" && display.eta_detail=="72 s (1 m 12 s)");
+        assert(ecmgui_v2::ui::worker_task(worker,false)=="P-1 M37 / Known factors  B1=11 → 17  B2=1700  |  Finishing old B1");
+        assert(ecmgui_v2::ui::worker_task(worker,true).find("完成旧 B1")!=std::string::npos);
+        assert(ecmgui_v2::ui::stage1_execution(worker.stage1_execution,false,false,&worker.progress)==
+            "Stage1 CUDA/NTT | iter=4000000000 | length=2 | bpw=20 | shape=ibdwt:1:1:1:0 | graph=0");
+        worker.progress=ecmgui::parse_line("pm1_stage1_progress: iter=0/0 100.00% iter_per_s=0.000 elapsed=0.0s ETA=0.0s first_iter=0 old_B1=13 target_B1=14 phase=extend").progress;
+        assert(ecmgui_v2::ui::worker_task(worker,false).find("Extending B1")!=std::string::npos);
+        assert(ecmgui_v2::ui::pm1_batch(worker).fraction==1.f &&
+            ecmgui_v2::ui::worker_progress(worker,false).eta=="0 s");
         assert(ecmgui::parse_line("P-1 Stage1 complete M37 B1=17 lane=1 result=223 save=m0000037").hit.factor=="223");
         assert(!ecmgui::parse_line("P-1 Stage1 complete M37 result=gcd=target save=m0000037").is_hit);
         assert(ecmgui::parse_line("P-1 verified k=30/30 errors=0 M37 B1=17 lane=1").kind==ecmgui::LogKind::Event);

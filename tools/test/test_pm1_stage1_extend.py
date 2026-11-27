@@ -2,6 +2,7 @@
 import argparse
 import json
 import math
+import re
 import struct
 import subprocess
 import time
@@ -120,6 +121,13 @@ def check(exe, output):
     (directory / filename).write_bytes(prime_file(p, old + 1, 7))
     log = run(directory)
     assert f"B1={old} B2=915" in log and f"k={k}/{exponent.bit_length()}" in log
+    old_left = exponent.bit_length() - k
+    total = old_left + (lcm(new) // lcm(old)).bit_length() - 1
+    samples = re.findall(r"pm1_stage1_progress: iter=(\d+)/(\d+).* first_iter=(\d+) "
+                         rf"old_B1={old} target_B1={new} phase=(\w+)", log)
+    assert samples[0] == ("0", str(total), str(total), "finish_old")
+    assert (str(old_left), str(total), str(total), "extend") in samples
+    assert samples[-1] == (str(total), str(total), str(total), "extend")
     finished_owl = owl / f"{p}-{exponent.bit_length():09d}.p1"
     assert int.from_bytes(finished_owl.read_bytes().split(b"\n", 1)[1][4:], "little") == pow(3, exponent, modulus)
     verify(directory, new, pow(3, 2 * p * lcm(new), modulus))
@@ -139,6 +147,9 @@ def check(exe, output):
         (root(directory, intermediate) / "extension.pm1").write_bytes(data + struct.pack("<I", crc32c(data)))
         log = run(directory)
         assert f"k={pos}/{bits}" in log
+        remaining = bits - pos + ((lcm(new) // lcm(intermediate)).bit_length() - 1 if reraised else 0)
+        assert f"pm1_stage1_progress: iter=0/{remaining} " in log
+        assert f"pm1_stage1_progress: iter={remaining}/{remaining} " in log
         verify(directory, new, pow(base, lcm(new) // lcm(old), modulus))
 
     directory = setup("same_bound", 17, shared=True)

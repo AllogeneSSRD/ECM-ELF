@@ -347,7 +347,11 @@ void WorkerProc::drain(DrainedOutput &out) {
                 stage1_ntt_status_.start(task_display(pl.start_line).curves);
                 stage1_ntt_received=true;out.stage1_task_started=true;out.last_progress={};
             }
-            if (pl.stage1.valid())
+            if (pl.plain.rfind("pm1_stage1_ntt:",0)==0) {
+                for (const auto& [key,value]:pl.stage1.details)
+                    out.stage1.details[key]=value;
+                out.stage1.backend=pl.stage1.backend;
+            } else if (pl.stage1.valid())
                 out.stage1 = pl.stage1;
             if (pl.handoff.bits)
                 out.handoff = pl.handoff;

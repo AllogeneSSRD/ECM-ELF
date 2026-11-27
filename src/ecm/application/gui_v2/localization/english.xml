@@ -405,6 +405,8 @@
       <Item id="worker_charts_two_columns" name="Two columns: two charts per row" />
       <Item id="worker_charts_list" name="List: one chart per row" />
       <Item id="logs.phase_only" name="Phase: %s" />
+      <Item id="pm1.finish_old" name="Finishing old B1" />
+      <Item id="pm1.extend" name="Extending B1" />
       <Item id="stage2.curve_progress" name="Current curve %.1f%% (estimated)" />
       <Item id="stage2.curve_identity" name="Curve #%llu / %llu" />
       <Item id="stage2.paired" name="Stage2 · Two curves in parallel" />

@@ -44,20 +44,35 @@ inline Stage2Batch stage1_ntt_batch(const ecmgui::Stage1NttStatus& s) {
         out.label+="  ETA "+eta_text(s.batch_eta_s);
     return out;
 }
+inline Stage2Batch pm1_batch(const ecmgui::WorkerView& worker) {
+    Stage2Batch out;
+    const auto& progress=worker.progress;
+    if (!progress.pm1) return out;
+    const auto count=worker.stage1_execution.details.find("batch");
+    out.visible=true;
+    out.fraction=static_cast<float>(std::clamp(progress.pct/100.,0.,1.));
+    out.label="Pminus1 1";
+    if (count!=worker.stage1_execution.details.end() && count->second!="1")
+        out.label+="–"+count->second;
+    out.label+="  "+std::to_string(progress.pm1_done)+" / "+std::to_string(progress.pm1_total)+" iter";
+    return out;
+}
+inline Stage2Batch worker_stage1_batch(const ecmgui::WorkerView& worker) {
+    return worker.progress.pm1?pm1_batch(worker):stage1_ntt_batch(worker.stage1_ntt);
+}
 inline WorkerProgress worker_progress(const ecmgui::WorkerView& worker,bool zh) {
     WorkerProgress out;const auto p=worker.stage2?worker.stage2_status.progress(false):worker.stage1_ntt.valid?worker.stage1_ntt.progress():worker.progress;
     char text[128];
     if(!worker.stage2&&std::isfinite(p.iter_per_s)&&p.iter_per_s>0){std::snprintf(text,sizeof(text),"%.0f",p.iter_per_s);out.iterations=text;}
     if(p.valid&&std::isfinite(p.pct)) {
         const double pct=std::clamp(p.pct,0.,100.);out.fraction=static_cast<float>(pct/100.);
-        if(p.pm1_total)std::snprintf(text,sizeof(text),"%.1f%%  %llu / %llu iter",pct,p.pm1_done,p.pm1_total);
-        else if(p.curves_total&&(worker.stage2||!worker.stage1_ntt.valid))std::snprintf(text,sizeof(text),"%llu / %llu  (%.1f%%)",p.curves_done,p.curves_total,pct);
+        if(p.curves_total&&(worker.stage2||!worker.stage1_ntt.valid))std::snprintf(text,sizeof(text),"%llu / %llu  (%.1f%%)",p.curves_done,p.curves_total,pct);
         else std::snprintf(text,sizeof(text),"%.1f%%",pct);
         out.label=text;
         if(std::isfinite(p.s_per_curve)&&p.s_per_curve>0){
             std::snprintf(text,sizeof(text),"%.2f",p.s_per_curve);out.speed=text;
         }
-        if((worker.stage2&&worker.stage2_status.queue_events?!worker.stop_requested:(p.pm1_total || p.s_per_curve>0))&&
+        if((worker.stage2&&worker.stage2_status.queue_events?!worker.stop_requested:(p.pm1 || p.s_per_curve>0))&&
             std::isfinite(p.eta_s)&&p.eta_s>=0){
             out.eta=eta_text(p.eta_s);out.eta_detail=eta_text(p.eta_s,true);
         }
@@ -82,8 +97,12 @@ inline std::string worker_task(const ecmgui::WorkerView& worker,bool zh) {
     if(task.has_factors)line+=" / "+std::string(text("worker.known_factors",zh));
     if(task.pm1) {
         const auto b2=worker.stage1_execution.details.find("B2");
-        const auto batch=worker.stage1_execution.details.find("batch");
-        if(batch!=worker.stage1_execution.details.end() && batch->second!="1") line+="  [1/"+batch->second+"]";
+        if (const auto& progress=worker.progress; progress.pm1_old_b1 && progress.pm1_target_b1) {
+            const char* phase=progress.pm1_phase=="finish_old"?"pm1.finish_old":"pm1.extend";
+            return line+"  B1="+std::to_string(progress.pm1_old_b1)+" → "+
+                std::to_string(progress.pm1_target_b1)+"  B2="+
+                (b2==worker.stage1_execution.details.end()?task.b2:b2->second)+"  |  "+text(phase,zh);
+        }
         return line+"  B1="+task.b1+"  B2="+(b2==worker.stage1_execution.details.end()?task.b2:b2->second);
     }
     const auto curves=worker.stage2&&worker.stage2_status.valid?worker.stage2_status.total:
@@ -92,11 +111,21 @@ inline std::string worker_task(const ecmgui::WorkerView& worker,bool zh) {
     return line;
 }
 
-inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bool zh, bool details = false) {
+inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bool zh, bool details = false,
+                                    const ecmgui::ProgressInfo* progress = nullptr) {
     if (!execution.valid())
         return {};
-    if (execution.details.count("method") && execution.details.at("method")=="pm1")
-        return "Stage1 CUDA/NTT | length="+execution.details.at("length")+" | batch="+execution.details.at("batch");
+    if (execution.details.count("method") && execution.details.at("method")=="pm1") {
+        std::string line="Stage1 CUDA/NTT";
+        if (progress && progress->pm1_first_known)
+            line+=" | iter="+std::to_string(progress->pm1_first_total);
+        line+=" | length="+execution.details.at("length");
+        for (const auto* key:{"bpw","shape","graph"}) {
+            const auto field=execution.details.find(key);
+            if (field!=execution.details.end()) line+=" | "+field->first+"="+field->second;
+        }
+        return line;
+    }
     std::string line = std::string(!details && execution.backend=="ntt" ? "Stage1" : text("worker.stage1_execution", zh)) + " ";
     line += text(execution.curve == "ed" ? "worker.curve_edwards" : "worker.curve_montgomery", zh);
     if (execution.curve == "mont")

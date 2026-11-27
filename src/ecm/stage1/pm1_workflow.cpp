@@ -1,5 +1,7 @@
 #include "pm1_workflow.h"
 #include "cuda/ntt/pm1.h"
+#include "cuda/ntt/tune.h"
+#include "cuda/ntt/ladder.h"
 #include "ecm/integer.h"
 #include "ecm/stage1/scalar.h"
 #include "ecm/platform/logging.h"
@@ -13,6 +15,7 @@
 #include <fstream>
 #include <set>
 #include <map>
+#include <string_view>
 
 namespace ecm_pm1 {
 using ecm_edwards::Integer;
@@ -43,40 +46,50 @@ std::vector<Pm1Task> batch_prefix(const std::string& path, size_t source_line, P
     return tasks;
 }
 
-void BatchProgress::update(size_t index, uint64_t k, uint64_t bits, double block_ms) {
+void BatchProgress::start(size_t index, uint64_t done, uint64_t total, uint64_t old_b1,
+                          uint64_t target_b1, const char* phase) {
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto now=Clock::now();
+    if (begin_==Clock::time_point{}) begin_=Clock::now();
+    lanes_.at(index)={done,total,old_b1,target_b1,phase,ecm_stage1_gpu_progress::SpeedWindow{}};
+    report(true);
+}
+
+void BatchProgress::update(size_t index, uint64_t done, double block_ms) {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto& lane=lanes_.at(index);
-    if (!lane.bits) {
-        lane.initial=k;
-        lane.bits=bits;
-        if (begin_==Clock::time_point{}) begin_=now;
-    } else {
-        lane.speed.add(double(k-lane.cursor),block_ms);
-    }
-    lane.cursor=k;
-    if (k<bits && now-last_<std::chrono::milliseconds(250)) return;
-    uint64_t done=0, total=0, advanced=0;
-    double eta=0;
-    bool known=true;
-    for (const auto& item:lanes_) {
-        if (!item.bits) return;
-        // k includes the leading exponent bit, already represented by the seed 3.
-        done+=item.cursor-1;
-        total+=item.bits-1;
-        advanced+=item.cursor-item.initial;
-        if (item.cursor<item.bits) {
-            known=known && item.speed.speed()>0;
-            eta=std::max(eta,item.speed.remaining(item.bits,item.cursor));
+    lane.speed.add(double(done-lane.cursor),block_ms);
+    lane.cursor=done;
+    report(done==lane.total);
+}
+
+void BatchProgress::report(bool force) {
+    const auto now=Clock::now();
+    if (!force && now-last_<std::chrono::milliseconds(250)) return;
+    uint64_t done=0, total=0;
+    double eta=0, rate=0;
+    bool known=true, finishing_old=false;
+    for (const auto& lane:lanes_) {
+        if (!lane.phase) return;
+        done+=lane.cursor;
+        total+=lane.total;
+        finishing_old=finishing_old || std::string_view(lane.phase)=="finish_old";
+        if (lane.cursor<lane.total) {
+            rate+=lane.speed.speed();
+            known=known && lane.speed.speed()>0;
+            eta=std::max(eta,lane.speed.remaining(lane.total,lane.cursor));
         }
     }
+    // If K is 1, the old phase reaches the final cursor before the phase change.
+    if (done==total && finishing_old) return;
     const double elapsed=std::chrono::duration<double>(now-begin_).count();
-    if (!total) return; // An interval without a new prime power requires no iterations.
     char remaining[64]="--";
     if (known) std::snprintf(remaining,sizeof(remaining),"%.1fs",eta);
-    ecm_ts_fprintf(stdout,"pm1_stage1_progress: iter=%llu/%llu %.2f%% iter_per_s=%.3f elapsed=%.1fs ETA=%s\n",
-                   (unsigned long long)done,(unsigned long long)total,100.*done/total,
-                   elapsed>0 ? advanced/elapsed : 0.,elapsed,remaining);
+    const auto& first=lanes_.front();
+    ecm_ts_fprintf(stdout,"pm1_stage1_progress: iter=%llu/%llu %.2f%% iter_per_s=%.3f elapsed=%.1fs ETA=%s"
+                   " first_iter=%llu old_B1=%llu target_B1=%llu phase=%s\n",
+                   (unsigned long long)done,(unsigned long long)total,total ? 100.*done/total : 100.,
+                   1000.*rate,elapsed,remaining,(unsigned long long)first.total,
+                   (unsigned long long)first.old_b1,(unsigned long long)first.target_b1,first.phase);
     last_=now;
 }
 
@@ -90,6 +103,8 @@ struct Phase {
     std::optional<ExtensionSave> extension;
     std::vector<uint32_t> exponent;
     uint64_t bits = 0;
+
+    uint64_t cursor() const { return extension ? extension->k : owl ? owl->k : 1; }
 };
 
 bool load_phase(Phase& phase, unsigned p) {
@@ -141,7 +156,7 @@ void prepare(Phase& phase, const Pm1Task& task, const ecm_stage1::Stage1Options&
 
 Pm1Progress advance(Phase& phase, const Pm1Task& task, uint64_t b2,
                     const ecm_stage1::Stage1Options& options, BatchProgress& progress, size_t lane,
-                    uint64_t offset, uint64_t total_bits) {
+                    uint64_t offset, uint64_t pending, uint64_t old_b1) {
     Pm1Progress state;
     double previous_seconds = 0;
     if (phase.extension) {
@@ -168,14 +183,32 @@ Pm1Progress advance(Phase& phase, const Pm1Task& task, uint64_t b2,
                    task.p, (unsigned long long)phase.bound, (unsigned long long)b2,
                    options.execution.device_index, (unsigned long long)state.k,
                    (unsigned long long)phase.bits, lane + 1);
-    progress.update(lane, offset + state.k, total_bits, 0);
+    const auto start_k = state.k;
+    const bool extending = old_b1 != 0;
+    // Ordinary resumes retain their original cursor. An extension counts only
+    // the work still needed at startup, including any unfinished older phase.
+    const auto skipped = extending ? start_k : 1;
+    const char* phase_name = !extending ? "stage1" : phase.bound < task.b1 ? "finish_old" : "extend";
+    if (extending)
+        ecm_ts_fprintf(stdout, "P-1 Stage1 phase M%u old_B1=%llu target_B1=%llu phase=%s remaining_iter=%llu lane=%zu\n",
+                       task.p, (unsigned long long)old_b1, (unsigned long long)task.b1, phase_name,
+                       (unsigned long long)(phase.bits - start_k), lane + 1);
+    progress.start(lane, offset + start_k - skipped, offset + phase.bits - skipped + pending,
+                   old_b1, task.b1, phase_name);
     using Clock = std::chrono::steady_clock;
     const auto begin = Clock::now();
     auto last_save = begin, block_start = begin;
+    const auto ready = [&](const ecm_mersenne_ntt::Plan& plan) {
+        if (lane == 0 && !offset)
+            ecm_ts_fprintf(stdout, "pm1_stage1_ntt: length=%u bpw=%u shape=%s graph=%u\n",
+                           plan.length, plan.bpw, ecm_mersenne_ntt::tune_shape_descriptor(plan).c_str(),
+                           plan.window);
+        block_start = Clock::now();
+    };
     const auto verified = [&](const Pm1Progress& block) {
         const auto now = Clock::now();
         const bool stop = ecm_stage1_stop_requested();
-        progress.update(lane, offset + block.k, total_bits,
+        progress.update(lane, offset + block.k - skipped,
                         std::chrono::duration<double, std::milli>(now - block_start).count());
         if (stop || block.k == phase.bits ||
             (options.persistence.ckpt_ms &&
@@ -204,7 +237,7 @@ Pm1Progress advance(Phase& phase, const Pm1Task& task, uint64_t b2,
     if (state.k < phase.bits)
         state = ecm_mersenne_ntt::pm1_stage1(options.execution.device_index, task.p, phase.exponent,
                                              std::move(state), options.execution.ntt, verified,
-                                             phase.extension ? &phase.extension->base : nullptr);
+                                             phase.extension ? &phase.extension->base : nullptr, ready);
     return state;
 }
 } // namespace
@@ -290,22 +323,25 @@ Outcome run(const Pm1Task& task, uint64_t b2, const ecm_stage1::Stage1Options& o
         state.residue = std::move(source->residue);
         ecm_ts_fprintf(stdout, "P-1 Stage1 M%u B1=%llu using completed Prime95 endpoint\n", task.p,
                        (unsigned long long)task.b1);
-        progress.update(lane, 1, 1, 0);
+        progress.start(lane, 0, 0, 0, task.b1, "completed");
     } else {
         prepare(current, task, options);
         uint64_t offset = 0;
+        const uint64_t old_b1 = current.extension ? current.extension->from : 0;
         if (prior) {
             prepare(*prior, task, options);
             const auto saved_b2 = prior->owl ? prior->owl->b2 : b2;
-            auto old = advance(*prior, task, saved_b2, options, progress, lane, 0,
-                               prior->bits + current.bits - 1);
+            offset = prior->bits - prior->cursor();
+            auto old = offset ? advance(*prior, task, saved_b2, options, progress, lane, 0,
+                                        current.bits - 1, old_b1)
+                              : Pm1Progress{prior->bits, prior->extension ? std::move(prior->extension->residue)
+                                                                         : std::move(prior->owl->residue), 0};
             if (old.k != prior->bits || ecm_stage1_stop_requested())
                 return {};
-            offset = prior->bits - 1;
             current.extension->base = std::move(old.residue);
             prior.reset();
         }
-        state = advance(current, task, b2, options, progress, lane, offset, offset + current.bits);
+        state = advance(current, task, b2, options, progress, lane, offset, 0, old_b1);
         if (state.k != current.bits)
             return {};
     }

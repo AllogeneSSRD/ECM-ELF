@@ -482,7 +482,7 @@ void WorkerController::tick() {
                 w.hist_s_per_curve.push_back(static_cast<float>(w.progress.s_per_curve));
             }
             const std::size_t cap = 600;
-            if(w.progress.pm1_total && w.progress.iter_per_s>0) {
+            if(w.progress.pm1 && w.progress.iter_per_s>0) {
                 w.pm1_iter_history.push_back(static_cast<float>(w.progress.iter_per_s));
                 if(w.pm1_iter_history.size()>cap) w.pm1_iter_history.erase(w.pm1_iter_history.begin());
             }
@@ -497,7 +497,7 @@ void WorkerController::tick() {
             if (w.progress.pct - w.last_traced_pct >= 1.0 || w.last_traced_pct < 0.0) {
                 w.last_traced_pct = w.progress.pct;
                 char buf[220];
-                if(w.progress.pm1_total)
+                if(w.progress.pm1)
                     std::snprintf(buf,sizeof(buf),"P-1 progress pct=%.1f iter=%llu/%llu iter_per_s=%.3f eta=%.1f",
                                   w.progress.pct,w.progress.pm1_done,w.progress.pm1_total,w.progress.iter_per_s,w.progress.eta_s);
                 else std::snprintf(buf, sizeof(buf),
@@ -515,8 +515,15 @@ void WorkerController::tick() {
         }
         if (!w.stage2 && (d.handoff.bits || !d.last_start_line.empty()))
             update_local_handoff(w, d.handoff);
-        if (!w.stage2 && (d.stage1.valid() || !d.last_start_line.empty()))
-            w.stage1_execution = std::move(d.stage1);
+        if (!w.stage2 && (d.stage1.valid() || !d.last_start_line.empty())) {
+            if (!d.stage1_task_started && w.stage1_execution.details.count("method") &&
+                d.stage1.details.count("graph") && !d.stage1.details.count("method")) {
+                for (const auto& [key,value]:d.stage1.details)
+                    w.stage1_execution.details[key]=value;
+            } else {
+                w.stage1_execution = std::move(d.stage1);
+            }
+        }
         if(d.stage2.valid) {
             w.stage2_status=d.stage2;
             if(d.last_start_line.empty() && (d.stage2_task_started || w.task.empty())) {

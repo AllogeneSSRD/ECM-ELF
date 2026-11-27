@@ -68,7 +68,7 @@ ProgressLine classify_progress_line(const char* text) {
     const std::string_view line(text);
     if (line.rfind("pm1_stage1_progress: iter=",0)==0) {
         unsigned long long done=0,total=0;
-        if (std::sscanf(text,"pm1_stage1_progress: iter=%llu/%llu",&done,&total)==2 && total && done<=total)
+        if (std::sscanf(text,"pm1_stage1_progress: iter=%llu/%llu",&done,&total)==2 && done<=total)
             return done==total ? ProgressLine::Complete : ProgressLine::Intermediate;
     }
     if (line.substr(0, ntt_prefix.size()) == ntt_prefix) {

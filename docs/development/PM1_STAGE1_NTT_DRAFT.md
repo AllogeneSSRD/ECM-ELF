@@ -42,6 +42,8 @@ Pminus1=[AID,]1,2,p,-1,B1,B2[,how_far_factored][,B2_start][,"factors"]
 
 ## 实现与实测
 
+- 0.76.1 的 worker 详情按首任务、首任务迭代与实际 NTT 形状、整批迭代进度显示。扩展时从启动存档位置统计需执行的迭代，并在进入增量阶段时重置当前速度样本。日志摘要使用相同的计数和 ETA。[显示口径](../usage/GUI_V2.md#pm1-progress) · [原生界面回归](../../tools/test/gui_v2/test_pm1_progress.py)
+
 - 0.76.0 支持提高 worktodo 中的 B1。增量指数按 Prime95 31.6 的 `ecm.cpp::calc_exp2` 和 PrMers 的 `RunPM1.cpp::buildE_incremental_fast` 取两界 LCM 之商，Gerbicz 校验使用旧端点作底数。原始指数与增量指数分别使用 GpuOwl 和本机扩展断点。恢复顺序、可读取的 Prime95 状态及运行中编辑约定见 [Stage1 使用说明](../usage/STAGE1.md#pm1-stage1)。[端到端回归](../../tools/test/test_pm1_stage1_extend.py)
 - 使用 Prime95 接收端留下的 M400381 DONE 存档（B_done=500、C_done=89850）扩展至 B1=1000。K 长 715 位，GPU 推进 714 次迭代，GCD 得 671839319。原生完成档与同版本从头计算的 50,128 字节逐字节一致，SHA-256 为 `c41604c4f5d64296aa62a7067da072b7fbc2f085d1a99c8a582499888977bf63`。[扩展记录](../../data/experiments/pm1_extend_0760/prime95_native/worker.log) · [从头计算记录](../../data/experiments/pm1_extend_0760/queue/p95_forced/worker.log)
 

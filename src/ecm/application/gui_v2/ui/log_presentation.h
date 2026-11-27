@@ -8,7 +8,8 @@ inline LogTone log_tone(const ecmgui::ParsedLine& line) {
     if(line.kind==ecmgui::LogKind::Error)return text.find("WARN")!=text.npos||text.find("warn")!=text.npos?LogTone::Warning:LogTone::Error;
     if(line.is_hit||line.queue_done)return LogTone::Success;
     if(text.rfind("P-1 verified ",0)==0 || text.rfind("P-1 Stage1 handoff ",0)==0)return LogTone::Info;
-    if(text.rfind("P-1 Stage1 ",0)==0 || text.rfind("pm1_stage1_batch:",0)==0)return LogTone::Stage1;
+    if(text.rfind("P-1 Stage1 ",0)==0 || text.rfind("pm1_stage1_batch:",0)==0 ||
+       text.rfind("pm1_stage1_ntt:",0)==0)return LogTone::Stage1;
     if(line.stage2.kind!=ecmgui::Stage2Event::Kind::None)return LogTone::Stage2;
     if(line.kind==ecmgui::LogKind::Progress)return LogTone::Stage1;
     if(text.find("START:")==0||text.find("Resuming")==0)return text.find("ECMSTAGE2")!=text.npos?LogTone::Stage2:LogTone::Stage1;
@@ -22,7 +23,7 @@ inline ImVec4 log_color(LogTone tone,const Palette& p) {
 // One fixed-height row: timestamp stays muted, event tag and body use semantic colors.
 inline void log_line(const std::string& source,const Palette& p) {
     const auto line=ecmgui::parse_line(source);auto text=line.plain;
-    if(line.progress.valid&&(line.progress.s_per_curve>0||line.progress.pm1_total)&&std::isfinite(line.progress.eta_s)&&line.progress.eta_s>=60){
+    if(line.progress.valid&&(line.progress.s_per_curve>0||line.progress.pm1)&&std::isfinite(line.progress.eta_s)&&line.progress.eta_s>=60){
         const auto eta=eta_text(line.progress.eta_s,true);const auto reduced=eta.find('(');
         if(reduced!=eta.npos)text+="  "+eta.substr(reduced);
     }

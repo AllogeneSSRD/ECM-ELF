@@ -21,15 +21,19 @@ std::vector<Pm1Task> batch_prefix(const std::string& path, size_t source_line, P
 class BatchProgress {
     using Clock = std::chrono::steady_clock;
     struct Lane {
-        uint64_t initial=0, cursor=0, bits=0;
+        uint64_t cursor=0, total=0, old_b1=0, target_b1=0;
+        const char* phase=nullptr;
         ecm_stage1_gpu_progress::SpeedWindow speed;
     };
     std::vector<Lane> lanes_;
     std::mutex mutex_;
     Clock::time_point begin_{}, last_{};
+    void report(bool force);
 public:
     explicit BatchProgress(size_t lanes) : lanes_(lanes) {}
-    void update(size_t lane, uint64_t k, uint64_t bits, double block_ms);
+    void start(size_t lane, uint64_t done, uint64_t total, uint64_t old_b1, uint64_t target_b1,
+               const char* phase);
+    void update(size_t lane, uint64_t done, double block_ms);
 };
 
 Outcome run(const Pm1Task&, uint64_t b2, const ecm_stage1::Stage1Options&,

@@ -198,6 +198,15 @@ bool kv_pos(const std::string &s, const char *key, std::size_t &val_start) {
     return true;
 }
 
+bool read_kv_token(const std::string& s, const char* key, std::string& out) {
+    std::size_t start = 0;
+    if (!kv_pos(s, key, start)) return false;
+    const auto end=s.find_first_of(" \t",start);
+    if (end==start || start==s.size()) return false;
+    out=s.substr(start,end-start);
+    return true;
+}
+
 bool read_kv_int(const std::string &s, const char *key, long long &out) {
     std::size_t v = 0;
     if (!kv_pos(s, key, v)) return false;
@@ -587,13 +596,31 @@ ParsedLine parse_line(const std::string &line) {
     if (starts_with(p,"pm1_stage1_progress:")) {
         auto& pr=out.progress;
         if (std::sscanf(p.c_str(),"pm1_stage1_progress: iter=%llu/%llu",&pr.pm1_done,&pr.pm1_total)!=2 ||
-            !pr.pm1_total || pr.pm1_done>pr.pm1_total) return out;
+            pr.pm1_done>pr.pm1_total) return out;
         pr.valid=pr.gpu=true;
-        pr.pct=100.*pr.pm1_done/pr.pm1_total;
+        pr.pm1=true;
+        pr.pct=pr.pm1_total ? 100.*pr.pm1_done/pr.pm1_total : 100.;
+        long long value=0;
+        if (read_kv_int(p,"first_iter",value) && value>=0) {
+            pr.pm1_first_known=true;
+            pr.pm1_first_total=value;
+        }
+        if (read_kv_int(p,"old_B1",value) && value>0) pr.pm1_old_b1=value;
+        if (read_kv_int(p,"target_B1",value) && value>0) pr.pm1_target_b1=value;
+        read_kv_token(p,"phase",pr.pm1_phase);
         read_after(p," iter_per_s=",pr.iter_per_s);
         read_after(p," elapsed=",pr.elapsed_s);
         if (!read_after(p," ETA=",pr.eta_s)) pr.eta_s=-1;
         out.kind=LogKind::Progress;
+        return out;
+    }
+    if (starts_with(p,"pm1_stage1_ntt:")) {
+        out.stage1.backend="ntt";
+        for (const auto* key:{"length","bpw","shape","graph"}) {
+            std::string value;
+            if (read_kv_token(p,key,value)) out.stage1.details[key]=std::move(value);
+        }
+        out.kind=LogKind::Event;
         return out;
     }
     if (starts_with(p,"P-1 Stage1 ") || starts_with(p,"P-1 verified ")) {

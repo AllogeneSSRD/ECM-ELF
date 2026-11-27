@@ -831,7 +831,7 @@ std::string App::worker_summary(const ecmgui::WorkerView& worker,bool zh)const {
         }
     } else {
         summary += "  |  " + ui::worker_handoff(worker, zh);
-        const auto execution = ui::stage1_execution(worker.stage1_execution, zh);
+        const auto execution = ui::stage1_execution(worker.stage1_execution, zh, false, &worker.progress);
         if (!execution.empty())
             summary += "\n" + execution;
     }
@@ -913,7 +913,7 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     const auto show_curve_bars=[](const ecmgui::WorkerView& worker){
         return worker.stage2&&worker.stage2_status.workers==2&&worker.running()&&!worker.stage2_status.curves.empty();
     };
-    const auto ntt_bar=[](const ecmgui::WorkerView& worker){return !worker.stage2?ui::stage1_ntt_batch(worker.stage1_ntt):ui::Stage2Batch{};};
+    const auto ntt_bar=[](const ecmgui::WorkerView& worker){return !worker.stage2?ui::worker_stage1_batch(worker):ui::Stage2Batch{};};
     const float padding=ImGui::GetStyle().CellPadding.y*2;float content_height=ImGui::GetTextLineHeight()+padding+4*scale;
     for(const auto& worker:controller.workers()){
         const auto summary=worker_summary(worker,zh);
@@ -1304,9 +1304,14 @@ void App::draw_logs(const ui::Fonts& fonts,const ecmgui::WorkerView* active_work
             }
             if(active_worker->stop_requested)ImGui::TextColored(p.warning,"%s",ui::text(paired?"stage2.stop_active":"stop_after_the_current_stage2_curve",zh));
         } else {
-            const auto execution = ui::stage1_execution(active_worker->stage1_execution, zh, true);
+            const auto execution = ui::stage1_execution(active_worker->stage1_execution, zh, true,
+                                                         &active_worker->progress);
             if (!execution.empty())
                 ImGui::TextWrapped("%s", execution.c_str());
+            if (pm1) {
+                const auto batch=ui::pm1_batch(*active_worker);
+                if (batch.visible) ImGui::ProgressBar(batch.fraction,{-1,0},batch.label.c_str());
+            }
             ImGui::TextWrapped("%s", ui::worker_handoff(*active_worker, zh, true).c_str());
         }
     }

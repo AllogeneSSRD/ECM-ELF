@@ -405,6 +405,8 @@
       <Item id="worker_charts_two_columns" name="切换双列：一行两个图表" />
       <Item id="worker_charts_list" name="切换列表：一行一个图表" />
       <Item id="logs.phase_only" name="阶段：%s" />
+      <Item id="pm1.finish_old" name="完成旧 B1" />
+      <Item id="pm1.extend" name="扩展 B1" />
       <Item id="stage2.curve_progress" name="当前曲线 %.1f%%（估计）" />
       <Item id="stage2.curve_identity" name="曲线 #%llu / %llu" />
       <Item id="stage2.paired" name="Stage2 · 双曲线并行" />
