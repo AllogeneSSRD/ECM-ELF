@@ -1,4 +1,5 @@
 #include "ladder.h"
+#include "pm1_replay.h"
 #include "host_lanes.h"
 #include "profiles.h"
 #include "weighted.cuh"
@@ -685,11 +686,18 @@ __global__ void select_auxiliary_bit(uint32_t* state, Shape s, const uint64_t* s
         state[index] = state[index + size_t(XA)*s.curves*s.words];
 }
 
+struct Pm1Request {
+    const std::vector<uint32_t>& exponent;
+    Pm1Progress& progress;
+    const std::function<bool(const Pm1Progress&)>& verified;
+};
+
 static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
                       const std::vector<uint32_t>& scalar_words, unsigned count,
                       const ecm_stage1::Stage1NttOptions& options, const Control* control,
                       unsigned samples, const EdwardsNaf* naf = nullptr,
-                      const std::vector<uint64_t>* auxiliary_sigmas = nullptr) {
+                      const std::vector<uint64_t>* auxiliary_sigmas = nullptr,
+                      const Pm1Request* pm1 = nullptr) {
     const auto prep = now_s();
     if (p < ecm_stage1::stage1_ntt_min_exponent || p > ecm_stage1::stage1_ntt_max_exponent ||
         !curves || curves > ecm_stage1::stage1_ntt_max_curves || options.window < -1 || options.window > 64 ||
@@ -699,7 +707,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         throw std::invalid_argument("invalid Mersenne NTT Stage1 shape or scalar");
     Shape s{p, (p+31)/32, curves, 0, 0, 0};
     const size_t stride = size_t(s.words)*curves;
-    const unsigned initial_slots = naf ? 3 : 6, checkpoint_slots = naf ? 3 : 4;
+    const unsigned initial_slots = pm1 ? 1 : naf ? 3 : 6, checkpoint_slots = naf ? 3 : 4;
+    const unsigned state_slots = pm1 ? unsigned(pm1_detail::SlotCount) : slots;
     const bool describe_only = control && control->describe_only;
     if (!describe_only && initial.size() != initial_slots*stride) throw std::invalid_argument("invalid Stage1 initial points");
     auto check_residues = [&](const std::vector<uint32_t>& values) {
@@ -729,7 +738,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         check_residues(naf->dictionary);
     }
     const bool square_probe = control && control->modular_square_probe;
-    const auto bound = (naf || square_probe || auxiliary_sigmas) ? WeightedBound::UnsignedProducts : WeightedBound::Conservative;
+    const auto bound = (naf || square_probe || auxiliary_sigmas || pm1) ? WeightedBound::UnsignedProducts : WeightedBound::Conservative;
     const auto packing = resolve_packing(p, options, true, bound);
     s.length=packing.length; s.bpw=packing.bpw; s.digits=packing.digits;
     const bool mixed = ecm_stage1::stage1_ntt_radix5(s.length);
@@ -792,7 +801,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         if (options.mixed_layout != Layout::Twiddle) requested |= PfaRadix5;
         if (options.mixed_layout == Layout::Coalesced) requested |= CoalescedRadix5;
     }
-    if (naf) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute);
+    if (naf || pm1) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute);
     if (cubic) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute | SegmentedCarry | DeferredPack);
     const bool pfa = mixed && (requested & PfaRadix5);
     const bool coalesced = pfa && (requested & CoalescedRadix5);
@@ -834,12 +843,12 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const auto* resolved = control ? &overrides : nullptr;
     fuse_describe(ctx,width,log,omega2,inv2,true,resolved);
     // A table export needs only the five spectra for 2P and one for d.
-    const unsigned fixed_planes = naf && naf->affine_output ? 6 : naf ? 4 * entries : 2;
+    const unsigned fixed_planes = pm1 ? 0 : naf && naf->affine_output ? 6 : naf ? 4 * entries : 2;
     const size_t dictionary_bytes = naf ? size_t(fixed_planes) * sizeof(U) * curves * s.length : 0;
     bool gpu_dictionary = naf && naf->build_dictionary;
     const size_t dictionary_workspace = gpu_dictionary ? 4ull * entries * stride * sizeof(uint32_t) : 0;
-    result.owned_bytes = (naf ? 9 : 11) * sizeof(U) * curves * s.length + dictionary_bytes +
-        slots * stride * sizeof(uint32_t) +
+    result.owned_bytes = (naf || pm1 ? 9 : 11) * sizeof(U) * curves * s.length + dictionary_bytes +
+        state_slots * stride * sizeof(uint32_t) +
         (std::max(size_t(1), scalar_words.size()) + 1) * sizeof(uint32_t) +
         (fuse_planned_base_words(ctx) + fuse_planned_table_words(ctx)) * sizeof(U);
     if (auxiliary_sigmas) result.owned_bytes += curves*sizeof(uint64_t);
@@ -860,7 +869,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     result.owned_bytes += result.dictionary_workspace_bytes;
     if (result.owned_bytes > result.budget_bytes)
         throw BudgetError("Stage1 NTT buffers exceed the total VRAM budget");
-    const size_t header_words = size_t(slots) * curves * segment_count;
+    const size_t header_words = size_t(state_slots) * curves * segment_count;
     const bool segmented = (requested & SegmentedCarry) &&
         header_words * sizeof(unsigned) <= result.budget_bytes - result.owned_bytes;
     if (segmented) {
@@ -1074,7 +1083,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (frequency_double) configure_inverse((const void*)frequency_inverse);
     ntt_fuse_cache_tables(ctx,omega2,inv2);
     CK(cudaDeviceSynchronize()); // table creation uses the legacy stream
-    Buffer<uint32_t> state(slots*stride);
+    Buffer<uint32_t> state(state_slots*stride);
     Buffer<unsigned> carry_headers(segmented ? header_words : 0);
     Buffer<unsigned> start(1);
     Buffer<uint32_t> scalar(std::max(size_t(1), scalar_words.size()));
@@ -1218,7 +1227,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             pack<false><<<grid(count),threads,0,q>>>(state.data,dest,s,in,nullptr);
         forward_spectra(dest,count*curves*planes);
     };
-    if (!naf) {
+    if (!naf && !pm1) {
         forward_inputs(fixed.data, 2, {{A24,Base}});
     }
     if (loose || frequency_double) {
@@ -1434,6 +1443,57 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         }
         if (segmented) finish_carries(outputs,out,cursor,route_output,pending_outputs);
     };
+    if (pm1) {
+        using namespace pm1_detail;
+        const size_t bytes = stride * sizeof(uint32_t);
+        const auto slot = [&](pm1_detail::Slot id) { return state.data + size_t(id) * stride; };
+        const auto copy = [&](auto dst, auto src) {
+            CK(cudaMemcpyAsync(slot(dst),slot(src),bytes,cudaMemcpyDeviceToDevice,q));
+        };
+        const auto product = [&](auto dst, auto a, auto b) {
+            if (a == b) mul(1,1,{a},{0},{0},{dst});
+            else mul(2,1,{a,b},{0},{1},{dst});
+            CK(cudaGetLastError());
+        };
+        const auto read = [&](auto src) {
+            std::vector<uint32_t> host(stride);
+            CK(cudaMemcpyAsync(host.data(),slot(src),bytes,cudaMemcpyDeviceToHost,q));
+            CK(cudaStreamSynchronize(q));
+            return host;
+        };
+        const auto restore = [&](const std::vector<uint32_t>& host) {
+            CK(cudaMemcpyAsync(slot(Current),host.data(),bytes,cudaMemcpyHostToDevice,q));
+        };
+        CK(cudaMemsetAsync(slot(Three),0,bytes,q));
+        CK(cudaMemsetAsync(slot(Three),3,1,q));
+        const auto step = [&](bool times_three) {
+            product(Current, Current, Current);
+            if (times_three) {
+                // Work on canonical limbs so the squared coefficient bound stays valid.
+                add_inputs(std::false_type{},1,{{Current},{Current},{Scratch},0},{});
+                add_inputs(std::false_type{},1,{{Current},{Scratch},{Current},0},{});
+                CK(cudaGetLastError());
+            }
+        };
+        Graph steps[2];
+        if (window) {
+            for (unsigned bit = 0; bit < 2; ++bit) {
+                auto& graph = steps[bit];
+                CK(cudaStreamBeginCapture(q,cudaStreamCaptureModeThreadLocal));
+                step(bit);
+                CK(cudaStreamEndCapture(q,&graph.graph));
+                CK(cudaGraphInstantiateWithFlags(&graph.exec,graph.graph,0));
+            }
+        }
+        observe_memory();
+        const auto advance_bit = [&](bool bit) {
+            if (window) CK(cudaGraphLaunch(steps[bit].exec,q));
+            else step(bit);
+        };
+        replay(pm1->exponent,pm1->progress,pm1->verified,advance_bit,copy,product,read,restore);
+        CK(cudaStreamSynchronize(q));
+        return result;
+    }
     if (auxiliary_sigmas) {
         // Each lane starts at Q and follows its own scalar.
         // The fixed spectra initialized above contain Q.x=12 and Q.y=40.
@@ -1899,6 +1959,22 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     observe_memory();
     return result;
 }
+Pm1Progress pm1_stage1(int device, unsigned p, const std::vector<uint32_t>& exponent,
+                       Pm1Progress start, const ecm_stage1::Stage1NttOptions& options,
+                       const std::function<bool(const Pm1Progress&)>& verified) {
+    const uint64_t bits = pm1_detail::exponent_bits(exponent);
+    if (p < ecm_stage1::stage1_ntt_min_exponent || p > ecm_stage1::stage1_ntt_max_exponent ||
+        !start.k || start.k > bits || start.residue.size() != (p + 31) / 32 ||
+        std::none_of(start.residue.begin(),start.residue.end(),[](uint32_t word){ return word != 0; }))
+        throw std::invalid_argument("invalid P-1 Stage1 checkpoint or modulus");
+    auto weighted = options;
+    weighted.weighted = true;
+    Control control;
+    const Pm1Request request{exponent,start,verified};
+    run_ladder(device,p,1,start.residue,{},0,weighted,&control,1,nullptr,nullptr,&request);
+    return start;
+}
+
 std::vector<uint32_t> auxiliary_points(int device, unsigned p, const std::vector<uint64_t>& sigmas,
                                        const ecm_stage1::Stage1NttOptions& options, TransformWorkspace* workspace, size_t* owned_bytes) {
     if (p < ecm_stage1::stage1_ntt_min_exponent || p > ecm_stage1::stage1_ntt_max_exponent)

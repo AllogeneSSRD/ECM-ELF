@@ -24,10 +24,10 @@ config_version = 4
 # worker 可覆盖路径。显式留空时关闭自动持久化。
 
 worktodo_file = "worktodo.txt"  # string: <path>
-# Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1. ECMSTAGE2, ECMSTAGE2N and ECMSTAGE2PART
-# select Stage2. One process consumes a worker queue at a time.
-# 共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2、ECMSTAGE2N 和 ECMSTAGE2PART 交给 Stage2。
-# 同一 worker 同时由一个进程消费队列。
+# Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1. Pminus1 selects CUDA P-1 Stage1. ECMSTAGE2,
+# ECMSTAGE2N and ECMSTAGE2PART select Stage2. One process consumes a worker queue at a time.
+# 共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，Pminus1 交给 CUDA P-1 Stage1，ECMSTAGE2、ECMSTAGE2N
+# 和 ECMSTAGE2PART 交给 Stage2。同一 worker 同时由一个进程消费队列。
 
 # queue_order = "file_order"  # string: [file_order|stage1_first|stage2_first]
 # file_order follows the queue. stage1_first or stage2_first runs the preferred stage until it has
@@ -148,9 +148,10 @@ target = "gpu"  # string: [cpu|gpu]
 [stage2]
 # b2_ratio = 0  # u64: [0|1..1000000]
 # Stage2 fallback when the CLI, task line and b2 setting supply no nonzero B2. A nonzero ratio uses
-# the saved B1 times this value. Applies to queues and GPU direct save runs. Overflow is rejected.
+# the saved B1 times this value. Applies to queues and GPU direct save runs. For Pminus1 handoff, a
+# zero task B2 becomes B1 times this ratio, including zero. Overflow is rejected.
 # 命令行、任务行和 b2 配置均未提供非零 B2 时，非零比例使用存档 B1 × ratio 作为上界。适用于队列及 GPU
-# 直接读档。乘积超出范围会报错。
+# 直接读档。Pminus1 交接时，任务 B2 为零则输出 B1 × ratio，比例为零也输出零。乘积超出范围会报错。
 
 # stage2_submission_file = "results.json.txt"  # string: <path>
 # Submission-only ECM JSON lines, separate from the internal results JSONL. Uses a reference FFT
@@ -166,10 +167,13 @@ target = "gpu"  # string: [cpu|gpu]
 # 迁移完成前保留原 JSONL。
 
 # stage2_after_factored = false  # bool: [false|true|0|1]
-# After an Edwards Stage1 hit, generate a cofactor save and a local ECM-ELF Stage2 assignment from
-# reusable endpoints. Read in the producing worker scope. Default false.
-# Edwards Stage1 命中后，从可复用的终点生成余因子存档并交接给本地 ECM-ELF Stage2。按产生存档的
-# worker 读取。默认关闭。
+# After an Edwards Stage1 hit, generate a cofactor save and local Stage2 assignment from reusable
+# endpoints. After a Pminus1 hit, also publish the original assignment with its handoff B2 and
+# original known factors. Every completed Pminus1 task writes a Prime95 save. Read in the producing
+# worker scope. Default false.
+# Edwards Stage1 命中后，从可复用的终点生成余因子存档并交接给本地 Stage2。Pminus1 命中后也发布任务
+# 行，使用交接 B2 和原已知因子列表。所有完成的 Pminus1 任务均写 Prime95 存档。按产生存档的 worker 读
+# 取。默认关闭。
 
 # device = "auto"  # string: [auto|cpu|gpu]
 # Execution device in the combined Stage2 program. Auto selects by stage2_algorithm; cpu and gpu pin

@@ -254,7 +254,10 @@ bool ecm_build_lcm_exponent(mpz_t s, uint64_t B1, uint64_t torsion)
         /* 2 is the only even prime: handle it directly so the sieve can be odds-only. */
         {
             const uint64_t pp = highest_power(2, B1);
-            block.mul_u32((uint32_t)pp);            /* pp <= B1 <= 5e9 fits 32 bits */
+            if (pp <= UINT32_MAX)
+                block.mul_u32(static_cast<uint32_t>(pp));
+            else
+                tree.add_u64(pp);
         }
 
         if (root < 3) {

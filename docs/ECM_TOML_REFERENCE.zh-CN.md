@@ -145,7 +145,7 @@ worktodo_file = "worktodo.txt"
 
 类型 `string` · 范围 `<path>` · Worker 覆盖 `[worker.N] worktodo_file` · 级别 `常用`。
 
-共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2、ECMSTAGE2N 和 ECMSTAGE2PART 交给 Stage2。同一 worker 同时由一个进程消费队列。
+共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，Pminus1 交给 CUDA P-1 Stage1，ECMSTAGE2、ECMSTAGE2N 和 ECMSTAGE2PART 交给 Stage2。同一 worker 同时由一个进程消费队列。
 
 ## [stage1]
 
@@ -195,7 +195,7 @@ checkpoint_backups = 3
 
 类型 `int` · 范围 `<x:Z,0..16>` · Worker 覆盖 `[worker.N] checkpoint_backups` · 级别 `高级`。
 
-Stage1 检查点轮换备份的最大份数；主存档另计，0 表示只保留主存档。恢复时跳过损坏或无法读取的代次；Stage1 完成后清理主存档及所有备份。
+Stage1 检查点轮换备份的最大份数，主存档另计，0 表示仅保留主存档。ECM 完成后清理检查点；Pminus1 保留 GpuOwl 终点及其备份供交接。
 
 <a id="ckpt_seconds"></a>
 
@@ -721,7 +721,7 @@ prime95_save_dir = ""
 
 类型 `string` · 范围 `<path>` · Worker 覆盖 `[worker.N] prime95_save_dir` · 级别 `高级`。
 
-Prime95 交接专用存档目录，启用 prime95_worktodo_file 时必须设置。备份目录独立；已发布存档前缀保持不变，只允许追加完整记录。
+Prime95 存档目录。Montgomery 交接需与 prime95_worktodo_file 同时设置，已有存档只追加完整记录。Pminus1 将原生 m 文件写入此目录；若仅配置接收队列，则写入队列所在目录。
 
 <a id="p95_add_workers"></a>
 
@@ -745,7 +745,7 @@ prime95_worktodo_file = ""
 
 类型 `string` · 范围 `<path>` · Worker 覆盖 `[worker.N] prime95_worktodo_file` · 级别 `高级`。
 
-用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo_file 路径。Edwards 与 GPU PARAM2 自动忽略此路径，存档保留在本地，不访问 Prime95 转移文件。 需同时配置 prime95_save_dir；先验证并发布存档，再写入 worktodo_file.add。
+Montgomery 和 Pminus1 交接使用的 Prime95 接收队列路径。Montgomery 还需配置 prime95_save_dir。Pminus1 先发布原生存档，再通过接收队列对应的 .add 文件交接。Edwards 与 GPU PARAM2 保留本地存档。
 
 ### progress_average_seconds
 
@@ -993,7 +993,7 @@ b2_ratio = 0
 
 类型 `u64` · 范围 `[0|1..1000000]` · Worker 覆盖 `[worker.N] b2_ratio` · 级别 `常用`。
 
-命令行、任务行和 b2 配置均未提供非零 B2 时，非零比例使用存档 B1 × ratio 作为上界。适用于队列及 GPU 直接读档。乘积超出范围会报错。
+命令行、任务行和 b2 配置均未提供非零 B2 时，非零比例使用存档 B1 × ratio 作为上界。适用于队列及 GPU 直接读档。Pminus1 交接时，任务 B2 为零则输出 B1 × ratio，比例为零也输出零。乘积超出范围会报错。
 
 <a id="stage2_b2_round_chain"></a>
 
@@ -1550,7 +1550,7 @@ stage2_after_factored = false
 
 类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] stage2_after_factored` · 级别 `常用`。
 
-Edwards Stage1 命中后，从可复用的终点生成余因子存档并交接给本地 ECM-ELF Stage2。按产生存档的 worker 读取。默认关闭。
+Edwards Stage1 命中后，从可复用的终点生成余因子存档并交接给本地 Stage2。Pminus1 命中后也发布任务行，使用交接 B2 和原已知因子列表。所有完成的 Pminus1 任务均写 Prime95 存档。按产生存档的 worker 读取。默认关闭。
 
 ### stage2_algorithm
 

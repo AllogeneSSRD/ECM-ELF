@@ -62,6 +62,8 @@ set(ECM_STAGE2_NTT_SOURCES ${ECM_CUDA_NTT_SOURCES})
 
 set(ECM_STAGE1_CUDA_SOURCES
     ${ECM_CUDA_NTT_SOURCES}
+    src/io/pm1_saves.cpp
+    src/ecm/stage1/pm1_workflow.cpp
     src/ecm/stage1/cuda/ntt/ladder.cu
     src/ecm/stage1/cuda/ntt/batches.cpp
     src/ecm/stage1/cuda/ntt/workflow.cpp

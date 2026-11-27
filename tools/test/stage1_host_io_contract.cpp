@@ -17,9 +17,78 @@ static void check(bool yes,const char *message){if(!yes)throw std::runtime_error
 static void put(const fs::path &p,const std::string &s){ecm_io::write_atomic(p,s);}
 static std::string get(const fs::path &p){return ecm_io::read_file(p);}
 static std::string point(unsigned sigma){return "METHOD=ECM; SIGMA="+std::to_string(sigma)+"; B1=100; N=127; X=0x1; CHECKSUM="+std::to_string(12700ull*sigma)+"; PROGRAM=fixture;\n";}
+
+static void test_pm1_queue(const fs::path& dir) {
+    fs::create_directories(dir);
+    Pm1Task task;
+    std::string error;
+    const std::string row = "Pminus1=0123456789abcdef0123456789abcdef,1,2,37,-1,500, 0 ,67.2,700,\"223\"";
+    check(ecm_parse_pm1_line(row, task, error), "Pminus1 fields");
+    check(task.p == 37 && task.b1 == 500 && task.factors == std::vector<std::string>{"223"},
+          "Pminus1 parser discarded known factors");
+    const auto send = pm1_handoff_line(task, pm1_effective_b2(task, 2));
+    check(send == "Pminus1=0123456789abcdef0123456789abcdef,1,2,37,-1,500, 1000 ,67.2,700,\"223\"",
+          "Pminus1 handoff must change only B2");
+    check(pm1_handoff_line(task, pm1_effective_b2(task, 0)) == row, "dual zero must preserve B2=0");
+    check(ecm_parse_pm1_line("Pminus1=N/A,1,2,37,-1,3,2e3,\"223,616318177\"", task, error) &&
+          pm1_effective_b2(task, 8) == 2000 && task.factors.size() == 2, "explicit B2 / quoted factors");
+    check(!ecm_parse_pm1_line("Pminus1=1,2,39,-1,100,0", task, error), "composite exponent");
+    check(!ecm_parse_pm1_line("Pminus1=1,2,37,-1,100,0,\"223", task, error), "malformed quoted factors");
+    const auto queue = dir/"input";
+    const auto add = dir/"worktodo.add";
+    const auto alternate = dir/"worktodo.add.txt";
+    const auto receipt = dir/"receipt";
+    const auto finished = dir/"finished";
+    put(queue, "[Worker #2]\n"+row+"\n"+row+"\n");
+    put(add, "[Worker #3]\n; preserve\n");
+    put(alternate, "; another assignment awaiting pickup\n");
+    // A transient finished-file error interrupts completion after publishing.
+    fs::create_directory(finished);
+    CompletedWorktodo completion{row, "done "+row, "", finished.string(), ""};
+    completion.pm1_add_file = add.string();
+    completion.pm1_line = send;
+    const auto mfile = dir/"m0000037";
+    put(mfile, "verified endpoint");
+    completion.pm1_save_path = mfile.string();
+    completion.pm1_save_hash = ecm_io::fingerprint(get(mfile));
+    check(ecm_worktodo_store_completion(receipt.string(), completion, error), "store Pminus1 intent");
+    check(!ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error) &&
+          error.find("await receiver pickup") != error.npos,
+          "both Prime95 mailboxes occupied: retain assignment");
+    check(get(alternate) == "; another assignment awaiting pickup\n", "overwrote occupied .add.txt");
+    fs::remove(alternate);
+    put(mfile, "mismatched save!!");
+    check(!ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error) &&
+          error.find("missing or changed") != error.npos && !fs::exists(alternate),
+          "Pminus1 recovery published a task for another save");
+    fs::remove(mfile);
+    check(!ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error) &&
+          !fs::exists(alternate), "Pminus1 recovery published a task without its save");
+    put(mfile, "verified endpoint");
+    check(!ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error),
+          "Pminus1 fixture must stop after worktodo.add");
+    check(get(alternate) == send+"\n" && get(add) == "[Worker #3]\n; preserve\n",
+          "Pminus1 alternate slot / existing worker sections");
+    fs::remove(add); // Prime95 picked up the transient .add.
+    fs::remove(alternate);
+    fs::remove(mfile); // Advancing the save after pickup belongs to the receiver.
+    fs::remove(finished);
+    check(ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error),
+          "resume Pminus1 completion after external pickup");
+    check(!fs::exists(add) && get(queue) == "[Worker #2]\n"+row+"\n", "Pminus1 duplicate/over-consumption");
+    fs::remove(receipt);
+    put(mfile, "verified endpoint");
+    check(ecm_worktodo_store_completion(receipt.string(), completion, error) &&
+          ecm_worktodo_commit_completion(receipt.string(), queue.string(), 2, completion, error),
+          "fresh identical Pminus1 assignment");
+    check(get(add) == send+"\n", "old receipt suppressed a fresh assignment");
+}
 int main(int argc,char **argv)try {
-    check(argc==2,"supply a fresh evidence directory");const auto root=fs::absolute(fs::u8path(argv[1]));
+    const bool pm1_only = argc == 3 && std::string(argv[2]) == "--pm1-only";
+    check(argc==2 || pm1_only,"supply a fresh evidence directory [--pm1-only]");const auto root=fs::absolute(fs::u8path(argv[1]));
     check(!fs::exists(root),"evidence directory must be fresh");fs::create_directories(root);
+    test_pm1_queue(root/"pm1-queue");
+    if (pm1_only) { std::cout << "pm1_queue_contract=passed\n"; return 0; }
     std::string error,line;Ecm2Task ecm;EcmStage2Task task;
     check(!ecm_parse_ecm2_line("ECM=1,2,7,-1,100,wrong,3",ecm,error) && error.find("B2")!=error.npos,"B2 diagnostic");
     check(!ecm_parse_ecm2_line("ECM=1,2,7,-1,100,0,-1",ecm,error),"negative curves accepted");

@@ -60,6 +60,8 @@ using ecm_stage1_app::stage1_result_settings;
 #endif
 #if ECM_HAS_CUDA_STAGE1
 #include "ecm/stage1/cuda/ntt/tune.h"
+#include "ecm/stage1/pm1_workflow.h"
+#include "io/pm1_saves.h"
 #endif
 // Application assembly still selects the CPU default NAF window.
 #include "ecm/stage1/edwards/cpu/ecm_edwards_cpu.h"
@@ -260,7 +262,7 @@ struct QueueItem : WorktodoStage1Task {
     const Stage2TransferConfig* stage2 = nullptr;
 };
 // MarkError advances only the original ticket; Error preserves it and stops.
-enum class QueueReadStatus { Ready, Empty, Error, MarkError };
+enum class QueueReadStatus { Ready, Completed, Empty, Error, MarkError };
 
 static int handoff_param(const Selection& selection) {
     if (selection.curve == CurveModel::Edwards)
@@ -976,6 +978,63 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
         };
 
         std::string error;
+        if (ecm_is_pm1_line(line)) {
+#if ECM_HAS_CUDA_STAGE1
+            Pm1Task task;
+            if (!ecm_parse_pm1_line(line, task, error)) {
+                input_error(error);
+                return QueueReadStatus::MarkError;
+            }
+            const auto ratio = task.b2 ? 0 : ecm_config::read_stage2(ecm_config::selected_entries(
+                parsed_config.lines, worker, {"b2_ratio"}, ini)).b2_ratio;
+            const auto b2 = pm1_effective_b2(task, ratio);
+            namespace fs = std::filesystem;
+            const auto root = fs::u8path(ini_dir) / "pm1" /
+                ("M" + std::to_string(task.p) + "-B1-" + std::to_string(task.b1));
+            const auto receiver = fs::u8path(resolve_rel_local(exe_dir, cfg.p95_worktodo_path));
+            const auto save_dir = !cfg.p95_sync_dir.empty()
+                ? fs::u8path(resolve_rel_local(exe_dir, cfg.p95_sync_dir))
+                : receiver.empty() ? root : receiver.parent_path();
+            auto add = receiver.empty() ? save_dir / "worktodo.txt" : receiver;
+            add.replace_extension(".add");
+            auto alternate_add = add;
+            alternate_add += ".txt";
+            const auto save = save_dir / ecm_pm1::prime95_name(task.p);
+            if (conflicts_with_output(save.u8string()) || same_path(save.u8string(), worktodo_path) ||
+                same_path(save.u8string(), receiver.u8string()))
+                throw std::runtime_error("Prime95 save conflicts with an input or output path");
+            const auto outcome = ecm_pm1::run(task, b2, opt, root, save_dir);
+            if (!outcome.completed)
+                return QueueReadStatus::Error;
+            CompletedWorktodo done;
+            done.ticket = line;
+            done.finished = finished_path;
+            done.record = line + " # P-1 Stage1 " + (outcome.whole_target ? "gcd=target" :
+                outcome.factor.empty() ? std::string("no factor") : "factor=" + outcome.factor);
+            if (outcome.factor.empty() || after_factored) {
+                if (!receiver.empty() && (!receiver.has_extension() || same_path(receiver.u8string(), add.u8string())))
+                    throw std::runtime_error("Prime95 receiver needs a queue filename distinct from .add");
+                for (const auto& path : {receiver, add, alternate_add}) {
+                    if (!path.empty() && (conflicts_with_output(path.u8string()) ||
+                                          same_path(path.u8string(), worktodo_path)))
+                        throw std::runtime_error("Pminus1 handoff conflicts with an input or output path");
+                }
+                done.pm1_add_file = add.u8string();
+                done.pm1_line = pm1_handoff_line(task, b2);
+                done.pm1_save_path = save.u8string();
+                done.pm1_save_hash = outcome.save_hash;
+            }
+            const auto receipt = worktodo_path + ".stage1_completed_worker" + std::to_string(worker);
+            if (!ecm_worktodo_store_completion(receipt, done, error))
+                throw std::runtime_error(error);
+            if (!finish_record(paths))
+                return QueueReadStatus::Error;
+            return QueueReadStatus::Completed;
+#else
+            input_error("Pminus1 requires ecm_cuda; worktodo retained");
+            return QueueReadStatus::Error;
+#endif
+        }
         const auto normalized = normalize_worktodo(line, opt, exe_dir, item, error);
         if (normalized != WorktodoNormalization::Ready) {
             input_error(error);
@@ -1076,6 +1135,10 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
             return 1;
         if (read == QueueReadStatus::Empty)
             break;
+        if (read == QueueReadStatus::Completed) {
+            ++processed;
+            continue;
+        }
         if (read == QueueReadStatus::MarkError) {
             if (!ecm_worktodo_advance(worktodo_path, worker, item.ticket,
                                       WorktodoAction::MarkError))

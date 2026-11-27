@@ -22,6 +22,9 @@
 #include <fcntl.h>
 #include <sys/file.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
 #endif
 
 namespace ecm_io {
@@ -208,6 +211,14 @@ void write_atomic(const std::filesystem::path& path, const std::string& bytes,
     ::close(fd);
     if (!ok || !ecm_replace_file(temp, path))
         throw std::runtime_error("cannot flush/publish file: " + path.string());
+    sync_publication_directory(path);
+#endif
+}
+
+void sync_publication_directory(const std::filesystem::path& path) {
+#ifdef _WIN32
+    (void)path; // ecm_replace_file uses MOVEFILE_WRITE_THROUGH.
+#else
     // POSIX durability also requires persisting the directory entry after rename.
     const auto parent =
         path.parent_path().empty() ? std::filesystem::path(".") : path.parent_path();
@@ -220,6 +231,30 @@ void write_atomic(const std::filesystem::path& path, const std::string& bytes,
     if (!durable)
         throw PublicationUncertain("cannot flush publication directory after replacement: " +
                                    parent.string());
+#endif
+}
+
+bool publish_if_absent(const std::filesystem::path& staged, const std::filesystem::path& mailbox) {
+#ifdef _WIN32
+    if (MoveFileExW(staged.c_str(), mailbox.c_str(), MOVEFILE_WRITE_THROUGH)) return true;
+    const auto code = GetLastError();
+    if (code == ERROR_ALREADY_EXISTS || code == ERROR_FILE_EXISTS) return false;
+    throw std::system_error(static_cast<int>(code), std::system_category(), mailbox.u8string());
+#elif defined(SYS_renameat2) || defined(__APPLE__)
+#if defined(SYS_renameat2)
+    const auto result = ::syscall(SYS_renameat2, AT_FDCWD, staged.c_str(), AT_FDCWD,
+                                  mailbox.c_str(), 1u /* RENAME_NOREPLACE */);
+#else
+    const auto result = ::renamex_np(staged.c_str(), mailbox.c_str(), RENAME_EXCL);
+#endif
+    if (result == 0) return true;
+    if (errno == EEXIST) return false;
+    if (errno == EINVAL || errno == ENOSYS || errno == EOPNOTSUPP)
+        throw std::runtime_error("worktodo destination requires filesystem support for exclusive rename: " +
+                                 mailbox.string());
+    throw std::system_error(errno, std::generic_category(), mailbox.string());
+#else
+    throw std::runtime_error("atomic exclusive publication is unavailable: " + mailbox.string());
 #endif
 }
 } // namespace ecm_io

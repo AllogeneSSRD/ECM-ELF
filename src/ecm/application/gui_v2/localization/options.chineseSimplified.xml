@@ -13,8 +13,8 @@
       <Item id="option_stage1_handoff_mode" name="Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接收方。off 只保留存档，prime95 交给 Prime95。" />
       <Item id="option_stage1_handoff_partial" name="Stage1 继续运行时，将已完成的批次交接给 ECM-ELF Stage2。" />
       <Item id="option_stage1_handoff_unsupported" name="Prime95 协议不支持该存档时使用的后备方式。" />
-      <Item id="option_shared_worktodo" name="共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2、ECMSTAGE2N 和 ECMSTAGE2PART 交给 Stage2。同一 worker 同时由一个进程消费队列。" />
-      <Item id="option_shared_b2_ratio" name="命令行、任务行和 b2 配置均未提供非零 B2 时，非零比例使用存档 B1 × ratio 作为上界。适用于队列及 GPU 直接读档。乘积超出范围会报错。" />
+      <Item id="option_shared_worktodo" name="共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，Pminus1 交给 CUDA P-1 Stage1，ECMSTAGE2、ECMSTAGE2N 和 ECMSTAGE2PART 交给 Stage2。同一 worker 同时由一个进程消费队列。" />
+      <Item id="option_shared_b2_ratio" name="命令行、任务行和 b2 配置均未提供非零 B2 时，非零比例使用存档 B1 × ratio 作为上界。适用于队列及 GPU 直接读档。Pminus1 交接时，任务 B2 为零则输出 B1 × ratio，比例为零也输出零。乘积超出范围会报错。" />
       <Item id="option_stage1_auto_stage2" name="Stage1 无因子完成后写入完成记录并生成 ECMSTAGE2 任务。目标为同一队列且未指定接收 worker 时，原位替换任务行。其他情况按 handoff_worktodo_file 和 handoff_workers 投递。" />
       <Item id="option_stage1_auto_stage2_workers" name="Stage2 接收 worker，可填 1..1000000 内的编号或闭区间。逗号分隔的每项可加位宽切片，如 2[:4096], 3[4096:]。按实际余因子位宽匹配，包含起点、排除终点。省略方括号、[]、[:] 都匹配任意位宽。选匹配候选中任务最少者，并列取较小编号。无匹配时保留源任务。同队列 auto 使用 worker_count 或已有分区，候选须读取该队列并允许 Stage2。外部队列 auto 优先采用已有分区。留空保留当前 worker。目标不可写时保留待投递记录。" />
       <Item id="option_stage1_auto_stage2_worktodo" name="auto_stage2=1 时的目标队列。留空使用当前 worker 生效的 shared worktodo_file；可填写绝对文件路径，或相对 ecm.toml 所在目录的文件名/路径。投递行中的 save 使用绝对路径。完成去重读取本 TOML 中接收 worker 的 stage2_finished；worker 分区可覆盖。" />
@@ -26,8 +26,8 @@
       <Item id="option_stage1_save_sync_dir_1" name="指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 backup_mode 决定。 仅用于文件备份；此路径不作为 Prime95 任务发布依据。" />
       <Item id="option_stage1_save_sync_dir_2" name="指定第二个 Stage1 存档同步目录。可同时向两个目标同步；留空只关闭此目标，不影响第一个目标。 仅用于文件备份；此路径不作为 Prime95 任务发布依据。" />
       <Item id="option_stage1_sync_mode" name="控制 Stage1 任务完成后的存档同步。incremental 仅同步本次任务期间更新的文件；full 同步全部符合条件的存档。程序启动时仍执行一次完整同步。" />
-      <Item id="option_stage1_p95_sync_dir" name="Prime95 交接专用存档目录，启用 prime95_worktodo_file 时必须设置。备份目录独立；已发布存档前缀保持不变，只允许追加完整记录。" />
-      <Item id="option_stage1_p95_worktodo_path" name="用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo_file 路径。Edwards 与 GPU PARAM2 自动忽略此路径，存档保留在本地，不访问 Prime95 转移文件。 需同时配置 prime95_save_dir；先验证并发布存档，再写入 worktodo_file.add。" />
+      <Item id="option_stage1_p95_sync_dir" name="Prime95 存档目录。Montgomery 交接需与 prime95_worktodo_file 同时设置，已有存档只追加完整记录。Pminus1 将原生 m 文件写入此目录；若仅配置接收队列，则写入队列所在目录。" />
+      <Item id="option_stage1_p95_worktodo_path" name="Montgomery 和 Pminus1 交接使用的 Prime95 接收队列路径。Montgomery 还需配置 prime95_save_dir。Pminus1 先发布原生存档，再通过接收队列对应的 .add 文件交接。Edwards 与 GPU PARAM2 保留本地存档。" />
       <Item id="option_stage1_edwards_stage2_transfer" name="启用后，将已完成的 Edwards Stage1 任务作为 ECMSTAGE2 投递到共用 worktodo_file 的接收 worker 分区。存档使用绝对路径；投递失败时保留待投递记录。两项同时设置时以 auto_stage2 为准。" />
       <Item id="option_stage1_edwards_stage2_worker" name="edwards_stage2_transfer=1 时的接收 worker。0 沿用 Stage1 worker 编号；正数指定共用 worktodo_file 中的接收分区。" />
       <Item id="option_stage1_p95_add_workers" name="选择接收交接任务的 Prime95 worker，可指定单个编号、编号列表或区间；程序在候选 worker 中选择队列较短者。auto 从同目录 prime.txt 读取 NumWorkers；留空追加时不写 worker 段头，按 Prime95 的默认 worker 处理。" />
@@ -61,7 +61,7 @@
       <Item id="option_stage1_lcm" name="Montgomery Stage1 标量是 montgomery_lcm_multiplier(1..B1) 乘 1 或 12。Edwards 固定使用 48·montgomery_lcm_multiplier，不接受 12。此选择改变输出点，须与 Stage2 存档约定一致。" />
       <Item id="option_stage1_sigma" name="曲线起始 sigma；0 表示随机生成，连续曲线使用 sigma+i 且不得在 64 位处回绕。CUDA PARAM0 接受完整 64 位范围，PARAM2/3 批次须位于 2^32 以下。CPU 路径的 sigma 超出 Prime95 有符号读取范围时会警告，这不是 Stage1 的限制。ECM/ECM2 任务行的非零 sigma 覆盖此键。" />
       <Item id="option_stage1_p95_dir" name="保留旧配置兼容性，设置非空值只产生旧选项提示，不启用新的 Prime95 交接流程。需要交接 ECMSTAGE2 任务时使用 prime95_worktodo_file。" />
-      <Item id="option_stage1_ckpt_backups" name="Stage1 检查点轮换备份的最大份数；主存档另计，0 表示只保留主存档。恢复时跳过损坏或无法读取的代次；Stage1 完成后清理主存档及所有备份。" />
+      <Item id="option_stage1_ckpt_backups" name="Stage1 检查点轮换备份的最大份数，主存档另计，0 表示仅保留主存档。ECM 完成后清理检查点；Pminus1 保留 GpuOwl 终点及其备份供交接。" />
       <Item id="option_stage1_ckpt_seconds" name="设置 Stage1 定期写检查点的间隔，单位为秒。0 关闭定期检查点，负数按 0 处理；仍可通过正常停止或 Ctrl+C 请求保存。实际写盘时机受当前计算后端的安全检查点限制。" />
       <Item id="option_stage1_device" name="选择 GPU 设备编号，从 0 开始。用于 Stage1；Stage2 未显式指定 stage2_device 时也继承此编号。编号对应各可执行文件实际使用的 GPU 后端设备列表。" />
       <Item id="option_stage1_gpu_param" name="选择 GPU Stage1 曲线参数族。当前 CUDA Stage2 消费参数 0 的 save，准备交给它处理时使用 0；OpenCL 路径使用参数 3。默认值为 3。" />
@@ -101,7 +101,7 @@
       <Item id="option_stage2_stage2_progress_dir" name="直接读档 Stage2 断点的目录。空值使用已配置进度路径的父目录或队列目录。队列任务共享存档旁的断点，并保留每条已完成曲线的实际 B2。" />
       <Item id="option_stage2_stage2_save_dir" name="指定 Stage2 查找任务所引用 save 的目录。留空继承共享 tmp_dir；任务给出绝对 save 路径时直接使用该路径。程序读取并验证源 save，不修改其内容。" />
       <Item id="option_stage2_stage2_debug_log" name="控制是否将 Stage2 调试细节写入独立日志。true 开启，false 关闭；verbose=true 不会自动开启调试日志，开启本选项也不把全部调试输出刷到控制台。" />
-      <Item id="option_stage2_stage2_after_factored" name="Edwards Stage1 命中后，从可复用的终点生成余因子存档并交接给本地 ECM-ELF Stage2。按产生存档的 worker 读取。默认关闭。" />
+      <Item id="option_stage2_stage2_after_factored" name="Edwards Stage1 命中后，从可复用的终点生成余因子存档并交接给本地 Stage2。Pminus1 命中后也发布任务行，使用交接 B2 和原已知因子列表。所有完成的 Pminus1 任务均写 Prime95 存档。按产生存档的 worker 读取。默认关闭。" />
       <Item id="option_stage2_stage2_execution_device" name="统一 Stage2 程序的执行设备。auto 按 stage2_algorithm 选型，cpu 和 gpu 固定设备。CPU 支持 Edwards 存档。可用 --target 覆盖。" />
       <Item id="option_stage2_stage2_algorithm" name="统一 Stage2 在 device 为 auto 时按任务选型。按存档实际模数位宽从左到右匹配，含下界、不含上界，[] 匹配任意位宽。CPU 规则要求 Edwards；gwnum 使用 GWNUM/polymult，cpu-ntt 和 cpu-plain 使用 libecm，cpu 读取 cpu_backend。gpu 读取 stage2_gpu_backend，GPU 输入上限为 16384 bit。" />
       <Item id="option_stage2_stage2_device" name="Stage2 CUDA 设备编号。-1 继承 Stage1 的 device；0 及以上显式选择 CUDA 设备。" />

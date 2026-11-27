@@ -1,6 +1,7 @@
 #include "io/worktodo.h"
 #include "io/files.h"
 #include "stage2_bounds.h"
+#include "ecm/stage1/ntt_length.h"
 
 #include <algorithm>
 #include <cctype>
@@ -722,6 +723,101 @@ bool ecm_compute_ecm2_n(const Ecm2Task& task, mpz_t N, std::string& err) {
     return compute_n_from_fields(task.k, task.b, task.n, task.c, task.factors, N, err);
 }
 
+bool ecm_is_pm1_line(const std::string& line) {
+    const auto s = ecm_queue::task_text(line);
+    return ecm_config::lower(s.substr(0, 8)) == "pminus1=";
+}
+
+bool ecm_compute_pm1_target(const Pm1Task& task, mpz_t target, std::string& err) {
+    if (!compute_n_from_fields("1", "2", task.p, "-1", task.factors, target, err))
+        return false;
+    if (mpz_cmp_ui(target, 1) <= 0) {
+        err = "Pminus1 known factors leave no cofactor";
+        return false;
+    }
+    return true;
+}
+
+bool ecm_parse_pm1_line(const std::string& line, Pm1Task& task, std::string& err) {
+    task = {};
+    err.clear();
+    try {
+        task.raw_line = ecm_queue::task_text(line);
+        if (!ecm_is_pm1_line(task.raw_line) || task.raw_line.find_first_of("\r\n") != line.npos)
+            throw std::runtime_error("expected a single Pminus1= assignment");
+        const auto body = task.raw_line.substr(8);
+        const auto quote = body.find('"');
+        auto numbers = body;
+        if (quote != body.npos) {
+            auto prefix = ecm_config::trim(body.substr(0, quote));
+            if (prefix.empty() || prefix.back() != ',' || body.size() <= quote + 1 ||
+                body.find('"', quote + 1) != body.size() - 1)
+                throw std::runtime_error("expected a final quoted Pminus1 known-factor list");
+            numbers = prefix.substr(0, prefix.size() - 1);
+            const auto list = body.substr(quote + 1, body.size() - quote - 2);
+            if (!list.empty()) {
+                task.factors = split_csv(list);
+                for (const auto& f : task.factors) {
+                    const auto first = f.find_first_not_of('0');
+                    if (f.find_first_not_of("0123456789") != f.npos || first == f.npos ||
+                        f.substr(first) == "1")
+                        throw std::runtime_error("invalid Pminus1 known factor: " + f);
+                }
+            }
+        }
+        const auto fields = split_csv(numbers);
+        size_t start = 0;
+        if (assignment_id(fields.front()) || no_assignment_id(fields.front())) {
+            if (assignment_id(fields.front())) task.aid = fields.front();
+            ++start;
+        }
+        if (fields.size() < start + 6 || fields.size() > start + 8 ||
+            fields[start] != "1" || fields[start+1] != "2" || fields[start+3] != "-1")
+            throw std::runtime_error("expected Pminus1=[AID,]1,2,p,-1,B1,B2[,depth][,B2_start][,\"factors\"]");
+        if (fields[start+2].find_first_not_of("0123456789") != std::string::npos)
+            throw std::runtime_error("expected a decimal Pminus1 exponent");
+        task.p = static_cast<uint32_t>(ecm_config::bounded_integer(fields[start+2], "Pminus1 exponent",
+            ecm_stage1::stage1_ntt_min_exponent, ecm_stage1::stage1_ntt_max_exponent));
+        for (uint32_t d = 2; d <= task.p / d; ++d)
+            if (task.p % d == 0)
+                throw std::runtime_error("Pminus1 requires a prime Mersenne exponent");
+        task.b1 = ecm_config::bounded_integer(fields[start+4], "Pminus1 B1", 2, 5000000000ULL);
+        task.b2 = ecm_config::unsigned_integer(fields[start+5], "Pminus1 B2");
+        if (fields.size() > start+6 && !fields[start+6].empty()) {
+            const auto& depth = fields[start+6];
+            size_t used = 0;
+            const double value = std::stod(depth, &used);
+            if (used != depth.size() || !std::isfinite(value) || value < 0)
+                throw std::runtime_error("invalid Pminus1 trial-factoring depth");
+        }
+        if (fields.size() > start+7 && !fields[start+7].empty())
+            (void)ecm_config::unsigned_integer(fields[start+7], "Pminus1 B2_start");
+        size_t next = 8;
+        for (size_t i = 0; i < start+5; ++i)
+            next = task.raw_line.find(',', next) + 1;
+        task.b2_begin = task.raw_line.find_first_not_of(" \t", next);
+        task.b2_end = task.b2_begin + fields[start+5].size();
+        return true;
+    } catch (const std::exception& e) {
+        err = e.what();
+        return false;
+    }
+}
+
+uint64_t pm1_effective_b2(const Pm1Task& task, uint64_t ratio) {
+    if (task.b2 || !ratio) return task.b2;
+    if (task.b1 > UINT64_MAX / ratio)
+        throw std::overflow_error("Pminus1 B1 times b2_ratio exceeds uint64 range");
+    return task.b1 * ratio;
+}
+
+std::string pm1_handoff_line(const Pm1Task& task, uint64_t resolved_b2) {
+    if (task.b2 == resolved_b2) return task.raw_line;
+    auto line = task.raw_line;
+    line.replace(task.b2_begin, task.b2_end - task.b2_begin, std::to_string(resolved_b2));
+    return line;
+}
+
 int ecm_worktodo_parse_worker_header(const std::string& line, bool* is_bracket_line) {
     return ecm_config::worker_header(line, is_bracket_line);
 }
@@ -1125,12 +1221,23 @@ bool ecm_worktodo_store_completion(const std::string& receipt, const CompletedWo
                                    std::string& err) {
     try {
         std::ostringstream out;
-        out << (c.append_replacement ? "ECM-STAGE1-COMPLETED 2\n" : "ECM-STAGE1-COMPLETED 1\n")
+        const bool pm1 = !c.pm1_add_file.empty();
+        if (pm1 != !c.pm1_line.empty() || pm1 != !c.pm1_save_path.empty() ||
+            (pm1 && (!ecm_is_pm1_line(c.pm1_line) ||
+            c.pm1_line.find_first_of("\r\n") != std::string::npos || !c.replacement.empty())))
+            throw std::runtime_error("invalid Pminus1 delivery in Stage1 completion");
+        out << (pm1 ? "ECM-STAGE1-COMPLETED 3\n" :
+                c.append_replacement ? "ECM-STAGE1-COMPLETED 2\n" : "ECM-STAGE1-COMPLETED 1\n")
             << std::quoted(c.ticket) << '\n'
             << std::quoted(c.record) << '\n'
             << std::quoted(c.replacement) << '\n'
             << std::quoted(c.finished) << '\n'
             << std::quoted(c.checkpoint) << '\n';
+        if (pm1)
+            out << std::quoted(std::filesystem::absolute(std::filesystem::u8path(c.pm1_add_file)).u8string())
+                << '\n' << std::quoted(c.pm1_line) << '\n'
+                << std::quoted(std::filesystem::absolute(std::filesystem::u8path(c.pm1_save_path)).u8string())
+                << '\n' << c.pm1_save_hash << '\n';
         if (std::filesystem::exists(std::filesystem::u8path(receipt)))
             throw std::runtime_error("previous Stage1 completion has not been acknowledged");
         ecm_io::write_atomic(std::filesystem::u8path(receipt), out.str());
@@ -1141,6 +1248,48 @@ bool ecm_worktodo_store_completion(const std::string& receipt, const CompletedWo
     }
 }
 
+// A Prime95 process may consume worktodo.add immediately. A rename consumes
+// our private, same-directory staging name in the same operation that makes the
+// line visible. Its absence *after* PREPARED is therefore a delivery receipt
+// even if the recipient has since removed the public file.
+static void publish_pm1_completion(const CompletedWorktodo& c, const std::string& receipt,
+                                   std::string& payload) {
+    const auto target = std::filesystem::u8path(c.pm1_add_file);
+    auto staged = target;
+    staged += ".pm1-" + std::to_string(ecm_io::fingerprint(
+        ecm_io::file_identity(std::filesystem::u8path(receipt)))) + ".ready";
+    std::filesystem::create_directories(target.parent_path());
+    ecm_io::FileLock writer(target.u8string());
+    const bool prepared = payload.find("\nPM1-PREPARED\n") != payload.npos;
+    if (!prepared) {
+        ecm_io::write_atomic(staged, c.pm1_line + "\n");
+        payload += "\nPM1-PREPARED\n";
+        ecm_io::write_atomic(std::filesystem::u8path(receipt), payload);
+    }
+    if (std::filesystem::exists(staged)) {
+        // A receiver may have advanced/deleted its save while the mailbox was
+        // occupied. Publish only the task whose original Stage1 endpoint is
+        // still installed. Once sent, the receiver owns subsequent changes.
+        ecm_io::FileLock save_writer(c.pm1_save_path);
+        const auto save = std::filesystem::u8path(c.pm1_save_path);
+        constexpr uint64_t max_bytes = (ecm_stage1::stage1_ntt_max_exponent + 7) / 8 + 128;
+        if (!std::filesystem::is_regular_file(save) || std::filesystem::file_size(save) > max_bytes ||
+            ecm_io::fingerprint(ecm_io::read_file(save)) != c.pm1_save_hash)
+            throw std::runtime_error("Pminus1 Stage1 save missing or changed before delivery: " +
+                                     c.pm1_save_path);
+        // Prime95 can already have read an existing .add and still be about to
+        // unlink its pathname. Replacing that file would lose the new work.
+        // Prime95 reads .add.txt on the next pass when .add is absent.
+        auto alternate = target;
+        alternate += ".txt";
+        if (!ecm_io::publish_if_absent(staged, target) &&
+            !ecm_io::publish_if_absent(staged, alternate))
+            throw std::runtime_error("Pminus1 worktodo.add and .add.txt await receiver pickup; "
+                                     "completion retained: " + receipt);
+    }
+    ecm_io::sync_publication_directory(target);
+}
+
 bool ecm_worktodo_commit_completion(const std::string& receipt, const std::string& queue,
                                     int worker, CompletedWorktodo& c, std::string& err) {
     try {
@@ -1148,11 +1297,19 @@ bool ecm_worktodo_commit_completion(const std::string& receipt, const std::strin
         std::istringstream in(bytes);
         std::string magic;
         std::getline(in, magic);
+        c = CompletedWorktodo{};
         c.append_replacement = magic == "ECM-STAGE1-COMPLETED 2";
-        if ((magic != "ECM-STAGE1-COMPLETED 1" && !c.append_replacement) ||
+        const bool pm1 = magic == "ECM-STAGE1-COMPLETED 3";
+        if ((magic != "ECM-STAGE1-COMPLETED 1" && !c.append_replacement && !pm1) ||
             !(in >> std::quoted(c.ticket) >> std::quoted(c.record) >> std::quoted(c.replacement) >>
               std::quoted(c.finished) >> std::quoted(c.checkpoint)))
             throw std::runtime_error("invalid Stage1 completion receipt: " + receipt);
+        if (pm1 && (!(in >> std::quoted(c.pm1_add_file) >> std::quoted(c.pm1_line) >>
+                      std::quoted(c.pm1_save_path) >> c.pm1_save_hash) ||
+                    c.pm1_add_file.empty() || c.pm1_save_path.empty() || !ecm_is_pm1_line(c.pm1_line) ||
+                    c.pm1_line.find_first_of("\r\n") != std::string::npos ||
+                    ecm_io::same_file_resource(std::filesystem::u8path(queue), std::filesystem::u8path(c.pm1_add_file))))
+            throw std::runtime_error("invalid Pminus1 worktodo destination in receipt: " + receipt);
         const auto evidence = bytes.find("\nECM-ADVANCE\n");
         if (evidence != bytes.npos) {
             std::istringstream versions(bytes.substr(evidence + 13));
@@ -1168,9 +1325,11 @@ bool ecm_worktodo_commit_completion(const std::string& receipt, const std::strin
                                          "retained for inspection: " +
                                          receipt);
         }
+        auto payload = evidence == bytes.npos ? bytes : bytes.substr(0, evidence);
+        if (pm1)
+            publish_pm1_completion(c, receipt, payload);
         if (!ecm_append_text_line_unique(c.finished, c.record))
             throw std::runtime_error("cannot publish finished record: " + c.finished);
-        const auto payload = evidence == bytes.npos ? bytes : bytes.substr(0, evidence);
         const auto action = c.replacement.empty() ? WorktodoAction::Remove :
                             c.append_replacement ? WorktodoAction::AppendToWorker : WorktodoAction::Replace;
         if (!ecm_worktodo_advance(queue, worker, c.ticket, action, c.replacement, receipt, payload))

@@ -7,7 +7,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 ## 使用
 
 - [CUDA Stage1 NTT 调优](usage/TUNE.md) 包含命令、采样口径、生产选型和完整变换尺寸表。
-- [Stage1](usage/STAGE1.md)：曲线计算、指数模式、保存点、统一批次检查点、双结果输出和 Prime95 交接。
+- [Stage1](usage/STAGE1.md)：ECM 曲线计算、指数模式、保存点和 Prime95 交接。[P−1 分解](usage/STAGE1.md#pm1-stage1)包含 CUDA worktodo 语法、GpuOwl 续算和 Prime95 原生完成存档。
 - [Stage2](usage/STAGE2.md)：读 Stage1 save、任务字段、数量不足、队列续跑、日志和结果。
 - [Edwards CPU Stage2](usage/EDWARDS_CPU_STAGE2.md)：统一文本存档、GW 多线程快速多项式、libecm NTT/plain 续算及大 B2 验证。
 - [ECM 结果输出](usage/ECM_RESULTS.md)：内部 JSONL、Prime95 结构提交文件、TOML 身份、参考 FFT 长度、批次去重与本地恢复。

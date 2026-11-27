@@ -51,6 +51,16 @@ if(MSVC)
 endif()
 ecm_tool_output_root(worktodo_sections_test)
 
+add_executable(pm1_save_formats EXCLUDE_FROM_ALL pm1_save_formats.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/pm1_saves.cpp ${CMAKE_SOURCE_DIR}/src/io/files.cpp)
+target_include_directories(pm1_save_formats PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+ecm_tool_output_root(pm1_save_formats)
+
+add_executable(pm1_gerbicz_test EXCLUDE_FROM_ALL pm1_gerbicz_test.cpp)
+target_include_directories(pm1_gerbicz_test PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+ecm_target_link_gmp(pm1_gerbicz_test)
+ecm_tool_output_root(pm1_gerbicz_test)
+
 add_executable(stage2_transfer_test
     stage2_transfer_test.cpp
     ${CMAKE_SOURCE_DIR}/src/sync/stage2.cpp

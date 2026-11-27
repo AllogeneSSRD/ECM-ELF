@@ -1,5 +1,6 @@
 // End-to-end Suyama PARAM0 Stage1 driver and independent GMP oracle.
 #include "../../src/ecm/stage1/cuda/ntt/ladder.h"
+#include "../../src/ecm/stage1/cuda/ntt/pm1.h"
 #include "../../src/ecm/stage1/edwards/ntt_dictionary.h"
 #include "ecm/platform/program_version.h"
 #include "ecm/stage1/ntt_sizes.h"
@@ -180,6 +181,39 @@ int check_carries(int device, unsigned p, bool weighted, unsigned length, unsign
 } // namespace
 
 int main(int argc,char** argv) {
+    if (argc == 4 && !std::strcmp(argv[1], "--check-pm1")) {
+        using namespace ecm_mersenne_ntt;
+        const unsigned p = unsigned(num(argv[2],ecm_stage1::stage1_ntt_min_exponent,ecm_stage1::stage1_ntt_max_exponent));
+        ecm_stage1::Stage1NttOptions options;
+        options.length = unsigned(num(argv[3],0,ecm_stage1::stage1_ntt_max_length));
+        options.window = 0;
+        const std::vector<uint32_t> exponent{0xA237F51Eu,0xFFABCD23u,0x7CBu};
+        Z e, m, three, reference, got;
+        mpz_import(e.v,exponent.size(),-1,4,0,0,exponent.data());
+        mpz_set_ui(three.v,3);
+        mpz_setbit(m.v,p);
+        mpz_sub_ui(m.v,m.v,1);
+        const auto bits = mpz_sizeinbase(e.v,2);
+        const auto check = [&](const Pm1Progress& progress) {
+            mpz_fdiv_q_2exp(reference.v,e.v,bits-progress.k);
+            mpz_powm(reference.v,three.v,reference.v,m.v);
+            mpz_import(got.v,progress.residue.size(),-1,4,0,0,progress.residue.data());
+            if (progress.errors || mpz_cmp(reference.v,got.v))
+                throw std::runtime_error("P-1 NTT verified residue differs from GMP");
+        };
+        Pm1Progress seed;
+        seed.residue.resize((p+31)/32);
+        seed.residue[0]=3;
+        auto partial = pm1_stage1(0,p,exponent,seed,options,[](const auto& v){ return v.k < 37; });
+        if (partial.k >= bits) throw std::runtime_error("P-1 checkpoint did not stop");
+        check(partial);
+        options.window=16;
+        auto end = pm1_stage1(0,p,exponent,partial,options,{});
+        if (end.k != bits) throw std::runtime_error("P-1 checkpoint did not resume");
+        check(end);
+        std::printf("P-1 GMP/direct/Graph resume OK p=%u length=%u bits=%zu\n",p,options.length,bits);
+        return 0;
+    }
     if (argc == 2 && !std::strcmp(argv[1], "--check-auxiliary")) {
         using namespace ecm_edwards;
         constexpr unsigned p = 8192, words = p/32;

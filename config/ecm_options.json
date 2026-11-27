@@ -204,8 +204,8 @@
       "parser": "legacy",
       "path_base": "ini_dir",
       "description": [
-        "Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1. ECMSTAGE2, ECMSTAGE2N and ECMSTAGE2PART select Stage2. One process consumes a worker queue at a time.",
-        "共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2、ECMSTAGE2N 和 ECMSTAGE2PART 交给 Stage2。同一 worker 同时由一个进程消费队列。"
+        "Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1. Pminus1 selects CUDA P-1 Stage1. ECMSTAGE2, ECMSTAGE2N and ECMSTAGE2PART select Stage2. One process consumes a worker queue at a time.",
+        "共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，Pminus1 交给 CUDA P-1 Stage1，ECMSTAGE2、ECMSTAGE2N 和 ECMSTAGE2PART 交给 Stage2。同一 worker 同时由一个进程消费队列。"
       ]
     },
     {
@@ -224,8 +224,8 @@
       "shared_with": ["stage2"],
       "empty": "0",
       "description": [
-        "Stage2 fallback when the CLI, task line and b2 setting supply no nonzero B2. A nonzero ratio uses the saved B1 times this value. Applies to queues and GPU direct save runs. Overflow is rejected.",
-        "命令行、任务行和 b2 配置均未提供非零 B2 时，非零比例使用存档 B1 × ratio 作为上界。适用于队列及 GPU 直接读档。乘积超出范围会报错。"
+        "Stage2 fallback when the CLI, task line and b2 setting supply no nonzero B2. A nonzero ratio uses the saved B1 times this value. Applies to queues and GPU direct save runs. For Pminus1 handoff, a zero task B2 becomes B1 times this ratio, including zero. Overflow is rejected.",
+        "命令行、任务行和 b2 配置均未提供非零 B2 时，非零比例使用存档 B1 × ratio 作为上界。适用于队列及 GPU 直接读档。Pminus1 交接时，任务 B2 为零则输出 B1 × ratio，比例为零也输出零。乘积超出范围会报错。"
       ]
     },
     {
@@ -429,8 +429,8 @@
       "parser": "legacy",
       "empty": "off",
       "description": [
-        "Dedicated save destination for Prime95 handoff; required with prime95_worktodo_file. Backup destinations are independent. Existing published save prefixes must remain unchanged; only complete appended records may extend them.",
-        "Prime95 交接专用存档目录，启用 prime95_worktodo_file 时必须设置。备份目录独立；已发布存档前缀保持不变，只允许追加完整记录。"
+        "Save destination for Prime95. Montgomery handoff requires this directory with prime95_worktodo_file and extends existing saves only with complete records. Pminus1 writes its native m file here, or beside the receiver queue when only that path is set.",
+        "Prime95 存档目录。Montgomery 交接需与 prime95_worktodo_file 同时设置，已有存档只追加完整记录。Pminus1 将原生 m 文件写入此目录；若仅配置接收队列，则写入队列所在目录。"
       ]
     },
     {
@@ -445,8 +445,8 @@
       "parser": "legacy",
       "empty": "off",
       "description": [
-        "Prime95 worktodo_file path for supported Montgomery Stage1 handoff. Edwards and GPU PARAM2 ignore this path and keep saves local; they do not access Prime95 transfer files. Requires prime95_save_dir. The save is validated and published before worktodo_file.add.",
-        "用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo_file 路径。Edwards 与 GPU PARAM2 自动忽略此路径，存档保留在本地，不访问 Prime95 转移文件。 需同时配置 prime95_save_dir；先验证并发布存档，再写入 worktodo_file.add。"
+        "Receiver worktodo path for supported Montgomery and Pminus1 handoff. Montgomery also requires prime95_save_dir. Pminus1 publishes a native save first and delivers the assignment using the receiver's .add file. Edwards and GPU PARAM2 keep saves local.",
+        "Montgomery 和 Pminus1 交接使用的 Prime95 接收队列路径。Montgomery 还需配置 prime95_save_dir。Pminus1 先发布原生存档，再通过接收队列对应的 .add 文件交接。Edwards 与 GPU PARAM2 保留本地存档。"
       ]
     },
     {
@@ -1044,8 +1044,8 @@
       "parser": "strict",
       "zero": "no_backups",
       "description": [
-        "Maximum number of rotated Stage1 checkpoint backups. The primary checkpoint is additional; 0 keeps only the primary. Corrupt or unreadable generations are skipped on resume. A completed Stage1 task removes its primary checkpoint and all backups.",
-        "Stage1 检查点轮换备份的最大份数；主存档另计，0 表示只保留主存档。恢复时跳过损坏或无法读取的代次；Stage1 完成后清理主存档及所有备份。"
+        "Maximum number of rotated Stage1 checkpoint backups in addition to the primary. Zero keeps only the primary. ECM cleans up its checkpoints on completion. Pminus1 retains the final GpuOwl checkpoint and its backups for handoff.",
+        "Stage1 检查点轮换备份的最大份数，主存档另计，0 表示仅保留主存档。ECM 完成后清理检查点；Pminus1 保留 GpuOwl 终点及其备份供交接。"
       ],
       "minimum": 0,
       "maximum": 16
@@ -1730,8 +1730,8 @@
       "fx": "Stage2_cofactor_handoff",
       "parser": "strict",
       "description": [
-        "After an Edwards Stage1 hit, generate a cofactor save and a local ECM-ELF Stage2 assignment from reusable endpoints. Read in the producing worker scope. Default false.",
-        "Edwards Stage1 命中后，从可复用的终点生成余因子存档并交接给本地 ECM-ELF Stage2。按产生存档的 worker 读取。默认关闭。"
+        "After an Edwards Stage1 hit, generate a cofactor save and local Stage2 assignment from reusable endpoints. After a Pminus1 hit, also publish the original assignment with its handoff B2 and original known factors. Every completed Pminus1 task writes a Prime95 save. Read in the producing worker scope. Default false.",
+        "Edwards Stage1 命中后，从可复用的终点生成余因子存档并交接给本地 Stage2。Pminus1 命中后也发布任务行，使用交接 B2 和原已知因子列表。所有完成的 Pminus1 任务均写 Prime95 存档。按产生存档的 worker 读取。默认关闭。"
       ]
     },
     {

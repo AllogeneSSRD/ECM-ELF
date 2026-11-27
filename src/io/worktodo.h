@@ -57,6 +57,21 @@ struct Ecm2Task {
     std::vector<std::string> factors; // known factors (optional)
 };
 
+struct Pm1Task {
+    std::string raw_line, aid;
+    uint32_t p = 0;
+    uint64_t b1 = 0, b2 = 0;
+    std::vector<std::string> factors;
+    // Only this token is replaced when the receiver needs a derived B2.
+    size_t b2_begin = 0, b2_end = 0;
+};
+
+bool ecm_is_pm1_line(const std::string& line);
+bool ecm_parse_pm1_line(const std::string& line, Pm1Task& task, std::string& err);
+uint64_t pm1_effective_b2(const Pm1Task& task, uint64_t ratio);
+std::string pm1_handoff_line(const Pm1Task& task, uint64_t resolved_b2);
+bool ecm_compute_pm1_target(const Pm1Task& task, mpz_t target, std::string& err);
+
 // Both save-based stages use the same CSV fields; the prefix selects the engine.
 bool ecm_parse_stage1_line(const std::string& line, EcmStage2Task& task, std::string& err);
 // Parse ECMSTAGE2 or ECMSTAGE2N. Returns false and fills `err` on failure.
@@ -161,6 +176,8 @@ bool ecm_append_text_line_unique(const std::string& path, const std::string& lin
 struct CompletedWorktodo {
     std::string ticket, record, replacement, finished, checkpoint;
     bool append_replacement = false;
+    std::string pm1_add_file, pm1_line, pm1_save_path;
+    uint64_t pm1_save_hash = 0;
 };
 
 // Durable completion responsibility. Leave the receipt until checkpoint cleanup

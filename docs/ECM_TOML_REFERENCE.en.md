@@ -145,7 +145,7 @@ worktodo_file = "worktodo.txt"
 
 Type `string` · Range `<path>` · Worker override `[worker.N] worktodo_file` · Level `core`.
 
-Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1. ECMSTAGE2, ECMSTAGE2N and ECMSTAGE2PART select Stage2. One process consumes a worker queue at a time.
+Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1. Pminus1 selects CUDA P-1 Stage1. ECMSTAGE2, ECMSTAGE2N and ECMSTAGE2PART select Stage2. One process consumes a worker queue at a time.
 
 ## [stage1]
 
@@ -195,7 +195,7 @@ checkpoint_backups = 3
 
 Type `int` · Range `<x:Z,0..16>` · Worker override `[worker.N] checkpoint_backups` · Level `advanced`.
 
-Maximum number of rotated Stage1 checkpoint backups. The primary checkpoint is additional; 0 keeps only the primary. Corrupt or unreadable generations are skipped on resume. A completed Stage1 task removes its primary checkpoint and all backups.
+Maximum number of rotated Stage1 checkpoint backups in addition to the primary. Zero keeps only the primary. ECM cleans up its checkpoints on completion. Pminus1 retains the final GpuOwl checkpoint and its backups for handoff.
 
 <a id="ckpt_seconds"></a>
 
@@ -721,7 +721,7 @@ prime95_save_dir = ""
 
 Type `string` · Range `<path>` · Worker override `[worker.N] prime95_save_dir` · Level `advanced`.
 
-Dedicated save destination for Prime95 handoff; required with prime95_worktodo_file. Backup destinations are independent. Existing published save prefixes must remain unchanged; only complete appended records may extend them.
+Save destination for Prime95. Montgomery handoff requires this directory with prime95_worktodo_file and extends existing saves only with complete records. Pminus1 writes its native m file here, or beside the receiver queue when only that path is set.
 
 <a id="p95_add_workers"></a>
 
@@ -745,7 +745,7 @@ prime95_worktodo_file = ""
 
 Type `string` · Range `<path>` · Worker override `[worker.N] prime95_worktodo_file` · Level `advanced`.
 
-Prime95 worktodo_file path for supported Montgomery Stage1 handoff. Edwards and GPU PARAM2 ignore this path and keep saves local; they do not access Prime95 transfer files. Requires prime95_save_dir. The save is validated and published before worktodo_file.add.
+Receiver worktodo path for supported Montgomery and Pminus1 handoff. Montgomery also requires prime95_save_dir. Pminus1 publishes a native save first and delivers the assignment using the receiver's .add file. Edwards and GPU PARAM2 keep saves local.
 
 ### progress_average_seconds
 
@@ -993,7 +993,7 @@ b2_ratio = 0
 
 Type `u64` · Range `[0|1..1000000]` · Worker override `[worker.N] b2_ratio` · Level `core`.
 
-Stage2 fallback when the CLI, task line and b2 setting supply no nonzero B2. A nonzero ratio uses the saved B1 times this value. Applies to queues and GPU direct save runs. Overflow is rejected.
+Stage2 fallback when the CLI, task line and b2 setting supply no nonzero B2. A nonzero ratio uses the saved B1 times this value. Applies to queues and GPU direct save runs. For Pminus1 handoff, a zero task B2 becomes B1 times this ratio, including zero. Overflow is rejected.
 
 <a id="stage2_b2_round_chain"></a>
 
@@ -1549,7 +1549,7 @@ stage2_after_factored = false
 
 Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] stage2_after_factored` · Level `core`.
 
-After an Edwards Stage1 hit, generate a cofactor save and a local ECM-ELF Stage2 assignment from reusable endpoints. Read in the producing worker scope. Default false.
+After an Edwards Stage1 hit, generate a cofactor save and local Stage2 assignment from reusable endpoints. After a Pminus1 hit, also publish the original assignment with its handoff B2 and original known factors. Every completed Pminus1 task writes a Prime95 save. Read in the producing worker scope. Default false.
 
 ### stage2_algorithm
 

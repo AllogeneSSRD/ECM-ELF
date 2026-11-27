@@ -1,5 +1,25 @@
 # Stage1 使用
 
+<a id="pm1-stage1"></a>
+
+## P−1 分解
+
+在 CUDA worker 的 worktodo 中加入显式上界任务，运行 `ecm_cuda --config ecm.toml`。例如：
+
+```text
+Pminus1=1,2,400381,-1,500,1000
+```
+
+完整语法为 `Pminus1=[AID,]1,2,p,-1,B1,B2[,how_far_factored][,B2_start][,"factors"]`。p 取 32 至 5,242,880 范围内的素数，B1 取 2 至 5,000,000,000。CUDA 加权 NTT 在完整 M=2ᵖ−1 上计算 3 的 2p·lcm(1,…,B1) 次幂。CPU GMP 对 x−1 和剥离原有已知因子后的余因子求 GCD。完成记录位于 worker 的 finished 文件，包括本轮找到的真因子或 `gcd=target`。
+
+**存档。** 每个完成的任务都写 Prime95 v8 的原生 `m…` 文件。默认交接目录是 ecm.toml 同目录下的 `pm1/M<p>-B1-<B1>/`。该目录下的 `p1-<p>/` 同时保存 GpuOwl 断点；可与本地参考版 PRPLL（`6dd6dd5`）交换该目录，在相同 p 和 B1 下双向续算。定期保存和停止时的断点均取 Gerbicz 校验通过的块末。已有其他内容的 Prime95 存档占用目标名时，worker 保留任务并报出文件路径。
+
+**Stage 2 交接。** 无真因子时发布 `worktodo.add`。有真因子时仅在产生存档的 worker 设置 `[stage2].stage2_after_factored=1` 时发布。交接保留原 AID、试除深度、B2_start 和已知因子列表，本轮发现的因子仅记入本机结果。任务 B2 非零时原样交接，为零时输出 B1 × `b2_ratio`，比例也为零则交接 B2=0，Prime95 自行选界。参考版 GpuOwl 将 B2=0 解释为仅运行 Stage 1。
+
+要直接交给 Prime95，可在 `[stage1]` 指定 `prime95_save_dir` 和 `prime95_worktodo_file` 指向接收程序使用的存档目录与工作文件。接收端若要在 Stage 2 末尾重新发现 Stage 1 因子，可设置 `Stage1GCD=-1`。使用上述小界示例测试 Prime95 时设置 `AllowLowB1=1`。ECM-ELF 在存档和任务行发布后结束该任务。
+
+若接收方尚未取走 `.add`，worker 可使用 Prime95 的备用 `.add.txt`。两个文件都在用时会保留完成回执；接收方取走文件后重新启动 worker 即可继续投递。交接需要目标文件系统支持独占重命名。Windows 原生 NTFS 和 Linux 原生文件系统已验证；本机 WSL 的 `/mnt/d` 不支持该操作，从 WSL 运行时可将交接目录设置在 Linux 原生文件系统。
+
 ## 程序与输入
 
 正常计算/队列启动输出公共程序名和版本；`--version` 只输出版本后退出，不启动计算。`--gpu-info` 等机器查询保持原输出结构。

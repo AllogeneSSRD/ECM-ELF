@@ -45,6 +45,10 @@ std::string read_file(const std::filesystem::path& path);
 void write_atomic(const std::filesystem::path& path, const std::string& bytes,
                   const std::string& temporary_suffix = ".publish.tmp");
 uint64_t fingerprint(const std::string& bytes);
+// Make a completed same-directory rename durable before acknowledging it.
+void sync_publication_directory(const std::filesystem::path& published);
+// Atomic same-directory rename into a vacant mailbox. False means occupied.
+bool publish_if_absent(const std::filesystem::path& staged, const std::filesystem::path& mailbox);
 
 } // namespace ecm_io
 

@@ -122,6 +122,9 @@ Queue input and Stage2 handoff:
   Stage1 worktodo formats:
     ECM|ECM2=[AID,]k,b,n,c,B1,B2,curves[,"known-factors"]
     ECMSTAGE1=[AID,]k,b,n,c,filename,B2-or-zero,skip_curves,num_curves[,"known-factors"]
+    Pminus1=[AID,]1,2,p,-1,B1,B2[,how_far_factored][,B2_start][,"known-factors"]
+  Pminus1 uses the CUDA worker, saves a native Prime95 m file, and can resume a GpuOwl .p1.
+  A zero B2 uses B1 times b2_ratio, including zero. stage2_after_factored enables handoff on a hit.
   ECM|ECM2 means either prefix. AID is optional: omit it, use N/A, or an empty field.
   A nonempty AID has 32 hexadecimal characters. ECM/ECM2 may also specify a numeric
   sigma after curves; omitted B2 and curves default to 0 and 100.

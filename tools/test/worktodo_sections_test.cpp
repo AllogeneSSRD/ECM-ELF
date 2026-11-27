@@ -203,8 +203,9 @@ static void test_stage_selection_and_transition() {
 
 static void test_toml_priority_sections() {
     const std::string path="worktodo_sections_test.toml";
-    write_file(path,{"[shared]","priority=2","[gui]","priority=\"high\"",
-                     "[workers.1.shared]","priority=1","[workers.2.shared]","skip=2"});
+    write_file(path,{"config_version = 4", "[shared]", "queue_order=\"stage2_first\"",
+                     "[gui]", "process_priority=\"high\"", "[worker.1]",
+                     "queue_order=\"stage1_first\"", "[worker.2]", "queue_skip=\"stage2\""});
     std::vector<ecm_config::TomlLine> lines;
     check(ecm_config::read_toml(path,lines),"TOML with GUI and worker sections opens");
     const auto value=[](const ecm_config::Entries &entries,const std::string &key) {
