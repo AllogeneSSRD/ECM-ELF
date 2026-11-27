@@ -6,12 +6,13 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <vector>
 #include <string>
 
 namespace ecmgui_v2::ui {
 struct ChartPoint { double x,y; };
-struct ChartSeries { const char* label; ImVec4 color; std::vector<ChartPoint> points; bool visible=true; std::string readout,readout_capacity; };
+struct ChartSeries { const char* label; ImVec4 color; std::vector<ChartPoint> points; bool visible=true; std::string readout,readout_capacity; std::optional<double> vertical_marker_x; };
 struct ChartBounds {double xmin=0,xmax=1,ymin=0,ymax=1;};
 struct ChartMetrics {float height=0,plot_height=0,stroke=0,label_size=0,value_size=0;int header_rows=0;bool x_grid=true,x_ticks=true;double ymin=0,ymax=1;};
 struct ChartFormat {
@@ -148,6 +149,14 @@ inline void chart(const char* id,std::vector<ChartSeries>& series,const char* xl
     }
     for(const auto& s:series)if(s.visible&&s.points.size()==1&&std::isfinite(s.points[0].x)&&std::isfinite(s.points[0].y))
         draw->AddCircleFilled(point(s.points[0].x,s.points[0].y),2*scale,ImGui::GetColorU32(s.color));
+    for(const auto& s:series)if(s.visible&&s.vertical_marker_x){
+        const double marker=*s.vertical_marker_x;
+        if(!std::isfinite(marker)||marker<bounds.xmin||marker>bounds.xmax)continue;
+        const auto x=point(marker,bounds.ymin).x;
+        const auto color=ImGui::GetColorU32(s.color);
+        for(float y=lo.y;y<hi.y;y+=8*scale)
+            draw->AddLine({x,y},{x,std::min(hi.y,y+5*scale)},color,format.stroke*scale);
+    }
     draw->PopClipRect();
     if(format.show_axis_titles){
         draw->AddText({lo.x,origin.y+size.y-17*scale},ImGui::GetColorU32(p.muted),xlabel);

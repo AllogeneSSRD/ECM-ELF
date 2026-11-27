@@ -196,6 +196,40 @@
       <Item id="snapshot_csv_copied" name="已复制快照 CSV" />
       <Item id="factor_size" name="因子大小" />
       <Item id="decimal_digits" name="十进制位数" />
+      <Item id="probability.mode" name="概率" />
+      <Item id="t_level.relative_target" name="按增量设定目标" />
+      <Item id="t_level.recommend" name="推荐批次" />
+      <Item id="t_level.increase" name="增加位数（bit）" />
+      <Item id="t_level.target" name="目标 t-level（bit）" />
+      <Item id="t_level.previous_work" name="历史工作量" />
+      <Item id="t_level.history" name="已完成批次" />
+      <Item id="t_level.known" name="已知 t-level" />
+      <Item id="t_level.starting_level" name="历史 t-level（bit）" />
+      <Item id="t_level.estimate_hint" name="用提交时的 B1、B2 和 D_eff 估算历史概率。有历史参数时可逐批录入。" />
+      <Item id="t_level.add_history" name="将当前参数加入已完成批次" />
+      <Item id="t_level.remove_history" name="移除" />
+      <Item id="t_level.history_hint" name="先录入已完成的批次，再在上方设置待计算批次。" />
+      <Item id="t_level.estimated" name="历史工作量由输入的 t-level 和参考曲线参数估算。" />
+      <Item id="t_level.summary" name="历史 %s | 本批单独 %s | 累计 %s bit" />
+      <Item id="t_level.gain" name="累计提升 %.2f bit" />
+      <Item id="t_level.batch" name="%.0f 条曲线 | B1=%.0f | B2=%.0f | D_eff=%.6g" />
+      <Item id="t_level.target_summary" name="目标 t-level %.2f bit" />
+      <Item id="t_level.already_sufficient" name="历史工作量已达到目标，无需新增曲线。" />
+      <Item id="t_level.prior_miss" name="历史工作量" />
+      <Item id="t_level.total_miss" name="加入本批后" />
+      <Item id="t_level.chart" name="未检出概率随因子位数变化" />
+      <Item id="t_level.miss_axis" name="未检出概率（%）" />
+      <Item id="t_level.error.invalid_b1" name="请输入 2 至 10^18 的整数 B1。" />
+      <Item id="t_level.error.invalid_b2" name="B2 必须介于 B1 和 10^18 之间。直接输入的 B2 必须为整数。" />
+      <Item id="t_level.error.invalid_ratio" name="请输入 1 至 10^9 的 B2/B1 比率。" />
+      <Item id="t_level.error.invalid_curves" name="请检查整数曲线数。反算边界至少需要一条曲线。" />
+      <Item id="t_level.error.invalid_divisor" name="D_eff 必须介于 10^-9 和 10^18 之间。" />
+      <Item id="t_level.error.invalid_starting_level" name="历史 t-level 必须介于 2 和 2048 bit 之间。" />
+      <Item id="t_level.error.unreachable_starting_level" name="当前参考曲线无法估算该历史 t-level。请调整参考边界，或录入已完成批次。" />
+      <Item id="t_level.error.missing_starting_level" name="按增量反算需要已知的历史 t-level，或能算出 t-level 的已完成批次。" />
+      <Item id="t_level.error.invalid_t_level_target" name="最终目标必须介于 2 和 2048 bit 之间。" />
+      <Item id="t_level.error.b2_needs_stage2" name="请启用 Stage 2 再反算 B2。" />
+      <Item id="t_level.error.unreachable" name="当前参数和边界下，模型无法达到目标。" />
       <Item id="probability.stage2_enabled" name="启用 Stage2" />
       <Item id="use_b2_b1_ratio" name="使用 B2/B1 比率" />
       <Item id="custom" name="自定义" />

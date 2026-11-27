@@ -204,6 +204,10 @@ public:
     std::string generator_signature() const;
     ecmgui::probability_ui::Request probability_request;
     ecmgui::probability_ui::Result probability_result;
+    ecmgui::probability_ui::TLevelRequest t_level_request;
+    ecmgui::probability_ui::TLevelResult t_level_result;
+    bool t_level_ready=false;
+    int probability_mode=0,t_level_history_mode=0;
     bool probability_ready = false;
     int probability_profile=0;
     int probability_tab=0;

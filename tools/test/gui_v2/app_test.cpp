@@ -972,6 +972,65 @@ int main(int argc,char** argv){
     using namespace ecmgui::probability_ui;Request request;const auto forward=calculate(request);assert(forward.error.empty());
     auto inverse=request;inverse.solve=Solve::Curves;inverse.target=.75;const auto solved=calculate(inverse);assert(solved.error.empty());assert(cumulative(solved.probability.selected,solved.parameters.curves)>=.75);
     const auto csv=curve_csv(forward);request.parameters.b1=10;assert(curve_csv(forward)==csv);
+    {
+        TLevelRequest plan;
+        const auto first=calculate_t_level(plan);
+        assert(first.error.empty()&&!first.previous_level&&first.batch_level&&first.total_level);
+        assert(*first.batch_level==*first.total_level);
+        auto threshold=plan.batch;threshold.factor_bits=*first.total_level;
+        assert(std::abs(miss(evaluate(threshold).combined,threshold.curves)-std::exp(-1.))<1e-8);
+
+        plan.history.push_back(plan.batch);
+        plan.batch.b1*=2;
+        const auto combined=calculate_t_level(plan);
+        assert(combined.error.empty()&&combined.previous_level==first.total_level&&combined.total_level);
+        assert(*combined.total_level>std::max(*combined.previous_level,*combined.batch_level));
+        threshold=plan.batch;threshold.factor_bits=*combined.total_level;
+        auto prior=plan.history.front();prior.factor_bits=threshold.factor_bits;
+        assert(std::abs(miss(evaluate(prior).combined,prior.curves)*
+                        miss(evaluate(threshold).combined,threshold.curves)-std::exp(-1.))<1e-8);
+        assert(t_level_csv(combined).find("factor_bits,previous_miss,total_miss")!=std::string::npos);
+
+        plan.solve=TLevelSolve::Curves;plan.relative_target=true;plan.target=3;
+        const auto curves=calculate_t_level(plan);
+        assert(curves.error.empty()&&curves.total_level&&*curves.total_level>=curves.target_level-1e-8);
+        assert(std::floor(curves.batch.curves)==curves.batch.curves);
+        plan.solve=TLevelSolve::Forward;plan.batch.curves=curves.batch.curves-1;
+        const auto fewer=calculate_t_level(plan);
+        assert(fewer.error.empty()&&fewer.total_level&&*fewer.total_level<curves.target_level);
+
+        plan.batch=combined.batch;plan.relative_target=false;plan.target=*combined.total_level-1;
+        for(const auto bound:{TLevelSolve::B1,TLevelSolve::B2}) {
+            plan.solve=bound;
+            const auto solved_bound=calculate_t_level(plan);
+            assert(solved_bound.error.empty()&&solved_bound.total_level&&*solved_bound.total_level>=plan.target-1e-8);
+            plan.solve=TLevelSolve::Forward;
+            const auto original=plan.batch;
+            plan.batch=solved_bound.batch;
+            if(bound==TLevelSolve::B1)plan.batch.b1-=1;else plan.batch.b2-=1;
+            const auto smaller=calculate_t_level(plan);
+            assert(smaller.error.empty()&&smaller.total_level&&*smaller.total_level<plan.target);
+            plan.batch=original;
+        }
+        plan.solve=TLevelSolve::Recommend;
+        const auto suggested=calculate_t_level(plan);
+        assert(suggested.error.empty()&&suggested.total_level&&*suggested.total_level>=plan.target-1e-8);
+        assert(suggested.batch.curves>=1&&std::floor(suggested.batch.b1)==suggested.batch.b1);
+        plan.solve=TLevelSolve::Curves;plan.target=*first.total_level-1;
+        const auto sufficient=calculate_t_level(plan);
+        assert(sufficient.error.empty()&&sufficient.already_sufficient&&sufficient.batch.curves==0);
+        plan.history.clear();plan.starting_level=*first.total_level;plan.batch=first.batch;plan.solve=TLevelSolve::Forward;
+        const auto estimated=calculate_t_level(plan);
+        assert(estimated.error.empty()&&estimated.previous_level==first.total_level&&estimated.total_level);
+        plan.starting_level=0;plan.history.push_back(first.batch);
+        const auto repeated=calculate_t_level(plan);
+        assert(repeated.error.empty()&&repeated.total_level&&std::abs(*estimated.total_level-*repeated.total_level)<1e-8);
+        plan.history.clear();plan.batch.curves=0;
+        const auto empty=calculate_t_level(plan);
+        assert(empty.error.empty()&&!empty.total_level&&!empty.batch_level);
+        plan.solve=TLevelSolve::Curves;plan.relative_target=true;plan.target=3;
+        assert(calculate_t_level(plan).error=="missing_starting_level");
+    }
     {auto* context=ImGui::CreateContext();ImGui::GetIO().IniFilename=nullptr;state.ui_theme="light";
      assert(app.edit_business("stage2","b2_ratio","40")&&app.save_layout_config());
      const auto saved_config=read(cfg);

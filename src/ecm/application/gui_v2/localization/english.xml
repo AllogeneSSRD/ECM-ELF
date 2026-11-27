@@ -196,6 +196,40 @@
       <Item id="snapshot_csv_copied" name="Snapshot CSV copied" />
       <Item id="factor_size" name="Factor size" />
       <Item id="decimal_digits" name="Decimal digits" />
+      <Item id="probability.mode" name="Probability" />
+      <Item id="t_level.relative_target" name="Target an increase" />
+      <Item id="t_level.recommend" name="Recommend batch" />
+      <Item id="t_level.increase" name="Increase (bits)" />
+      <Item id="t_level.target" name="Target t-level (bits)" />
+      <Item id="t_level.previous_work" name="Previous work" />
+      <Item id="t_level.history" name="Completed batches" />
+      <Item id="t_level.known" name="Known t-level" />
+      <Item id="t_level.starting_level" name="Previous t-level (bits)" />
+      <Item id="t_level.estimate_hint" name="The estimate uses the submitted batch's B1, B2 and D_eff as a reference. Enter completed batches when their parameters are available." />
+      <Item id="t_level.add_history" name="Add current batch to completed work" />
+      <Item id="t_level.remove_history" name="Remove" />
+      <Item id="t_level.history_hint" name="Add completed batches first, then set the parameters for the new batch above." />
+      <Item id="t_level.estimated" name="Previous work is estimated from the entered t-level and the reference curve parameters." />
+      <Item id="t_level.summary" name="Previous %s | Batch alone %s | Combined %s bit" />
+      <Item id="t_level.gain" name="Increase: %.2f bit" />
+      <Item id="t_level.batch" name="%.0f curves | B1=%.0f | B2=%.0f | D_eff=%.6g" />
+      <Item id="t_level.target_summary" name="Target t-level: %.2f bit" />
+      <Item id="t_level.already_sufficient" name="Previous work already meets the target. No additional curves are required." />
+      <Item id="t_level.prior_miss" name="Previous work" />
+      <Item id="t_level.total_miss" name="With new batch" />
+      <Item id="t_level.chart" name="Miss probability by factor size" />
+      <Item id="t_level.miss_axis" name="Miss probability (%)" />
+      <Item id="t_level.error.invalid_b1" name="Enter an integer B1 from 2 through 10^18." />
+      <Item id="t_level.error.invalid_b2" name="B2 must be at least B1 and at most 10^18. An explicit B2 must be an integer." />
+      <Item id="t_level.error.invalid_ratio" name="Enter a B2/B1 ratio from 1 through 10^9." />
+      <Item id="t_level.error.invalid_curves" name="Check the curve count. Solving for a bound requires at least one curve." />
+      <Item id="t_level.error.invalid_divisor" name="D_eff must be between 10^-9 and 10^18." />
+      <Item id="t_level.error.invalid_starting_level" name="The historical t-level must be between 2 and 2048 bits." />
+      <Item id="t_level.error.unreachable_starting_level" name="The reference curve cannot represent that starting t-level. Adjust the reference bounds or enter completed batches." />
+      <Item id="t_level.error.missing_starting_level" name="An increase requires completed work with a measurable t-level or an entered historical t-level." />
+      <Item id="t_level.error.invalid_t_level_target" name="The final target must be between 2 and 2048 bits." />
+      <Item id="t_level.error.b2_needs_stage2" name="Enable Stage 2 to solve for B2." />
+      <Item id="t_level.error.unreachable" name="The model cannot reach the target within the given parameters and bounds." />
       <Item id="probability.stage2_enabled" name="Stage 2 enabled" />
       <Item id="use_b2_b1_ratio" name="Use B2/B1 ratio" />
       <Item id="custom" name="Custom" />

@@ -381,16 +381,42 @@ void App::draw_generator(bool zh) {
 void App::draw_probability(bool zh) {
     using namespace ecmgui::probability_ui; auto& request=probability_request;auto& p=request.parameters;
     ImGui::TextUnformatted(ecmgui_v2::ui::text("ecm_probability",zh));
+    if(chips("probability-mode",probability_mode,{ui::text("probability.mode",zh),"t-level"}))probability_tab=0;
+    const bool t_level=probability_mode!=0;
+    const auto t_snapshot=[&] {
+        auto snapshot=t_level_request;
+        snapshot.batch=p;
+        if(t_level_history_mode==0)snapshot.starting_level=0;
+        else snapshot.history.clear();
+        return snapshot;
+    };
     chips("probability-view",probability_tab,{ecmgui_v2::ui::text("parameters",zh),ecmgui_v2::ui::text("charts_and_snapshot",zh)});
-    if(ui::button("calculate-snapshot",ecmgui_v2::ui::text("calculate_snapshot",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)){probability_result=calculate(request);probability_ready=true;probability_tab=1;toast(probability_result.error.empty()?ecmgui_v2::ui::text("probability_snapshot_ready",zh):probability_result.error,!probability_result.error.empty());}
+    const auto error_label=[&](const std::string& error) {
+        const auto key="t_level.error."+error;
+        const std::string translated=ui::text(key.c_str(),zh);
+        return translated==key?error:translated;
+    };
+    if(ui::button("calculate-snapshot",ecmgui_v2::ui::text("calculate_snapshot",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)){
+        if(t_level){t_level_result=calculate_t_level(t_snapshot());t_level_ready=true;}
+        else{probability_result=calculate(request);probability_ready=true;}
+        probability_tab=1;
+        const auto& error=t_level?t_level_result.error:probability_result.error;
+        toast(error.empty()?ui::text("probability_snapshot_ready",zh):t_level?error_label(error):error,!error.empty());
+    }
     calculate_control=ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
-    if(probability_ready&&probability_result.error.empty()){ImGui::SameLine();if(ImGui::Button(ecmgui_v2::ui::text("copy_snapshot_csv",zh))){ImGui::SetClipboardText(curve_csv(probability_result).c_str());toast(ecmgui_v2::ui::text("snapshot_csv_copied",zh));}}
+    if(t_level?t_level_ready&&t_level_result.error.empty():probability_ready&&probability_result.error.empty()){
+        ImGui::SameLine();
+        if(ImGui::Button(ui::text("copy_snapshot_csv",zh))){
+            ImGui::SetClipboardText((t_level?t_level_csv(t_level_result):curve_csv(probability_result)).c_str());
+            toast(ui::text("snapshot_csv_copied",zh));
+        }
+    }
     if(probability_tab==0){
     const bool profile_changed=ui::curve_buttons("curve-profile",probability_profile,false,zh,probability_curve_controls);
     double size=size_from_bits(p.factor_bits,request.decimal_digits);
     {
         ui::CompactForm form("probability-fields",probability_form);
-        form.field("size",ui::text("factor_size",zh),[&]{if(ImGui::InputDouble("##value",&size,0,0,"%.0f"))p.factor_bits=bits_from_size(size,request.decimal_digits);},
+        if(!t_level)form.field("size",ui::text("factor_size",zh),[&]{if(ImGui::InputDouble("##value",&size,0,0,"%.0f"))p.factor_bits=bits_from_size(size,request.decimal_digits);},
             ui::text("decimal_digits",zh),[&]{ecmgui_v2::ui::checkbox(ui::text("decimal_digits",zh),&request.decimal_digits);});
         form.field("curves",ui::text("curves",zh),[&]{ImGui::InputDouble("##value",&p.curves,0,0,"%.0f");});
         form.field("b1","B1",[&]{ImGui::InputDouble("##value",&p.b1,0,0,"%.0f");},ui::text("probability.stage2_enabled",zh),[&]{ecmgui_v2::ui::checkbox(ui::text("probability.stage2_enabled",zh),&p.stage2);});
@@ -402,10 +428,42 @@ void App::draw_probability(bool zh) {
         },ui::text("use_stage1_empirical_calibration",zh),[&]{
             if(ecmgui_v2::ui::checkbox(ui::text("use_stage1_empirical_calibration",zh),&probability_empirical)&&probability_profile<ui::custom_curve_profile)p.effective_divisor=ui::curve_divisor(probability_profile,probability_empirical);
         });
-        form.field("target",ui::text("probability.target_percent",zh),[&]{double target=ui::percent(request.target);if(ImGui::InputDouble("##value",&target,0,0,"%.6g%%"))request.target=ui::probability(target);},
+        if(!t_level)form.field("target",ui::text("probability.target_percent",zh),[&]{double target=ui::percent(request.target);if(ImGui::InputDouble("##value",&target,0,0,"%.6g%%"))request.target=ui::probability(target);},
             ui::text("cumulative_target",zh),[&]{ecmgui_v2::ui::checkbox(ui::text("cumulative_target",zh),&request.cumulative_target);});
     }
     ImGui::TextWrapped("%s",ui::text("probability.edwards_divisor_note",zh));
+    if(t_level){
+        auto& t=t_level_request;
+        int mode=static_cast<int>(t.solve);
+        if(chips("t-level-solve",mode,{ui::text("forward",zh),ui::text("curves",zh),"B1","B2",ui::text("t_level.recommend",zh)}))t.solve=static_cast<TLevelSolve>(mode);
+        if(t.solve!=TLevelSolve::Forward){
+            bool relative=t.relative_target;
+            ui::checkbox(ui::text("t_level.relative_target",zh),&relative);
+            if(relative!=t.relative_target){t.relative_target=relative;t.target=relative?5:140;}
+            ImGui::InputDouble(ui::text(t.relative_target?"t_level.increase":"t_level.target",zh),&t.target,0,0,"%.2f");
+        }
+        ImGui::SeparatorText(ui::text("t_level.previous_work",zh));
+        chips("t-level-history",t_level_history_mode,{ui::text("t_level.history",zh),ui::text("t_level.known",zh)});
+        if(t_level_history_mode==1){
+            ImGui::InputDouble(ui::text("t_level.starting_level",zh),&t.starting_level,0,0,"%.2f");
+            ImGui::TextWrapped("%s",ui::text("t_level.estimate_hint",zh));
+        }else{
+            ImGui::BeginDisabled(t.history.size()>=max_t_level_batches||!(p.curves>0));
+            if(ImGui::Button(ui::text("t_level.add_history",zh)))t.history.push_back(p);
+            ImGui::EndDisabled();
+            ImGui::TextWrapped("%s",ui::text("t_level.history_hint",zh));
+            for(size_t i=0;i<t.history.size();){
+                ImGui::PushID(static_cast<int>(i));
+                const bool remove=ImGui::SmallButton(ui::text("t_level.remove_history",zh));
+                ImGui::SameLine();
+                const auto& batch=t.history[i];
+                ImGui::TextWrapped(ui::text("t_level.batch",zh),batch.curves,batch.b1,effective_b2(batch),batch.effective_divisor);
+                ImGui::PopID();
+                if(remove)t.history.erase(t.history.begin()+i);else ++i;
+            }
+        }
+        return;
+    }
     int scope=static_cast<int>(p.scope);if(chips("probability-scope",scope,{"Stage 1",ui::text("combined",zh),ui::text("probability.stage2_conditional",zh)}))p.scope=static_cast<Scope>(scope);
     int solve=static_cast<int>(request.solve);if(chips("solve",solve,{ui::text("forward",zh),ui::text("curves",zh),ui::text("factor_size",zh),"B1","B2","D_eff"}))request.solve=static_cast<Solve>(solve);
     if(ImGui::CollapsingHeader(ui::text("plot_range",zh))){
@@ -415,6 +473,44 @@ void App::draw_probability(bool zh) {
         form.field("curves-max",ui::text("curves_max",zh),[&]{ImGui::InputDouble("##value",&request.curves_max,0,0,"%.0f");},
             ui::text("auto_curves_range",zh),[&]{ecmgui_v2::ui::checkbox(ui::text("auto_curves_range",zh),&request.auto_curves_range);});
     }
+        return;
+    }
+    if(t_level){
+        if(!t_level_ready){ImGui::TextWrapped("%s",ui::text("probability.calculate_hint",zh));return;}
+        const auto& r=t_level_result;
+        if(!r.error.empty()){ImGui::TextWrapped("%s",error_label(r.error).c_str());return;}
+        const auto current=t_snapshot();
+        const auto same_batch=[](const Parameters& a,const Parameters& b){
+            const auto key=[](const Parameters& batch){return std::make_tuple(batch.curves,batch.b1,effective_b2(batch),batch.effective_divisor,batch.stage2,batch.ratio_mode);};
+            return key(a)==key(b);
+        };
+        if(current.solve!=r.request.solve||current.target!=r.request.target||current.relative_target!=r.request.relative_target||
+           current.starting_level!=r.request.starting_level||!same_batch(current.batch,r.request.batch)||
+           !std::equal(current.history.begin(),current.history.end(),r.request.history.begin(),r.request.history.end(),same_batch))
+            ImGui::TextWrapped("%s",ui::text("probability.stale_snapshot_hint",zh));
+        if(r.request.starting_level>0)ImGui::TextWrapped("%s",ui::text("t_level.estimated",zh));
+        const auto format=[](const std::optional<double>& level) {
+            char value[32]="--";
+            if(level)std::snprintf(value,sizeof(value),"%.2f",*level);
+            return std::string(value);
+        };
+        ImGui::TextWrapped(ui::text("t_level.summary",zh),format(r.previous_level).c_str(),format(r.batch_level).c_str(),format(r.total_level).c_str());
+        if(r.previous_level&&r.total_level)ImGui::Text(ui::text("t_level.gain",zh),*r.total_level-*r.previous_level);
+        ImGui::TextWrapped(ui::text("t_level.batch",zh),r.batch.curves,r.batch.b1,effective_b2(r.batch),r.batch.effective_divisor);
+        if(r.request.solve!=TLevelSolve::Forward)ImGui::Text(ui::text("t_level.target_summary",zh),r.target_level);
+        if(r.already_sufficient)ImGui::TextWrapped("%s",ui::text("t_level.already_sufficient",zh));
+        const auto colors=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);
+        std::vector<ui::ChartSeries> lines{
+            {ui::text("t_level.prior_miss",zh),colors.stage1,{}},
+            {ui::text("t_level.total_miss",zh),colors.stage2,{}}
+        };
+        for(const auto& point:r.points){
+            lines[0].points.push_back({point.bits,ui::percent(point.previous_miss)});
+            lines[1].points.push_back({point.bits,ui::percent(point.total_miss)});
+        }
+        lines[1].vertical_marker_x=r.total_level;
+        ImGui::SeparatorText(ui::text("t_level.chart",zh));
+        ui::chart("t-level-miss",lines,ui::text("factor_bits",zh),ui::text("t_level.miss_axis",zh),zh,100,200,{true,true,"%.2f","%.2f%%"});
         return;
     }
     if(!probability_ready){ImGui::TextWrapped("%s",ecmgui_v2::ui::text("probability.calculate_hint",zh));return;}

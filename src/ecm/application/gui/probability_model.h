@@ -1,5 +1,7 @@
 #pragma once
+#include <cstddef>
 #include <string>
+#include <optional>
 #include <vector>
 
 namespace ecmgui { namespace probability_ui {
@@ -43,4 +45,26 @@ double effective_b2(const Parameters &p);
 Probabilities evaluate(const Parameters &p);
 Result calculate(const Request &request);
 std::string curve_csv(const Result &result);
+
+enum class TLevelSolve { Forward, Curves, B1, B2, Recommend };
+struct TLevelRequest {
+    Parameters batch;
+    std::vector<Parameters> history;
+    double starting_level=0,target=140;
+    bool relative_target=false;
+    TLevelSolve solve=TLevelSolve::Forward;
+};
+struct TLevelPoint { double bits,previous_miss,total_miss; };
+struct TLevelResult {
+    TLevelRequest request;
+    Parameters batch;
+    std::optional<double> previous_level,batch_level,total_level;
+    double target_level=0;
+    bool already_sufficient=false;
+    std::string error;
+    std::vector<TLevelPoint> points;
+};
+constexpr std::size_t max_t_level_batches=32;
+TLevelResult calculate_t_level(const TLevelRequest &request);
+std::string t_level_csv(const TLevelResult &result);
 } }

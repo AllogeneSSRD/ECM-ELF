@@ -170,4 +170,143 @@ std::string curve_csv(const Result &result) {
     for(const auto &point:result.curve_counts){out<<"cumulative,curves,";emit(point);}
     return out.str();
 }
+
+namespace {
+constexpr double min_level=2,max_level=2048;
+double curve_hazard(const Parameters &batch,double bits) {
+    const double probability=ecm_stage2::probability::success(batch.b1,effective_b2(batch),bits,std::log(batch.effective_divisor));
+    return -std::log1p(-probability);
+}
+double batch_hazard(const Parameters &batch,double bits) {
+    return batch.curves>0?batch.curves*curve_hazard(batch,bits):0;
+}
+void validate_t_batch(Parameters batch) {
+    batch.factor_bits=min_level;
+    validate(batch);
+    require(std::floor(batch.curves)==batch.curves,"invalid_curves");
+    require(std::floor(batch.b1)==batch.b1,"invalid_b1");
+    if(batch.stage2&&!batch.ratio_mode)require(std::floor(batch.b2)==batch.b2,"invalid_b2");
+}
+double t_level_max_b1(const Parameters &batch) {
+    if(!batch.stage2)return max_bound;
+    if(!batch.ratio_mode)return batch.b2;
+    double bound=std::floor(max_bound/batch.b2_ratio);
+    if(bound*batch.b2_ratio>max_bound)bound=std::floor(std::nextafter(bound,0.));
+    return bound;
+}
+template<class Hazard>
+std::optional<double> hazard_level(const Hazard &hazard) {
+    double lo=min_level,hi=max_level;
+    if(hazard(lo)<1)return std::nullopt;
+    for(int iteration=0;iteration<52;++iteration) {
+        const double mid=(lo+hi)*.5;
+        if(hazard(mid)>=1)lo=mid;else hi=mid;
+    }
+    return lo;
+}
+}
+
+TLevelResult calculate_t_level(const TLevelRequest &request) {
+    TLevelResult out;out.request=request;out.batch=request.batch;
+    try {
+        auto &batch=out.batch;
+        validate_t_batch(batch);
+        require(request.history.size()<=max_t_level_batches,"history_limit");
+        for(const auto &previous:request.history)validate_t_batch(previous);
+        const bool use_estimate=request.starting_level!=0;
+        double reference=0;
+        if(use_estimate) {
+            require(request.history.empty()&&finite_range(request.starting_level,min_level,max_level),"invalid_starting_level");
+            reference=curve_hazard(request.batch,request.starting_level);
+            require(reference>0&&std::isfinite(reference),"unreachable_starting_level");
+        }
+        const auto previous_hazard=[&](double bits) {
+            if(use_estimate)return curve_hazard(request.batch,bits)/reference;
+            double total=0;
+            for(const auto &previous:request.history)total+=batch_hazard(previous,bits);
+            return total;
+        };
+        out.previous_level=use_estimate?std::optional<double>(request.starting_level):hazard_level(previous_hazard);
+        if(request.solve!=TLevelSolve::Forward) {
+            require(!request.relative_target||out.previous_level.has_value(),"missing_starting_level");
+            require(finite_range(request.target,request.relative_target?0:min_level,max_level),"invalid_t_level_target");
+            const double target=request.target+(request.relative_target?*out.previous_level:0);
+            require(finite_range(target,min_level,max_level),"invalid_t_level_target");
+            out.target_level=target;
+            const double remaining=1-previous_hazard(target);
+            if(remaining<=0||(out.previous_level&&target<=*out.previous_level)) {
+                batch.curves=0;out.already_sufficient=true;
+            } else if(request.solve==TLevelSolve::Curves||request.solve==TLevelSolve::Recommend) {
+                if(request.solve==TLevelSolve::Recommend) {
+                    // Invert the existing GMP B1 recommendation regression at the target factor size.
+                    batch.b1=std::min(std::ceil(std::exp(.075*target+5.332)),t_level_max_b1(batch));
+                }
+                const double per_curve=curve_hazard(batch,target);
+                require(per_curve>0,"unreachable");
+                batch.curves=std::max(1.,std::ceil(remaining/per_curve));
+                if(batch.curves*per_curve<remaining)
+                    batch.curves=std::max(batch.curves+1,std::nextafter(batch.curves,std::numeric_limits<double>::infinity()));
+                require(finite_range(batch.curves,1,max_curves),"unreachable");
+            } else {
+                const bool solve_b1=request.solve==TLevelSolve::B1;
+                require(solve_b1||request.solve==TLevelSolve::B2,"invalid_solve");
+                if(!solve_b1)require(batch.stage2,"b2_needs_stage2");
+                require(batch.curves>=1,"invalid_curves");
+                if(!solve_b1)batch.ratio_mode=false;
+                double &bound=solve_b1?batch.b1:batch.b2;
+                double lo=solve_b1?2:batch.b1;
+                double hi=solve_b1?t_level_max_b1(batch):max_bound;
+                bound=hi;
+                require(batch_hazard(batch,target)>=remaining,"unreachable");
+                while(lo<hi) {
+                    const double mid=std::floor(lo+(hi-lo)*.5);
+                    if(mid>=hi)break;
+                    bound=mid;
+                    if(batch_hazard(batch,target)>=remaining)hi=mid;
+                    else {
+                        const double next=std::ceil(std::nextafter(mid,hi));
+                        if(next<=lo)break;
+                        lo=next;
+                    }
+                }
+                bound=hi;
+            }
+        }
+        const auto new_hazard=[&](double bits){return batch_hazard(batch,bits);};
+        const auto total_hazard=[&](double bits){return previous_hazard(bits)+new_hazard(bits);};
+        out.batch_level=hazard_level(new_hazard);
+        out.total_level=hazard_level(total_hazard);
+        double lo=std::min({out.previous_level.value_or(max_level),out.total_level.value_or(max_level),out.target_level?out.target_level:max_level});
+        double hi=std::max({out.previous_level.value_or(min_level),out.total_level.value_or(min_level),out.target_level});
+        if(lo>hi){lo=60;hi=200;}
+        lo=std::max(min_level,lo-20);hi=std::min(max_level,hi+20);
+        constexpr int samples=129;
+        for(int i=0;i<samples;++i) {
+            const double bits=lo+(hi-lo)*i/(samples-1);
+            out.points.push_back({bits,std::exp(-previous_hazard(bits)),std::exp(-total_hazard(bits))});
+        }
+    } catch(const std::exception &error) {out.error=error.what();out.points.clear();}
+    return out;
+}
+
+std::string t_level_csv(const TLevelResult &result) {
+    std::ostringstream out;out<<std::setprecision(17);
+    const auto write_batch=[&](const char *label,const Parameters &batch) {
+        out<<"# "<<label<<"; curves="<<batch.curves<<"; B1="<<batch.b1<<"; B2="<<effective_b2(batch)
+           <<"; D_eff="<<batch.effective_divisor<<"\n";
+    };
+    out<<"# model=local_dickman_semismooth; t_level_unit=bits; miss_threshold="<<std::exp(-1.)<<"\n";
+    if(result.request.starting_level) {
+        out<<"# estimated_prior_t_level="<<result.request.starting_level<<"\n";
+        write_batch("estimate_reference",result.request.batch);
+    }
+    for(const auto &batch:result.request.history)write_batch("history",batch);
+    write_batch("new_batch",result.batch);
+    out<<"# previous_t_level=";if(result.previous_level)out<<*result.previous_level;
+    out<<"; batch_t_level=";if(result.batch_level)out<<*result.batch_level;
+    out<<"; total_t_level=";if(result.total_level)out<<*result.total_level;
+    out<<"\nfactor_bits,previous_miss,total_miss\n";
+    for(const auto &point:result.points)out<<point.bits<<','<<point.previous_miss<<','<<point.total_miss<<'\n';
+    return out.str();
+}
 } }
