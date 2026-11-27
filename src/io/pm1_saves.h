@@ -34,6 +34,12 @@ struct ExtensionSave {
 };
 std::optional<ExtensionSave> load_extension(const std::filesystem::path& root, unsigned p, uint64_t b1);
 void write_extension(const std::filesystem::path& root, unsigned p, uint64_t b1, const ExtensionSave& save);
+struct ExtensionProgress {
+    uint64_t from, old_iterations;
+};
+std::optional<ExtensionProgress> load_extension_progress(const std::filesystem::path& root, unsigned p, uint64_t b1);
+void write_extension_progress(const std::filesystem::path& root, unsigned p, uint64_t b1,
+                              const ExtensionProgress& progress);
 std::filesystem::path write_prime95(const std::filesystem::path& dir, unsigned p,
                                     uint64_t b1, const std::vector<uint32_t>& residue,
                                     uint64_t* fingerprint = nullptr, const Prime95Save* previous = nullptr);

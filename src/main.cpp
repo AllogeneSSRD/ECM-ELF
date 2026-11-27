@@ -1046,6 +1046,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
             auto plan = ecm_mersenne_ntt::select_pm1_batch(opt.execution.device_index, exponents, options.execution.ntt);
             tasks.resize(plan.batch);
             options.execution.ntt = plan.ntt;
+            options.execution.ntt.max_batch = plan.batch;
             const bool needs_ratio = std::any_of(tasks.begin(),tasks.end(),[](const auto& lane){return !lane.b2;});
             const auto ratio = needs_ratio ? ecm_config::read_stage2(ecm_config::selected_entries(
                 parsed_config.lines, worker, {"b2_ratio"}, ini)).b2_ratio : 0;

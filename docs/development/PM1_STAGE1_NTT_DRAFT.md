@@ -42,6 +42,8 @@ Pminus1=[AID,]1,2,p,-1,B1,B2[,how_far_factored][,B2_start][,"factors"]
 
 ## 实现与实测
 
+- 0.76.6 将“完成旧 B1”的起始工作量写入 `extension.progress`，在两个阶段内续算时都恢复同一进度总量，ETA 继续使用每路实际剩余迭代。旧版 `extension.pm1` 直接按已保存的二进制游标恢复。生产四路存档的副本从 51,183,616 / 115,428,096 iter（44.34%）开始。端到端回归在两个阶段分别停止并续算，与独立模幂逐字节对拍。扩展的四位幂表通过 768、65536、163840、262144 点的 GMP 对拍。[续算日志](../../data/experiments/pm1_extend_0766/production_checkpoint_copy/worker.log) · [进度与 ETA](../usage/GUI_V2.md#pm1-progress) · [回归](../../tools/test/test_pm1_stage1_extend.py)
+
 - 0.76.5 支持一次 CUDA Graph 提交推进最多四个指数位。参考 gpuowl 在逆变换后的进位中合并 `MUL3` 的做法，将底数 3 的四位常数乘法并入最后一次平方的进位。GMP 对拍覆盖 Graph 和直接提交、最高 limb 分别为 1 位和 31 位的模数，以及 163840 和 262144 点。B1 扩展的四位 Graph 结果与独立 Python 模幂一致。Gerbicz 回归通过 30 个已验证端点和两次故障回滚。[gpuowl 参考](../../.refactor/gpuowl/src/cl/carryinc.cl) · [四路吞吐与 Nsight](../performance/STAGE1_MERSENNE_NTT.md#rtx-4070-ti-四路-p1-stage1)
 
 - 0.76.1 的 worker 详情按首任务、首任务迭代与实际 NTT 形状、整批迭代进度显示。扩展时从启动存档位置统计需执行的迭代，并在进入增量阶段时重置当前速度样本。日志摘要使用相同的计数和 ETA。[显示口径](../usage/GUI_V2.md#pm1-progress) · [原生界面回归](../../tools/test/gui_v2/test_pm1_progress.py)

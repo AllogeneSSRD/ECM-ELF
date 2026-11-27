@@ -156,7 +156,7 @@ void prepare(Phase& phase, const Pm1Task& task, const ecm_stage1::Stage1Options&
 
 Pm1Progress advance(Phase& phase, const Pm1Task& task, uint64_t b2,
                     const ecm_stage1::Stage1Options& options, BatchProgress& progress, size_t lane,
-                    uint64_t offset, uint64_t pending, uint64_t old_b1) {
+                    uint64_t offset, uint64_t pending, uint64_t old_b1, uint64_t skipped = 1) {
     Pm1Progress state;
     double previous_seconds = 0;
     if (phase.extension) {
@@ -185,9 +185,6 @@ Pm1Progress advance(Phase& phase, const Pm1Task& task, uint64_t b2,
                    (unsigned long long)phase.bits, lane + 1);
     const auto start_k = state.k;
     const bool extending = old_b1 != 0;
-    // Ordinary resumes retain their original cursor. An extension counts only
-    // the work still needed at startup, including any unfinished older phase.
-    const auto skipped = extending ? start_k : 1;
     const char* phase_name = !extending ? "stage1" : phase.bound < task.b1 ? "finish_old" : "extend";
     if (extending)
         ecm_ts_fprintf(stdout, "P-1 Stage1 phase M%u old_B1=%llu target_B1=%llu phase=%s remaining_iter=%llu lane=%zu\n",
@@ -199,10 +196,10 @@ Pm1Progress advance(Phase& phase, const Pm1Task& task, uint64_t b2,
     const auto begin = Clock::now();
     auto last_save = begin, block_start = begin;
     const auto ready = [&](const ecm_mersenne_ntt::Plan& plan) {
-        if (lane == 0 && !offset)
-            ecm_ts_fprintf(stdout, "pm1_stage1_ntt: length=%u bpw=%u shape=%s graph=%u\n",
+        if (lane == 0)
+            ecm_ts_fprintf(stdout, "pm1_stage1_ntt: length=%u bpw=%u shape=%s graph=%u cached_powers=%u\n",
                            plan.length, plan.bpw, ecm_mersenne_ntt::tune_shape_descriptor(plan).c_str(),
-                           plan.window);
+                           plan.window, plan.pm1_cached_powers);
         block_start = Clock::now();
     };
     const auto verified = [&](const Pm1Progress& block) {
@@ -264,10 +261,22 @@ Outcome run(const Pm1Task& task, uint64_t b2, const ecm_stage1::Stage1Options& o
     Phase current{owl_root, task.b1};
     std::optional<Phase> prior;
     std::optional<Prime95Save> source;
+    auto display = load_extension_progress(owl_root, task.p, task.b1);
     if (!load_phase(current, task.p)) {
         const auto roots = previous_roots(owl_root, task.p, task.b1);
+        // Reuse the old phase chosen when this expansion began, even if its
+        // endpoint was already saved before the new exponent could start.
+        if (display) {
+            if (const auto found = roots.find(display->from); found != roots.end()) {
+                prior_lease.acquire((found->second / owner).u8string(), 0);
+                Phase candidate{found->second, found->first};
+                if (load_phase(candidate, task.p)) prior = std::move(candidate);
+                else prior_lease.release();
+            }
+            if (!prior) display.reset();
+        }
         // An unfinished local exponent must run to its own boundary first.
-        for (const auto& [bound, path] : roots) {
+        if (!display) for (const auto& [bound, path] : roots) {
             Phase candidate{path, bound};
             if (!load_phase(candidate, task.p))
                 continue;
@@ -288,7 +297,7 @@ Outcome run(const Pm1Task& task, uint64_t b2, const ecm_stage1::Stage1Options& o
         const bool unfinished =
             prior && (prior->extension ? prior->extension->k < prior->extension->bits
                                        : prior->owl->k < prior->owl->bits);
-        if (!unfinished) {
+        if (!display && !unfinished) {
             source = existing;
             auto consider = [&](const fs::path& path) {
                 if (path == destination)
@@ -326,16 +335,21 @@ Outcome run(const Pm1Task& task, uint64_t b2, const ecm_stage1::Stage1Options& o
         progress.start(lane, 0, 0, 0, task.b1, "completed");
     } else {
         prepare(current, task, options);
-        uint64_t offset = 0;
         const uint64_t old_b1 = current.extension ? current.extension->from : 0;
+        uint64_t offset = display && display->from == old_b1 ? display->old_iterations : 0;
         if (prior) {
             prepare(*prior, task, options);
             const auto saved_b2 = prior->owl ? prior->owl->b2 : b2;
-            offset = prior->bits - prior->cursor();
-            auto old = offset ? advance(*prior, task, saved_b2, options, progress, lane, 0,
-                                        current.bits - 1, old_b1)
-                              : Pm1Progress{prior->bits, prior->extension ? std::move(prior->extension->residue)
-                                                                         : std::move(prior->owl->residue), 0};
+            const auto remaining = prior->bits - prior->cursor();
+            if (offset >= prior->bits) offset = 0;
+            if (remaining > offset) {
+                offset = remaining;
+                write_extension_progress(owl_root, task.p, task.b1, {old_b1, offset});
+            }
+            auto old = remaining ? advance(*prior, task, saved_b2, options, progress, lane, 0,
+                                           current.bits - 1, old_b1, prior->bits - offset)
+                                 : Pm1Progress{prior->bits, prior->extension ? std::move(prior->extension->residue)
+                                                                            : std::move(prior->owl->residue), 0};
             if (old.k != prior->bits || ecm_stage1_stop_requested())
                 return {};
             current.extension->base = std::move(old.residue);

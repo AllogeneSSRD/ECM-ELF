@@ -299,6 +299,31 @@ void write_extension(const fs::path& root, unsigned p, uint64_t b1, const Extens
     ecm_io::write_atomic(root / "extension.pm1", bytes);
 }
 
+std::optional<ExtensionProgress> load_extension_progress(const fs::path& root, unsigned p, uint64_t b1) {
+    const auto path = root / "extension.progress";
+    std::error_code error;
+    if (fs::file_size(path, error) != 40) return {};
+    const auto bytes = ecm_io::read_file(path);
+    if (bytes.size() != 40) return {};
+    binary::Reader r(bytes);
+    if (r.take(8) != "ECMP1PR1" || r.u32() != p || r.u64() != b1) return {};
+    const ExtensionProgress progress{r.u64(), r.u64()};
+    if (progress.from < 2 || progress.from >= b1 || !progress.old_iterations ||
+        r.u32() != binary::crc32c(std::string_view(bytes).substr(0, bytes.size() - 4))) return {};
+    return progress;
+}
+
+void write_extension_progress(const fs::path& root, unsigned p, uint64_t b1,
+                              const ExtensionProgress& progress) {
+    std::string bytes = "ECMP1PR1";
+    binary::u32(bytes, p);
+    binary::u64(bytes, b1);
+    binary::u64(bytes, progress.from);
+    binary::u64(bytes, progress.old_iterations);
+    binary::u32(bytes, binary::crc32c(bytes));
+    ecm_io::write_atomic(root / "extension.progress", bytes);
+}
+
 fs::path write_prime95(const fs::path& dir, unsigned p, uint64_t b1,
                        const std::vector<uint32_t>& residue, uint64_t* fingerprint,
                        const Prime95Save* previous) {

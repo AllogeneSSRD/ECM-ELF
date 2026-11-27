@@ -98,6 +98,17 @@ def check(exe, output):
             *map(row, prior_finished), row(bound)
         ]
 
+    def stop_at(directory, name, text):
+        log = directory / name
+        with pausable_process([exe, "--config", directory / "ecm.toml"], directory, None, log) as (process, stop):
+            deadline = time.monotonic() + 60
+            while text not in log.read_bytes():
+                assert process.poll() is None and time.monotonic() < deadline, log.read_bytes()
+                time.sleep(.01)
+            stop()
+            assert process.wait(timeout=90) != 0
+        return log.read_text(errors="replace")
+
     for name, old, new, k, state, version in [
         ("powers", 7, 9, 6, 5, 8), ("identity", 13, 14, 1, 5, 8),
         ("midstage", 7, 93, lcm(93) // lcm(7), 2, 7),
@@ -108,6 +119,8 @@ def check(exe, output):
         (directory / filename).write_bytes(prime_file(p, old, base, state, version))
         log = run(directory)
         assert f"B1={old} -> {new} K_bits={k.bit_length()}" in log
+        if k > 1:
+            assert "graph=0 cached_powers=1" in log, log
         verify(directory, new, pow(base, k, modulus), shared=True)
 
     # An unfinished OWL exponent takes precedence even over a newer native seed.
@@ -139,7 +152,7 @@ def check(exe, output):
     for reraised in (False, True):
         old, intermediate = 7, 59
         new = 131 if reraised else intermediate
-        directory = setup("raise_again" if reraised else "resume_extension", new)
+        directory = setup("raise_again" if reraised else "resume_extension", new, 'ntt_window_bits=4')
         base = 19
         ratio = lcm(intermediate) // lcm(old)
         bits, pos = ratio.bit_length(), 8
@@ -150,10 +163,42 @@ def check(exe, output):
         (root(directory, intermediate) / "extension.pm1").write_bytes(data + struct.pack("<I", crc32c(data)))
         log = run(directory)
         assert f"k={pos}/{bits}" in log
-        remaining = bits - pos + ((lcm(new) // lcm(intermediate)).bit_length() - 1 if reraised else 0)
-        assert f"pm1_stage1_progress: iter=0/{remaining} " in log
-        assert f"pm1_stage1_progress: iter={remaining}/{remaining} " in log
+        assert "graph=4 cached_powers=15" in log, log
+        done = 0 if reraised else pos - 1
+        total = (bits - pos + (lcm(new) // lcm(intermediate)).bit_length() - 1
+                 if reraised else bits - 1)
+        assert f"pm1_stage1_progress: iter={done}/{total} " in log, log
+        assert f"remaining_iter={bits - pos}" in log
+        assert f"pm1_stage1_progress: iter={total}/{total} " in log
         verify(directory, new, pow(base, lcm(new) // lcm(old), modulus))
+
+    # One expanded assignment keeps the same total through stops on both sides
+    # of the old B1 boundary. Its checkpoints still hold the binary cursor.
+    old, new, start_k = 12000, 24000, 11
+    directory = setup("resume_both_phases", new, 'ntt_window_bits=4')
+    exponent = 2 * p * lcm(old)
+    old_bits = exponent.bit_length()
+    old_phase = root(directory, old) / f"p1-{p}"
+    old_phase.mkdir(parents=True)
+    limbs = pow(3, exponent >> (old_bits - start_k), modulus).to_bytes(16, "little")
+    (old_phase / f"{p}-{start_k:09d}.p1").write_bytes(
+        f"OWL P1 2 N=1*2^{p}-1 B1={old} B2=0 k={start_k} bits={old_bits} err=0 time=0\n".encode()
+        + struct.pack("<I", zlib.crc32(limbs)) + limbs)
+    total = old_bits - start_k + (lcm(new) // lcm(old)).bit_length() - 1
+    first = stop_at(directory, "old.log", b"pm1_stage1_progress:")
+    assert f"pm1_stage1_progress: iter=0/{total} " in first, first
+    old_saved = max(int(path.stem.split("-")[-1]) for path in old_phase.glob("*.p1"))
+    assert start_k < old_saved < old_bits
+    second = stop_at(directory, "extend.log", b"phase=extend remaining_iter=")
+    assert f"pm1_stage1_progress: iter={old_saved - start_k}/{total} " in second, second
+    data = (root(directory, new) / "extension.pm1").read_bytes()
+    bits, pos = struct.unpack_from("<QQ", data, 28)
+    assert 1 <= pos < bits
+    log = run(directory)
+    assert f"pm1_stage1_progress: iter={old_bits - start_k + pos - 1}/{total} " in log, log
+    assert f"remaining_iter={bits - pos}" in log
+    assert f"pm1_stage1_progress: iter={total}/{total} " in log
+    verify(directory, new, pow(3, 2 * p * lcm(new), modulus))
 
     directory = setup("same_bound", 17, shared=True)
     trailer = b"MOREINFOJSONDATA" + struct.pack("<III", 10, 1, 0) + b"{}"
@@ -191,14 +236,7 @@ def check(exe, output):
     directory = setup("stop_extension", old)
     seed = 19
     (directory / filename).write_bytes(prime_file(p, 7, seed))
-    stop_log = directory / "stop.log"
-    with pausable_process([exe, "--config", directory / "ecm.toml"], directory, None, stop_log) as (process, stop):
-        deadline = time.monotonic() + 60
-        while b"pm1_stage1_progress:" not in stop_log.read_bytes():
-            assert process.poll() is None and time.monotonic() < deadline
-            time.sleep(.01)
-        stop()
-        assert process.wait(timeout=90) != 0
+    stop_at(directory, "stop.log", b"pm1_stage1_progress:")
     data = (root(directory, old) / "extension.pm1").read_bytes()
     bits, pos = struct.unpack_from("<QQ", data, 28)
     assert 1 < pos < bits and crc32c(data[:-4]) == struct.unpack_from("<I", data, len(data) - 4)[0]

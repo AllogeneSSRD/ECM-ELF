@@ -17,6 +17,7 @@ struct Plan {
     unsigned long long coefficient_bound = 0, field_modulus = 0;
     unsigned carry_bits = 64;
     unsigned max_exp = 0;
+    unsigned pm1_cached_powers = 0;
 };
 
 struct BudgetError : std::runtime_error { using std::runtime_error::runtime_error; };

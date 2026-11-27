@@ -851,7 +851,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const auto* resolved = control ? &overrides : nullptr;
     fuse_describe(ctx,width,log,omega2,inv2,true,resolved);
     // A table export needs only the five spectra for 2P and one for d.
-    const unsigned fixed_planes = pm1 ? 0 : naf && naf->affine_output ? 6 : naf ? 4 * entries : 2;
+    unsigned fixed_planes = pm1 ? 0 : naf && naf->affine_output ? 6 : naf ? 4 * entries : 2;
     const size_t dictionary_bytes = naf ? size_t(fixed_planes) * sizeof(U) * curves * s.length : 0;
     bool gpu_dictionary = naf && naf->build_dictionary;
     const size_t dictionary_workspace = gpu_dictionary ? 4ull * entries * stride * sizeof(uint32_t) : 0;
@@ -1012,6 +1012,15 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool pm1_scale = pm1 && !pm1->base && options.weighted && segmented &&
         !fused_weighted && !radix5_limb_sums && !block_reduce && p / s.length >= 16;
     if (pm1_scale) result.dataflow |= Pm1WindowScale;
+    if (pm1 && pm1->base) {
+        // Budget the table alongside the ordinary NTT buffers for every lane.
+        const size_t lane_budget = result.budget_bytes / std::max(1u, options.max_batch);
+        const size_t spectrum_bytes = size_t(curves) * s.length * sizeof(U);
+        const size_t available = lane_budget > result.owned_bytes ? lane_budget - result.owned_bytes : 0;
+        const auto powers = (1u << std::max(1u, window)) - 1;
+        fixed_planes = powers * spectrum_bytes <= available ? powers : unsigned(available >= spectrum_bytes);
+        result.owned_bytes += fixed_planes * spectrum_bytes;
+    }
     Plan pm1_plan{};
     if ((control && control->describe) || (pm1 && pm1->ready)) {
         const auto join = [](std::string& stages, int width) {
@@ -1040,6 +1049,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             plan.forward = "3x(" + plan.forward + ')';
             plan.inverse = "3x(" + plan.inverse + ')';
         }
+        if (pm1) plan.pm1_cached_powers = fixed_planes;
         if (control && control->describe) control->describe(plan);
         if (pm1 && pm1->ready) pm1_plan=std::move(plan);
     }
@@ -1497,9 +1507,25 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             mul(1,1,{Current},{0},{0},{Current},false,false,{},0,0,0,ProductKind::Ordinary,scale);
             CK(cudaGetLastError());
         };
+        const auto multiply_fixed_power = [&](pm1_detail::Slot dst, unsigned power) {
+            mul(1,1,{dst},{0},{5},{dst},false,false,{},0,0,power-1);
+            CK(cudaGetLastError());
+        };
+        if (fixed_planes) {
+            const size_t plane = size_t(curves) * s.length;
+            forward_inputs(fixed.data,1,{PowerBase});
+            if (fixed_planes > 1) {
+                copy(Scratch,PowerBase);
+                for (unsigned power = 2; power <= fixed_planes; ++power) {
+                    multiply_fixed_power(Scratch,1);
+                    forward_inputs(fixed.data + (power-1)*plane,1,{Scratch});
+                }
+            }
+        }
         const auto step = [&](bool multiply_base) {
             square(pm1_scale && multiply_base ? 3 : 1);
-            if (multiply_base && pm1->base) product(Current, Current, PowerBase);
+            if (multiply_base && fixed_planes) multiply_fixed_power(Current,1);
+            else if (multiply_base && pm1->base) product(Current, Current, PowerBase);
             else if (multiply_base && !pm1_scale) {
                 // Work on canonical limbs so the squared coefficient bound stays valid.
                 add_inputs(std::false_type{},1,{{Current},{Current},{Scratch},0},{});
@@ -1515,6 +1541,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 for (unsigned i = 0; i < pattern; ++i) scale *= 3;
                 for (unsigned i = 1; i < width; ++i) square();
                 square(scale);
+            } else if (fixed_planes >= (1u << width) - 1) {
+                for (unsigned i = 0; i < width; ++i) square();
+                if (pattern) multiply_fixed_power(Current,pattern);
             } else {
                 while (width) step((pattern >> --width) & 1u);
             }
