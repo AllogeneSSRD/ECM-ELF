@@ -10,6 +10,8 @@ inline constexpr unsigned stage1_ntt_max_exponent = 5242880;
 inline constexpr unsigned stage1_ntt_max_length = 524288;
 inline constexpr unsigned stage1_ntt_mixed_limit = 163840;
 inline constexpr unsigned stage1_ntt_mixed_min = 2560;
+inline constexpr unsigned stage1_ntt_cubic_width = 256;
+inline constexpr unsigned stage1_ntt_cubic_length = 3 * stage1_ntt_cubic_width;
 
 struct TuneRange {
     unsigned first = 0, last = 0;
@@ -41,7 +43,8 @@ constexpr bool stage1_ntt_supported_radix5(unsigned n) {
 }
 
 constexpr unsigned stage1_ntt_radix2_length(unsigned n) {
-    return stage1_ntt_radix5(n) ? n / 5 : n;
+    return n == stage1_ntt_cubic_length ? stage1_ntt_cubic_width :
+           stage1_ntt_radix5(n) ? n / 5 : n;
 }
 
 constexpr unsigned stage1_ntt_length_log(unsigned n) {

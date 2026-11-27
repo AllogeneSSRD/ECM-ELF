@@ -140,6 +140,8 @@ def main():
             (607, 20, 26, 2, "weighted", 128, 4, 6),
             (1279, 20, 26, 2, "weighted", 64, 4, 6),
             (4253, 64, 4294967311, 4, "weighted", 0, 4, 6),
+            (16381, 32, 26, 2, "weighted", 768, 0, 6),
+            (19937, 32, 26, 2, "weighted", 768, 16, 6),
             (53281, 32, 26, 2, "weighted", 2560, 8, 8),
             (65521, 20, 26, 2, "weighted", 2560, 8, 6),
             (262139, 20, 26, 1, "weighted", 0, 4, 6),
@@ -156,6 +158,9 @@ def main():
                 if p in (521, 607, 1279):
                     flow = int(re.search(r"\bdataflow=(\d+)", log)[1])
                     assert bool(flow & WARP_WEIGHTED_CARRY) == (p == 521), log
+                if length == 768 and kind:
+                    [flow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
+                    assert bool(int(flow) & EDWARDS_2XY_FREQUENCY) == (p == 16381), log
                 if kind and p > 65:
                     assert "stage1_ntt_edwards_naf: window=" in log
                     assert any(record["ntt_bits"] == str(p) and record["ntt_type"] == mode

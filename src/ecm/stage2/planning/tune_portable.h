@@ -207,11 +207,12 @@ inline void validate_stage1_ntt(const Fields &s) {
     const Word log=ecm_stage1::stage1_ntt_length_log(unsigned(n));
     const auto tile=uint(s,"tile"), bpw=uint(s,"bpw"), radix=uint(s,"max_radix_bits");
     const bool mixed=n<=ecm_stage1::stage1_ntt_mixed_limit && ecm_stage1::stage1_ntt_radix5(unsigned(n));
+    const bool weighted_only=mixed || n==ecm_stage1::stage1_ntt_cubic_length;
     if(!is_stage1_ntt(s) || log<1 || n>ecm_stage1::stage1_ntt_max_length ||
        optional_uint(s,"log2_length",log)!=log ||
-       (mixed ? text(s,"ntt_type")!=weighted_ntt_type : n!=(Word(1)<<log)))
+       (weighted_only ? text(s,"ntt_type")!=weighted_ntt_type : n!=(Word(1)<<log)))
         throw std::runtime_error("invalid Stage1 NTT length");
-    const Word radix2_log=mixed ? log-2 : log;
+    const Word radix2_log=ecm_stage1::stage1_ntt_length_log(ecm_stage1::stage1_ntt_radix2_length(unsigned(n)));
     if(!batch || batch>ecm_stage1::stage1_ntt_max_curves || !bpw || bpw>31 || (tile==0)!=(radix2_log==0) ||
        tile>std::min(radix2_log,Word(12)) || !radix || radix>4 ||
        !uint(s,"passes_forward") || uint(s,"passes_forward")>radix2_log+mixed ||

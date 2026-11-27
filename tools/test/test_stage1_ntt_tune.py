@@ -135,6 +135,15 @@ matrix = [
     assert {row["dataflow"] & 384 for row in mixed_rows} == {0,128,384}
     print("PASS full tune compares four capacity entries and all mixed layouts", flush=True)
 
+    cubic = fixture.replace('param = "m0"', 'param = "e"') + 'edwards_naf_window_bits = 6\n'
+    log = run("tune768", ["-tune", "ntt,length=768,naf=6,batch=1,time=0.1,repeat=1:1"], cfg=cubic)
+    assert re.search(r"Best +768 +20481 +1:", log)
+    columns, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]
+    rows = [dict(zip(columns, row)) for row in values]
+    cubic_rows = [row for row in rows if row["length"] == 768]
+    assert cubic_rows and all(row["ntt_type"] == "stage1_weighted" and row["tile"] <= 8 for row in cubic_rows)
+    print("PASS weighted 768 length is planned and saved in the shared tune table", flush=True)
+
     limited = fixture + 'ntt_convolution = "linear"\nntt_memory_mib = 1\n'
     log = run("low_budget", ["-gpucurves", "128", "-sigma", "26", "20"],
               cfg=limited, expression="2^262139-1\n", ok=False)

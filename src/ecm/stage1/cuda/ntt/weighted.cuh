@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../../cuda/arithmetic/goldilocks/goldilocks.cuh"
+#include "ecm/stage1/ntt_length.h"
 #include <algorithm>
 #include <cstdint>
 #include <numeric>
@@ -59,13 +60,19 @@ inline WeightedTables weighted_tables(unsigned p, unsigned length, WeightedWord 
     // 7^h, where h is divisible by every supported 2^k and 5*2^k length.
     constexpr U h = (GL_P - 1) / 192;
     const U generator = gl_pow_host(7, h);
-    const U target = gl_pow_host(2, p);
+    const bool cubic = length == ecm_stage1::stage1_ntt_cubic_length;
+    const unsigned m = ecm_stage1::stage1_ntt_cubic_width;
+    const unsigned r3 = (3 - p % 3) % 3;
+    // X = lambda*T*Z, T^256 = 1 and Z^3 = 2^r3. Then X^768 = 2^-p.
+    const auto root_length = cubic ? m : length;
+    const unsigned target_power = cubic ? 192 - ((p + m * r3) / 3) % 192 : p;
+    const U target = gl_pow_host(2, target_power);
     U r = 1, exponent = 0;
     for (; exponent < 192 && r != target; ++exponent)
         r = gl_mul_host(r, generator);
-    if (exponent == 192 || h % length)
+    if (exponent == 192 || h % root_length)
         throw std::logic_error("Goldilocks weight root unavailable");
-    const U rho = gl_pow_host(7, (h / length) * exponent);
+    const U rho = gl_pow_host(7, (h / root_length) * exponent);
     const U rho_inv = gl_pow_host(rho, GL_P - 2);
     const auto at = [=](unsigned i) { return unsigned((U(p) * i + length - 1) / length); };
 
@@ -73,8 +80,9 @@ inline WeightedTables weighted_tables(unsigned p, unsigned length, WeightedWord 
     out.digits.reserve(length);
     out.inverse.reserve(length);
     const unsigned small = p / length;
-    const U forward_step = gl_mul_host(U(1) << small, rho_inv);
-    const U inverse_step = gl_mul_host(gl_pow_host(2, GL_P - 1 - small), rho);
+    const U forward_step = gl_mul_host(U(1) << small, cubic ? rho : rho_inv);
+    const U inverse_step = gl_mul_host(gl_pow_host(2, GL_P - 1 - small), cubic ? rho_inv : rho);
+    const U cubic_wrap = U(1) << r3, inverse_wrap = gl_pow_host(2, 192 - r3);
     const U forward_steps[] = {forward_step, gl_mul_host(forward_step, 2)};
     const U inverse_steps[] = {inverse_step, gl_mul_host(inverse_step, (GL_P + 1) / 2)};
     U w = 1, iw = inverse_scale;
@@ -85,6 +93,10 @@ inline WeightedTables weighted_tables(unsigned p, unsigned length, WeightedWord 
         // Moving to the next digit multiplies the weight by 2^width / rho.
         w = gl_mul_host(w, forward_steps[width - small]);
         iw = gl_mul_host(iw, inverse_steps[width - small]);
+        if (cubic && i % 3 == 2) {
+            w = gl_mul_host(w, cubic_wrap);
+            iw = gl_mul_host(iw, inverse_wrap);
+        }
     }
 
     const auto lower = [&](unsigned bit) {

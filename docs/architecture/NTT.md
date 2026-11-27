@@ -96,7 +96,7 @@ $$
 U=g\big[(2H-1)A^2+(2R-z)2Ad+(z+2\max(0,2R-H-1))d^2\big].
 $$
 
-按项从 $q-1$ 扣除，乘计数前先除法检查溢出。$U<q$ 即可用一个 Goldilocks 余数恢复整数系数。后续 32 位 limb 汇集用去权系数的覆盖范围定位输入，再做梅森折叠和进位。建表还检查 $L$ 可整除 $(q-1)/192$，以构造满足 $\rho^L=2^p$ 的加权根。
+按项从 $q-1$ 扣除，乘计数前先除法检查溢出。$U<q$ 即可用一个 Goldilocks 余数恢复整数系数。后续 32 位 limb 汇集用去权系数的覆盖范围定位输入，再做梅森折叠和进位。二次幂和 radix-5 路径建表时还检查 $L$ 可整除 $(q-1)/192$，以构造满足 $\rho^L=2^p$ 的加权根。
 
 原生 Edwards 选择 weighted 且长度为 0 时，按长度递增检查二次幂和支持的 radix-5。候选须满足 $L\le p$、最大 bpw 不超过 31 及用户上限、tile 能在二次幂子变换中执行，并通过系数界。跳过不合格短档后选择第一个通过的长度。强制指定不合格长度时报错。随 $p$ 变化的实际 digit 分布会使准入有间隙。
 
@@ -119,6 +119,12 @@ $E$、$G$、$H$ 的去权系数至多为 $2U$，$F$ 至多为 $4U$，且所有�
 原生 Edwards 的加权计划在变换长度至少 8192、采用 12 层 warp 输入 tile 且至少 24 条曲线时，使用固定的宽逆向 tile。每个 warp 先完成六层，随后三组 radix-4 从第 6、8、10 层进入，最后一组直接写出。蝶形共享索引与旋转因子偏移使用编译期常量，仍用 512 线程、32 KiB 共享内存和原有频谱布局。频域组合的输出与普通逐点乘积共用这一调度。`stage1_ntt_plan.dataflow` 的 `0x40000` 位表示启用。[双卡实测](../performance/STAGE1_MERSENNE_NTT.md#12-层固定逆向-tile)
 
 原生 Edwards 的加权计划在变换长度至少 5120、采用独立的 10 层 warp 前向 tile 且至少 24 条曲线时，将 tile 大小和前向层数固定在编译期。第一组 radix-4 从全局输入直接读入，第二组从共享内存读入，末六层由 warp 完成。频谱排列与通用 tile 相同。日志 `stage1_ntt_plan.dataflow` 的 `0x80000` 位表示启用。[前向实测](../performance/STAGE1_MERSENNE_NTT.md#10-层固定前向-tile)
+
+## Stage1 768 点加权卷积
+
+通用二次幂加权公式使用的标量根 $\rho^{768}=2^p$ 只在 $p\equiv0\pmod3$ 时存在。768 点路径在 Goldilocks 域上取 $r=(-p)\bmod3$，以及满足 $\lambda^{256}=2^{(-p-256r)/3}$ 的 $\lambda$。在 $T^{256}=1$、$Z^3=2^r$ 的代数中，用 $X=\lambda TZ$ 表示 digit 的位置，故 $X^{768}=2^{-p}$。第 $i$ 个 digit 进入第 $i\bmod3$ 个平面的第 $i\bmod256$ 列，权重为 $2^{\lceil ip/768\rceil}\lambda^i 2^{r\lfloor i/3\rfloor}$。去权系数沿用现有整数上界，归一化因子为 $1/256$。
+
+三个平面各执行一趟 256 点 NTT。满 8 层 tile 将打包与前向变换合并。逐频点在 $Z^3=2^r$ 下做三系数乘法或平方，分别需要六次和五次 Goldilocks 域乘。普通乘积在一个 CTA 内算出三个分量并进入各自的逆向 tile。满足 $4U<q$ 的原生 Edwards 倍点先生成四路组合频谱，再在各平面执行逆向 tile。归约在同一 CTA 内完成逆置换、去权、limb 汇集和梅森进位。768 点的 `ntt_shape` 沿用现有五段格式，前逆分解各描述一个二次幂平面，PFA 字段为 `0`。[权重表](../../src/ecm/stage1/cuda/ntt/weighted.cuh) · [变换和归约](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [位宽与选型](../usage/TUNE.md#ntt-and-transform-sizes)
 
 ## Stage1 radix-5 PFA
 

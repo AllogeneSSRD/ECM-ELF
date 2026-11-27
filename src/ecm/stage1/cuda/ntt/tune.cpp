@@ -487,8 +487,14 @@ struct Candidate {
     Packing shape;
 };
 
-enum : unsigned { Linear, Weighted, Mixed, CandidateCount };
+enum : unsigned { Linear, Weighted, Mixed, Cubic, CandidateCount };
 using Candidates = std::array<std::optional<Candidate>, CandidateCount>;
+
+unsigned candidate_mode(bool weighted, unsigned length) {
+    if (!weighted) return Linear;
+    if (length == ecm_stage1::stage1_ntt_cubic_length) return Cubic;
+    return ecm_stage1::stage1_ntt_radix5(length) ? Mixed : Weighted;
+}
 
 std::optional<Candidate> candidate(unsigned p, Stage1NttOptions options, bool prefer_radix5,
                                    WeightedBound bound) {
@@ -550,8 +556,7 @@ Candidates production_shapes(unsigned p, Stage1NttOptions options, bool native_e
     Candidates shapes;
     if (!options.automatic) {
         const auto packing = resolve_packing(p, options, true, bound);
-        const unsigned mode = !options.weighted ? Linear :
-            ecm_stage1::stage1_ntt_radix5(packing.length) ? Mixed : Weighted;
+        const unsigned mode = candidate_mode(options.weighted, packing.length);
         options.length = packing.length;
         shapes[mode] = Candidate{std::move(options), packing};
         return shapes;
@@ -563,6 +568,12 @@ Candidates production_shapes(unsigned p, Stage1NttOptions options, bool native_e
     if (binary && !ecm_stage1::stage1_ntt_radix5(binary->shape.length)) shapes[Weighted] = binary;
     auto mixed = candidate(p, options, true, bound);
     if (mixed && ecm_stage1::stage1_ntt_radix5(mixed->shape.length)) shapes[Mixed] = mixed;
+    // Compare with the binary plan once 512 points lose their continuous 4U bound.
+    if (!options.length && native_edwards && p >= 13313 &&
+        p <= ecm_stage1::ntt_max_exp(ecm_stage1::stage1_ntt_cubic_length, true, options.tight_weighted_bound)) {
+        options.length = ecm_stage1::stage1_ntt_cubic_length;
+        shapes[Cubic] = candidate(p, options, false, bound);
+    }
     return shapes;
 }
 
@@ -597,7 +608,7 @@ std::vector<TuneSize> plan_tune_lengths(const Stage1NttOptions& options,
             auto fixed = options;
             fixed.length = size.length;
             fixed.weighted = weighted;
-            const auto mode = !weighted ? Linear : stage1_ntt_radix5(size.length) ? Mixed : Weighted;
+            const auto mode = candidate_mode(weighted, size.length);
             auto shape = candidate(limit,fixed,mode==Mixed,
                 tight ? WeightedBound::UnsignedProducts : WeightedBound::Conservative);
             if (!shape) continue;
@@ -1766,7 +1777,8 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
     }
     const bool measured_resume = compare_resume && matrix.measured;
     for (unsigned mode=0; mode<CandidateCount; ++mode) {
-        if (covered || measured_resume || !options.runtime_enabled || !candidates[mode]) continue;
+        if (measured_resume || !options.runtime_enabled || !candidates[mode]) continue;
+        if (covered && (mode != Cubic || choices[mode])) continue;
         const auto plan=choices[mode] ? choices[mode]->options : candidates[mode]->options;
         choices[mode].reset();
         auto row=matrix.sample(plan,batch,SamplePhase::Coarse);
@@ -1783,7 +1795,7 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
             (quality[mode] == quality[winner_mode] && choices[mode]->rate > choices[winner_mode]->rate)))
             winner_mode = mode;
     if (winner_mode == CandidateCount && !options.runtime_enabled) {
-        for (auto mode : {Mixed, Weighted, Linear}) {
+        for (auto mode : {Mixed, Weighted, Linear, Cubic}) {
             if (!candidates[mode]) continue;
             memory = capacities[mode];
             return candidates[mode]->options;
@@ -1875,8 +1887,7 @@ unsigned production_window(const ecm_stage1::Stage1Request& request, unsigned p,
             for (const auto& shape : tune_shapes(p,exec.ntt,edwards)) {
                 if (!shape) continue;
                 Candidates one{};
-                const unsigned mode = !shape->options.weighted ? Linear :
-                    ecm_stage1::stage1_ntt_radix5(shape->shape.length) ? Mixed : Weighted;
+                const unsigned mode = candidate_mode(shape->options.weighted, shape->shape.length);
                 one[mode] = shape;
                 tune_windows(device,request,p,one,grid,naf_samples,windows,windows.size()>1,false,0);
             }
@@ -1911,7 +1922,8 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
         throw std::invalid_argument("no legal Stage1 NTT packing for the requested parameters");
     const auto capacities = production_capacity(request, device, p, window, shapes);
     const auto linear_cap = capacities[Linear].max_curves;
-    const auto weighted_cap = std::max(capacities[Weighted].max_curves, capacities[Mixed].max_curves);
+    const auto weighted_cap = std::max({capacities[Weighted].max_curves, capacities[Mixed].max_curves,
+                                       capacities[Cubic].max_curves});
     const auto cap = std::min(remaining, std::max({1u, linear_cap, weighted_cap}));
     std::map<unsigned, BatchRate> eligible;
     std::map<unsigned, bool> runtime_winner;

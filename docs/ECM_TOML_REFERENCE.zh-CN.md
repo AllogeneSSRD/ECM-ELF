@@ -485,9 +485,9 @@ auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积
 ntt_length = 0
 ```
 
-类型 `int` · 范围 `0, 2^k in [2,524288], or 5*2^k in [2560,163840] (weighted)` · Worker 覆盖 `[worker.N] ntt_length` · 级别 `高级`。
+类型 `int` · 范围 `0, 2^k in [2,524288], 768 (weighted), or 5*2^k in [2560,163840] (weighted)` · Worker 覆盖 `[worker.N] ntt_length` · 级别 `高级`。
 
-变换长度。0 推导安全长度，加权卷积包含支持且更短的 radix-5 形状。
+变换长度。0 推导安全长度。加权卷积支持 768 点及所列 radix-5 长度。
 
 ### ntt_max_batch
 
