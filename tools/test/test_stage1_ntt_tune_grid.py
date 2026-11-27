@@ -57,7 +57,8 @@ def main():
             if "stage1_ntt_round:" in line or "stage1_ntt_pfa_scan:" in line or "stage1_ntt_graph_scan:" in line or "stage1_ntt_find:" in line:
                 first_measurement = True
             header = prefix + "length max_exp ntt_shape batch iter/s graph_steps dataflow actual/target steps/group steps/block"
-            measurement = prefix + r"\d+ \d+ [01]:\d+:[r\d+]+:[r\d+]+:[0-3] \d+c "
+            layers = r"(?:[r\d+]+|3x\([\d+]+\))"
+            measurement = prefix + rf"\d+ \d+ [01]:\d+:{layers}:{layers}:[0-3] \d+c "
             if re.fullmatch(header, line):
                 assert re.match(measurement, lines[i+1]), name
             if re.match(measurement, line):
@@ -566,11 +567,12 @@ def main():
     # The expanded range is ordered by continuous capacity, with independent families.
     isolated = run("isolated", ["-tune", "exp=66049-66051,naf=6,batch=1,time=0.01", "16"],
                    convolution="auto", settings="ntt_profile = 1")
-    assert planned(isolated) == [(53222, 4096, 6), (53248, 2048, 6), (66048, 2560, 6), (104448, 4096, 6)]
+    assert planned(isolated) == [(53222, 4096, 6), (53248, 2048, 6), (66048, 2560, 6),
+                                 (78849, 3072, 6), (104448, 4096, 6)]
 
     # Exact scaled thresholds are strict. 0.8*66560 = 53248 and 1.2*5950 = 7140.
     for tag, exp, mode, expected in (
-        ("strict_lower", 66560, "auto", [(66048, 2560, 6), (104448, 4096, 6)]),
+        ("strict_lower", 66560, "auto", [(66048, 2560, 6), (78849, 3072, 6), (104448, 4096, 6)]),
         ("strict_upper", 5950, "linear", [(7140, 512, 6), (13797, 1024, 6)]),
     ):
         log = run(tag, ["-tune", f"exp={exp},naf=6,batch=1,time=0.01", "16"],
@@ -582,7 +584,7 @@ def main():
     broad = run("broad", ["-tune", "ntt,exp=2000-1000000,batch=128"],
                 convolution="auto", settings="ntt_memory_mib = 1", success=False)
     expected = sorted([2**i for i in range(7, 17)] + [2**i for i in range(6, 17)]
-                      + [768, 2560, 5120, 10240, 20480, 40960])
+                      + [768, 1536, 2560, 3072, 5120, 10240, 20480, 40960])
     for window in (6, 8, 10, 12):
         assert sorted(n for p, n, w in planned(broad) if w == window) == expected
     assert "stage1_ntt_reuse" not in broad and "fits the requested grid" in broad

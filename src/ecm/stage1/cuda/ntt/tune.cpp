@@ -492,7 +492,7 @@ using Candidates = std::array<std::optional<Candidate>, CandidateCount>;
 
 unsigned candidate_mode(bool weighted, unsigned length) {
     if (!weighted) return Linear;
-    if (length == ecm_stage1::stage1_ntt_cubic_length) return Cubic;
+    if (ecm_stage1::stage1_ntt_radix3(length)) return Cubic;
     return ecm_stage1::stage1_ntt_radix5(length) ? Mixed : Weighted;
 }
 
@@ -568,11 +568,15 @@ Candidates production_shapes(unsigned p, Stage1NttOptions options, bool native_e
     if (binary && !ecm_stage1::stage1_ntt_radix5(binary->shape.length)) shapes[Weighted] = binary;
     auto mixed = candidate(p, options, true, bound);
     if (mixed && ecm_stage1::stage1_ntt_radix5(mixed->shape.length)) shapes[Mixed] = mixed;
-    // Compare with the binary plan once 512 points lose their continuous 4U bound.
-    if (!options.length && native_edwards && p >= 13313 &&
-        p <= ecm_stage1::ntt_max_exp(ecm_stage1::stage1_ntt_cubic_length, true, options.tight_weighted_bound)) {
-        options.length = ecm_stage1::stage1_ntt_cubic_length;
-        shapes[Cubic] = candidate(p, options, false, bound);
+    if (!options.length && native_edwards) {
+        // Start comparisons after the preceding weighted plan's continuous 4U bound.
+        constexpr std::pair<unsigned, unsigned> cubic_ranges[] = {{768, 13313}, {1536, 26113}, {3072, 63489}};
+        for (const auto& [length, first] : cubic_ranges) {
+            if (p < first || p > ecm_stage1::ntt_max_exp(length, true, options.tight_weighted_bound)) continue;
+            options.length = length;
+            shapes[Cubic] = candidate(p, options, false, bound);
+            break;
+        }
     }
     return shapes;
 }

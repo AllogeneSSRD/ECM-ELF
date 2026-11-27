@@ -129,20 +129,25 @@ matrix = [
     # The preceding full matrix already verifies the default timing and reuse.
     log = run("full_mixed", ["--tune", f"ntt,exp={p},time=0.25"])
     lengths = [int(n) for n in re.findall(r"^(?:\[[^\n]*\] )?Best +(\d+) +\d+ +[01]:", log, re.M)]
-    assert lengths == [4096, 2048, 2560, 4096], lengths
+    assert lengths == [4096, 2048, 2560, 3072], lengths
     columns, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]
     mixed_rows = [dict(zip(columns,row)) for row in values if row[columns.index("length")] == 2560]
     assert {row["dataflow"] & 384 for row in mixed_rows} == {0,128,384}
     print("PASS full tune compares four capacity entries and all mixed layouts", flush=True)
 
     cubic = fixture.replace('param = "m0"', 'param = "e"') + 'edwards_naf_window_bits = 6\n'
-    log = run("tune768", ["-tune", "ntt,length=768,naf=6,batch=1,time=0.1,repeat=1:1"], cfg=cubic)
-    assert re.search(r"Best +768 +20481 +1:", log)
+    for n, cap in ((768, 20481), (1536, 40192), (3072, 78849)):
+        spec = f"ntt,length={n},naf=6,batch=1,time=0.1,repeat=1:1"
+        log = run(f"tune{n}", ["-tune", spec], cfg=cubic)
+        assert re.search(rf"Best +{n} +{cap} +1:", log)
     columns, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]
     rows = [dict(zip(columns, row)) for row in values]
-    cubic_rows = [row for row in rows if row["length"] == 768]
-    assert cubic_rows and all(row["ntt_type"] == "stage1_weighted" and row["tile"] <= 8 for row in cubic_rows)
-    print("PASS weighted 768 length is planned and saved in the shared tune table", flush=True)
+    plane_layers = {768: 8, 1536: 9, 3072: 10}
+    cubic_rows = [row for row in rows if row["length"] in plane_layers]
+    assert {row["length"] for row in cubic_rows} == plane_layers.keys()
+    assert all(row["ntt_type"] == "stage1_weighted" and row["tile"] <= plane_layers[row["length"]]
+               for row in cubic_rows)
+    print("PASS weighted radix-3 lengths are planned and saved in the shared tune table", flush=True)
 
     limited = fixture + 'ntt_convolution = "linear"\nntt_memory_mib = 1\n'
     log = run("low_budget", ["-gpucurves", "128", "-sigma", "26", "20"],

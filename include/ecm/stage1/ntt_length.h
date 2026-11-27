@@ -10,8 +10,8 @@ inline constexpr unsigned stage1_ntt_max_exponent = 5242880;
 inline constexpr unsigned stage1_ntt_max_length = 524288;
 inline constexpr unsigned stage1_ntt_mixed_limit = 163840;
 inline constexpr unsigned stage1_ntt_mixed_min = 2560;
-inline constexpr unsigned stage1_ntt_cubic_width = 256;
-inline constexpr unsigned stage1_ntt_cubic_length = 3 * stage1_ntt_cubic_width;
+inline constexpr unsigned stage1_ntt_cubic_min = 768;
+inline constexpr unsigned stage1_ntt_cubic_max = 3072;
 
 struct TuneRange {
     unsigned first = 0, last = 0;
@@ -37,13 +37,23 @@ constexpr bool stage1_ntt_radix5(unsigned n) {
            stage1_ntt_power_of_two(n / 5);
 }
 
+constexpr bool stage1_ntt_radix3(unsigned n) {
+    return n >= stage1_ntt_cubic_min && n <= stage1_ntt_cubic_max && n % 3 == 0 &&
+           stage1_ntt_power_of_two(n / 3);
+}
+
+constexpr unsigned stage1_ntt_cubic_twist(unsigned p, unsigned width) {
+    // The inverse of the power-of-two width modulo 3 is its own residue.
+    return (3 - (p % 3) * (width % 3) % 3) % 3;
+}
+
 // Older tune rows still use the full radix-5 shape definition.
 constexpr bool stage1_ntt_supported_radix5(unsigned n) {
     return n >= stage1_ntt_mixed_min && stage1_ntt_radix5(n);
 }
 
 constexpr unsigned stage1_ntt_radix2_length(unsigned n) {
-    return n == stage1_ntt_cubic_length ? stage1_ntt_cubic_width :
+    return stage1_ntt_radix3(n) ? n / 3 :
            stage1_ntt_radix5(n) ? n / 5 : n;
 }
 

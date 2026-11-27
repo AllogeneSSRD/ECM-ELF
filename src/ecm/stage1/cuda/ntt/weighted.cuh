@@ -60,12 +60,11 @@ inline WeightedTables weighted_tables(unsigned p, unsigned length, WeightedWord 
     // 7^h, where h is divisible by every supported 2^k and 5*2^k length.
     constexpr U h = (GL_P - 1) / 192;
     const U generator = gl_pow_host(7, h);
-    const bool cubic = length == ecm_stage1::stage1_ntt_cubic_length;
-    const unsigned m = ecm_stage1::stage1_ntt_cubic_width;
-    const unsigned r3 = (3 - p % 3) % 3;
-    // X = lambda*T*Z, T^256 = 1 and Z^3 = 2^r3. Then X^768 = 2^-p.
-    const auto root_length = cubic ? m : length;
-    const unsigned target_power = cubic ? 192 - ((p + m * r3) / 3) % 192 : p;
+    const bool cubic = ecm_stage1::stage1_ntt_radix3(length);
+    const auto root_length = cubic ? length / 3 : length;
+    const unsigned r3 = cubic ? ecm_stage1::stage1_ntt_cubic_twist(p, root_length) : 0;
+    // X = lambda*T*Z with T^root_length = 1 and Z^3 = 2^r3. Then X^length = 2^-p.
+    const unsigned target_power = cubic ? 192 - ((p + root_length * r3) / 3) % 192 : p;
     const U target = gl_pow_host(2, target_power);
     U r = 1, exponent = 0;
     for (; exponent < 192 && r != target; ++exponent)

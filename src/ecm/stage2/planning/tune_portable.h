@@ -207,7 +207,7 @@ inline void validate_stage1_ntt(const Fields &s) {
     const Word log=ecm_stage1::stage1_ntt_length_log(unsigned(n));
     const auto tile=uint(s,"tile"), bpw=uint(s,"bpw"), radix=uint(s,"max_radix_bits");
     const bool mixed=n<=ecm_stage1::stage1_ntt_mixed_limit && ecm_stage1::stage1_ntt_radix5(unsigned(n));
-    const bool weighted_only=mixed || n==ecm_stage1::stage1_ntt_cubic_length;
+    const bool weighted_only=mixed || ecm_stage1::stage1_ntt_radix3(unsigned(n));
     if(!is_stage1_ntt(s) || log<1 || n>ecm_stage1::stage1_ntt_max_length ||
        optional_uint(s,"log2_length",log)!=log ||
        (weighted_only ? text(s,"ntt_type")!=weighted_ntt_type : n!=(Word(1)<<log)))
