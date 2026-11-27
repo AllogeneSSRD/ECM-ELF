@@ -465,7 +465,7 @@ ntt_batch_target_percent = 95
 
 Type `int` · Range `[1,100]` · Worker override `[worker.N] ntt_batch_target_percent` · Level `advanced`.
 
-Throughput threshold as a percentage of the eligible CUDA Stage1 NTT peak. Prefer the requested curve count when it meets the threshold. When splitting, select the smallest measured batch meeting the threshold relative to the eligible sub-batch peak.
+Throughput threshold as a percentage of the eligible CUDA Stage1 NTT peak for ECM curves or Pminus1 tasks. Prefer the full requested batch when it qualifies. When splitting, select the smallest measured batch meeting the threshold relative to the eligible sub-batch peak.
 
 <a id="ntt_bpw"></a>
 
@@ -507,7 +507,17 @@ ntt_max_batch = 512
 
 Type `int` · Range `[1,512]` · Worker override `[worker.N] ntt_max_batch` · Level `advanced`.
 
-Maximum curves per new CUDA Stage1 NTT batch in tuning and production. Available memory can lower the limit for each transform and NAF window.
+Maximum ECM curves or consecutive same-length Pminus1 tasks per CUDA Stage1 NTT batch in tuning and production. Available memory can lower this limit.
+
+### ntt_max_batch_pm1
+
+```toml
+ntt_max_batch_pm1 = 0
+```
+
+Type `int` · Range `[0,512]` · Worker override `[worker.N] ntt_max_batch_pm1` · Level `advanced`.
+
+Override ntt_max_batch for Pminus1 tuning and queue batches. Zero inherits the worker's effective ntt_max_batch. A positive value sets the Pminus1 limit directly.
 
 ### ntt_memory_mib
 

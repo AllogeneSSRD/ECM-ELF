@@ -20,6 +20,7 @@ struct TuneRange {
 
 struct NttTuneGrid {
     TuneRange exp, length, naf;
+    bool pm1 = false;
     TuneRange batch{1, stage1_ntt_max_curves};
     bool batch_explicit = false;
     unsigned find_percent = 0;

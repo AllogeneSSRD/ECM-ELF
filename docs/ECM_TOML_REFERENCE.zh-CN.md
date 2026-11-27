@@ -465,7 +465,7 @@ ntt_batch_target_percent = 95
 
 类型 `int` · 范围 `[1,100]` · Worker 覆盖 `[worker.N] ntt_batch_target_percent` · 级别 `高级`。
 
-CUDA Stage1 NTT 选批的吞吐门槛，以可行峰值的百分比表示。请求批量达标时优先整批执行。需要拆批时，选择达到可行子批峰值该比例的最小实测批量。
+ECM 曲线和 Pminus1 任务共用的 CUDA Stage1 NTT 选批门槛，以可行吞吐峰值的百分比表示。请求批量达标时优先整批执行。拆批时选择达到可行子批峰值该比例的最小实测批量。
 
 <a id="ntt_bpw"></a>
 
@@ -507,7 +507,17 @@ ntt_max_batch = 512
 
 类型 `int` · 范围 `[1,512]` · Worker 覆盖 `[worker.N] ntt_max_batch` · 级别 `高级`。
 
-CUDA Stage1 NTT 调优和生产每个新批次的曲线数上限。各变换长度和 NAF 窗口的实际容量还受内存预算限制。
+CUDA Stage1 NTT 调优和生产的批量上限，按 ECM 曲线数或相同 NTT 长度的连续 Pminus1 任务数计算。实际容量还受显存预算限制。
+
+### ntt_max_batch_pm1
+
+```toml
+ntt_max_batch_pm1 = 0
+```
+
+类型 `int` · 范围 `[0,512]` · Worker 覆盖 `[worker.N] ntt_max_batch_pm1` · 级别 `高级`。
+
+Pminus1 调优与队列选批专用上限。0 继承当前 worker 生效的 ntt_max_batch，1–512 直接指定 Pminus1 上限。
 
 ### ntt_memory_mib
 

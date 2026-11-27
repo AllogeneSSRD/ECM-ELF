@@ -1260,8 +1260,23 @@
       "minimum": 1,
       "maximum": 512,
       "description": [
-        "Maximum curves per new CUDA Stage1 NTT batch in tuning and production. Available memory can lower the limit for each transform and NAF window.",
-        "CUDA Stage1 NTT 调优和生产每个新批次的曲线数上限。各变换长度和 NAF 窗口的实际容量还受内存预算限制。"
+        "Maximum ECM curves or consecutive same-length Pminus1 tasks per CUDA Stage1 NTT batch in tuning and production. Available memory can lower this limit.",
+        "CUDA Stage1 NTT 调优和生产的批量上限，按 ECM 曲线数或相同 NTT 长度的连续 Pminus1 任务数计算。实际容量还受显存预算限制。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "ntt_max_batch_pm1",
+      "field": "ntt_max_batch_pm1",
+      "type": "int",
+      "default": 0,
+      "domain": "[0,512]",
+      "parser": "strict",
+      "minimum": 0,
+      "maximum": 512,
+      "description": [
+        "Override ntt_max_batch for Pminus1 tuning and queue batches. Zero inherits the worker's effective ntt_max_batch. A positive value sets the Pminus1 limit directly.",
+        "Pminus1 调优与队列选批专用上限。0 继承当前 worker 生效的 ntt_max_batch，1–512 直接指定 Pminus1 上限。"
       ]
     },
     {
@@ -1276,8 +1291,8 @@
       "minimum": 1,
       "maximum": 100,
       "description": [
-        "Throughput threshold as a percentage of the eligible CUDA Stage1 NTT peak. Prefer the requested curve count when it meets the threshold. When splitting, select the smallest measured batch meeting the threshold relative to the eligible sub-batch peak.",
-        "CUDA Stage1 NTT 选批的吞吐门槛，以可行峰值的百分比表示。请求批量达标时优先整批执行。需要拆批时，选择达到可行子批峰值该比例的最小实测批量。"
+        "Throughput threshold as a percentage of the eligible CUDA Stage1 NTT peak for ECM curves or Pminus1 tasks. Prefer the full requested batch when it qualifies. When splitting, select the smallest measured batch meeting the threshold relative to the eligible sub-batch peak.",
+        "ECM 曲线和 Pminus1 任务共用的 CUDA Stage1 NTT 选批门槛，以可行吞吐峰值的百分比表示。请求批量达标时优先整批执行。拆批时选择达到可行子批峰值该比例的最小实测批量。"
       ]
     },
     {

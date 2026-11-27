@@ -14,6 +14,10 @@ namespace ecm_stage1_app {
 namespace {
 void parse_tune(std::string spec, ecm_stage1::NttTuneGrid& grid) {
     using namespace ecm_stage1;
+    if (spec == "pm1" || spec.rfind("pm1,", 0) == 0) {
+        grid.pm1 = true;
+        spec.erase(0, 4);
+    }
     if (spec.empty() || spec == "ntt") return;
     if (spec.rfind("ntt,", 0) == 0) spec.erase(0, 4);
     else if (spec.front() == ',') spec.erase(0, 1);
@@ -24,6 +28,7 @@ void parse_tune(std::string spec, ecm_stage1::NttTuneGrid& grid) {
         const auto field = spec.substr(pos, end - pos);
         const auto eq = field.find('=');
         const auto key = field.substr(0, eq);
+        if (grid.pm1 && key == "naf") throw std::invalid_argument("naf is not a P-1 tuning parameter");
         if ((eq == field.npos && key != "force") || !keys.insert(key).second)
             throw std::invalid_argument("expected unique key=value in tune");
         const auto value = eq == field.npos ? "1" : field.substr(eq + 1);
@@ -94,6 +99,7 @@ void print_usage(const char* prog) {
               << "  " << name << " [--config FILE] [--worker N]          Run the Stage1 queue\n"
               << "  echo '<N>' | " << name << " [options] B1 [B2]    Run Stage1 on stdin\n"
               << "  " << name << " -tune [ntt][,exp=P|,length=L][,naf=W][,batch=B][,time=N][,repeat=A:B][,find=N][,force]\n"
+              << "  " << name << " -tune pm1[,ntt][,exp=P|,length=L][,batch=B][,time=N][,repeat=A:B][,find=N][,force]\n"
               << R"(
 Curve and task:
   --param <e|m0|m2|m3>  Curve construction: Edwards or Montgomery PARAM0/2/3.
@@ -353,7 +359,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
         try {
             const auto reject = [] { throw std::runtime_error("invalid value"); };
             if (key == "-tune" || key == "--tune") {
-                expected = "[ntt][,exp=P|,length=L][,naf=W][,batch=B][,time=N][,repeat=A:B][,find=N][,force]";
+                expected = "ntt or pm1 with optional exp/length, batch, time, repeat, find and force (naf only for ECM)";
                 if (input.tune_ntt) throw std::invalid_argument("duplicate tune option");
                 if (i + 1 < argc) {
                     const std::string next = argv[i + 1];

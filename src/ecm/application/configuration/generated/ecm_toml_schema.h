@@ -66,6 +66,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage1","ntt_pad_batch","int","[0|1]","stage1","ntt_pad_batch","",false},
     {"stage1","ntt_tight_weighted_bound","bool","[false|true|0|1]","stage1","ntt_tight_weighted_bound","",false},
     {"stage1","ntt_max_batch","int","[1,512]","stage1","ntt_max_batch","",false},
+    {"stage1","ntt_max_batch_pm1","int","[0,512]","stage1","ntt_max_batch_pm1","",false},
     {"stage1","ntt_batch_target_percent","int","[1,100]","stage1","ntt_batch_target_percent","",false},
     {"stage1","ntt_memory_mib","int","[0,1048576]","stage1","ntt_memory_mib","",false},
     {"stage1","ntt_length","int","0, 2^k in [2,524288], 3*2^k in [768,3072] (weighted), or 5*2^k in [2560,163840] (weighted)","stage1","ntt_length","",false},

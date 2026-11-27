@@ -1,5 +1,17 @@
 # CUDA Stage1 NTT 调优
 
+<a id="pm1-stage1-tune"></a>
+
+## P−1 Stage1
+
+`ecm_cuda -tune "pm1,length=2560,batch=1-4,time=1,repeat=2:5" 4096` 实测 P−1 的加权 NTT，将结果写入共享 `tune_file` 的 `[pm1.stage1]` 矩阵。也可写 `pm1,ntt`。支持下文的 `exp`、`length`、`batch`、`time`、`repeat`、`find` 和 `force`。省略 B1 时取 128。显式批量范围测试其中的每个批量，自动搜索先测试按倍数递增的批量及显存上限，`find` 在已测峰值附近补测较小批量。
+
+每个任务在独立 CUDA stream 上推进指数。一个 iter 对应一个指数位，包含一次模平方，位为 1 时再乘 3。采样位来自 `2p × lcm(1,…,B1)`，长指数均匀抽取最多 512 位。调优先用 GMP 核对两种位操作，再预热各 stream。所有任务就绪后，以同一个 CUDA 事件为起点，到最后一个 stream 完成本组为止。`iter_per_s = 1000 × batch × timed_steps / median_ms`，其中 `timed_steps` 为每个任务每组推进的位数。建图、Gerbicz 校验、GCD 和存档 I/O 均在计时区间外。矩阵沿用 ECM NTT 的列顺序，记录长度、批量、执行形状、显存及采样信息。含 P−1 矩阵的文件使用格式 19，其他共享该文件的 CUDA worker 也需支持此格式。
+
+生产 worker 从当前任务开始检查本 worker 连续的 `Pminus1`。不同 NTT 长度、其他任务、worker 分区或冲突的存档路径会截断批次。同长度任务可有不同的 p、B1 和断点。选批读取本 GPU、当前执行设置和显存预算允许的精测记录。`[stage1]` 的 `ntt_max_batch_pm1` 可单独设置 P−1 调优和生产批量上限（1–512）。省略或设为 0 时，继承当前 worker 的 `ntt_max_batch`；两个键都可在 `[worker.N]` 覆盖。整批吞吐达到 `ntt_batch_target_percent` 门槛时优先整批，否则选择达到可用子批峰值相应比例的最小实测批量。缺少合适记录时执行一条。每条任务独立校验、保存和求 GCD，按队列顺序交接。
+
+## ECM Stage1
+
 ```text
 -tune [ntt][,exp=P|,length=L][,naf=W][,batch=B][,time=N][,repeat=A:B][,find=N][,force] [B1]
 ```
@@ -151,7 +163,7 @@ Edwards 的 `edwards_naf_window_bits=0` 在当前 GPU 的兼容记录中优先�
 
 `stage1_ntt_batch_probe` 记录开始短测的批量和参考 Best，`stage1_ntt_batch_probe_done` 给出实测吞吐、峰值、门槛和决定。`stage1_ntt_runtime_tune` 表示位宽补测，`stage1_ntt_naf_selection` 表示自动选窗，`stage1_ntt_batch_selection` 和 `stage1_ntt_selection` 给出批量和卷积来源。生产样本的 `curves_per_s` 包含标量准备至归一化，部分恢复批次不进入完整排名。
 
-恢复原生 Edwards NAF 批次时，保留断点中的曲线、NAF 窗口和游标。自动选型且运行时调优开启时，缺少当前批量实测的 NTT 类型可以从同设备、同窗口和适用指数的邻近批量借用形状。`stage1_ntt_resume_probe` 将这些候选和已有当前批量候选放在一起，按实际批量执行同一份 NAF 片段，两组各以 100 ms 为目标，按设备吞吐选型。测量写回当前批量，后续恢复可直接查表。 [恢复短测的组目标时间](../../src/ecm/stage1/cuda/ntt/tune.cpp#L1735) · [默认粗测组数](../../include/ecm/stage1/ntt_length.h#L19)
+恢复原生 Edwards NAF 批次时，保留断点中的曲线、NAF 窗口和游标。自动选型且运行时调优开启时，缺少当前批量实测的 NTT 类型可以从同设备、同窗口和适用指数的邻近批量借用形状。`stage1_ntt_resume_probe` 将这些候选和已有当前批量候选放在一起，按实际批量执行同一份 NAF 片段，两组各以 100 ms 为目标，按设备吞吐选型。测量写回当前批量，后续恢复可直接查表。 [恢复短测的组目标时间](../../src/ecm/stage1/cuda/ntt/tune.cpp#L2021) · [默认粗测组数](../../include/ecm/stage1/ntt_length.h#L19)
 
 以活跃批量 B、指数 p、NTT 长度 L 计，主数组需要 `88·B·L + 92·B·ceil(p/32)` 字节，此外还有标量、NTT 常量表和加权表。申请前核算显式分配，Graph 上传后及同步执行后用 `cudaMemGetInfo` 采样空闲显存差；两者较大值写为 `peak_bytes`。观测值以 CUDA 上下文就绪后的空闲显存为基准，受同设备其他进程和驱动分配粒度影响。
 

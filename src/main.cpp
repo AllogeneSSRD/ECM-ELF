@@ -22,6 +22,7 @@ using ecm_stage1_app::stage1_result_settings;
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -985,50 +986,71 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                 input_error(error);
                 return QueueReadStatus::MarkError;
             }
-            const auto ratio = task.b2 ? 0 : ecm_config::read_stage2(ecm_config::selected_entries(
-                parsed_config.lines, worker, {"b2_ratio"}, ini)).b2_ratio;
-            const auto b2 = pm1_effective_b2(task, ratio);
             namespace fs = std::filesystem;
-            const auto root = fs::u8path(ini_dir) / "pm1" /
-                ("M" + std::to_string(task.p) + "-B1-" + std::to_string(task.b1));
-            const auto receiver = fs::u8path(resolve_rel_local(exe_dir, cfg.p95_worktodo_path));
-            const auto save_dir = !cfg.p95_sync_dir.empty()
-                ? fs::u8path(resolve_rel_local(exe_dir, cfg.p95_sync_dir))
-                : receiver.empty() ? root : receiver.parent_path();
-            auto add = receiver.empty() ? save_dir / "worktodo.txt" : receiver;
-            add.replace_extension(".add");
-            auto alternate_add = add;
-            alternate_add += ".txt";
-            const auto save = save_dir / ecm_pm1::prime95_name(task.p);
-            if (conflicts_with_output(save.u8string()) || same_path(save.u8string(), worktodo_path) ||
-                same_path(save.u8string(), receiver.u8string()))
-                throw std::runtime_error("Prime95 save conflicts with an input or output path");
-            const auto outcome = ecm_pm1::run(task, b2, opt, root, save_dir);
-            if (!outcome.completed)
-                return QueueReadStatus::Error;
-            CompletedWorktodo done;
-            done.ticket = line;
-            done.finished = finished_path;
-            done.record = line + " # P-1 Stage1 " + (outcome.whole_target ? "gcd=target" :
-                outcome.factor.empty() ? std::string("no factor") : "factor=" + outcome.factor);
-            if (cfg.handoff_mode_pm1 == "prime95" && (outcome.factor.empty() || after_factored)) {
-                if (!receiver.empty() && (!receiver.has_extension() || same_path(receiver.u8string(), add.u8string())))
-                    throw std::runtime_error("Prime95 receiver needs a queue filename distinct from .add");
-                for (const auto& path : {receiver, add, alternate_add}) {
-                    if (!path.empty() && (conflicts_with_output(path.u8string()) ||
-                                          same_path(path.u8string(), worktodo_path)))
-                        throw std::runtime_error("Pminus1 handoff conflicts with an input or output path");
+            auto options = opt;
+            options.execution.ntt.max_batch = cfg.pm1_batch_limit();
+            auto tasks = ecm_pm1::batch_prefix(worktodo_path, source_line, std::move(task), options.execution.ntt,
+                                             !cfg.p95_sync_dir.empty() || !cfg.p95_worktodo_path.empty());
+            std::vector<unsigned> exponents;
+            for (const auto& lane : tasks) exponents.push_back(lane.p);
+            auto plan = ecm_mersenne_ntt::select_pm1_batch(opt.execution.device_index, exponents, options.execution.ntt);
+            tasks.resize(plan.batch);
+            ecm_ts_fprintf(stdout,"pm1_stage1_batch: length=%u batch=%u available=%u target=%u%%\n",
+                           plan.ntt.length,plan.batch,plan.available,plan.ntt.batch_target_percent);
+            options.execution.ntt = plan.ntt;
+            const bool needs_ratio = std::any_of(tasks.begin(),tasks.end(),[](const auto& lane){return !lane.b2;});
+            const auto ratio = needs_ratio ? ecm_config::read_stage2(ecm_config::selected_entries(
+                parsed_config.lines, worker, {"b2_ratio"}, ini)).b2_ratio : 0;
+            const auto compute = [&](const Pm1Task& task) -> std::optional<CompletedWorktodo> {
+                const auto b2 = pm1_effective_b2(task, ratio);
+                const auto root = fs::u8path(ini_dir) / "pm1" /
+                    ("M" + std::to_string(task.p) + "-B1-" + std::to_string(task.b1));
+                const auto receiver = fs::u8path(resolve_rel_local(exe_dir, cfg.p95_worktodo_path));
+                const auto save_dir = !cfg.p95_sync_dir.empty()
+                    ? fs::u8path(resolve_rel_local(exe_dir, cfg.p95_sync_dir))
+                    : receiver.empty() ? root : receiver.parent_path();
+                auto add = receiver.empty() ? save_dir / "worktodo.txt" : receiver;
+                add.replace_extension(".add");
+                auto alternate_add = add;
+                alternate_add += ".txt";
+                const auto save = save_dir / ecm_pm1::prime95_name(task.p);
+                if (conflicts_with_output(save.u8string()) || same_path(save.u8string(), worktodo_path) ||
+                    same_path(save.u8string(), receiver.u8string()))
+                    throw std::runtime_error("Prime95 save conflicts with an input or output path");
+                const auto outcome = ecm_pm1::run(task, b2, options, root, save_dir);
+                if (!outcome.completed)
+                    return {};
+                CompletedWorktodo done;
+                done.ticket = task.raw_line;
+                done.finished = finished_path;
+                done.record = task.raw_line + " # P-1 Stage1 " + (outcome.whole_target ? "gcd=target" :
+                    outcome.factor.empty() ? std::string("no factor") : "factor=" + outcome.factor);
+                if (cfg.handoff_mode_pm1 == "prime95" && (outcome.factor.empty() || after_factored)) {
+                    if (!receiver.empty() && (!receiver.has_extension() || same_path(receiver.u8string(), add.u8string())))
+                        throw std::runtime_error("Prime95 receiver needs a queue filename distinct from .add");
+                    for (const auto& path : {receiver, add, alternate_add}) {
+                        if (!path.empty() && (conflicts_with_output(path.u8string()) ||
+                                              same_path(path.u8string(), worktodo_path)))
+                            throw std::runtime_error("Pminus1 handoff conflicts with an input or output path");
+                    }
+                    done.pm1_add_file = add.u8string();
+                    done.pm1_line = pm1_handoff_line(task, b2);
+                    done.pm1_save_path = save.u8string();
+                    done.pm1_save_hash = outcome.save_hash;
                 }
-                done.pm1_add_file = add.u8string();
-                done.pm1_line = pm1_handoff_line(task, b2);
-                done.pm1_save_path = save.u8string();
-                done.pm1_save_hash = outcome.save_hash;
-            }
+                return done;
+            };
+            std::vector<std::future<std::optional<CompletedWorktodo>>> pending;
+            for (const auto& lane : tasks)
+                pending.push_back(std::async(tasks.size()==1 ? std::launch::deferred : std::launch::async,
+                                             compute,std::cref(lane)));
             const auto receipt = worktodo_path + ".stage1_completed_worker" + std::to_string(worker);
-            if (!ecm_worktodo_store_completion(receipt, done, error))
-                throw std::runtime_error(error);
-            if (!finish_record(paths))
-                return QueueReadStatus::Error;
+            for (auto& lane : pending) {
+                auto done=lane.get();
+                if (!done) return QueueReadStatus::Error;
+                if (!ecm_worktodo_store_completion(receipt,*done,error)) throw std::runtime_error(error);
+                if (!finish_record(paths)) return QueueReadStatus::Error;
+            }
             return QueueReadStatus::Completed;
 #else
             input_error("Pminus1 requires ecm_cuda; worktodo retained");
@@ -1279,6 +1301,7 @@ int main(int argc, char** argv) {
         if (!open_direct_log({settings.options.execution.ntt.tune_file})) return 1;
 #if ECM_HAS_CUDA_STAGE1
         auto grid = input.tune_grid;
+        if (grid.pm1) settings.options.execution.ntt.max_batch = settings.config.pm1_batch_limit();
         if (input.has("--naf-w") && input.naf_w) grid.naf = {unsigned(input.naf_w), unsigned(input.naf_w)};
         if (input.gpu_info_bits) grid.exp = {input.gpu_info_bits, input.gpu_info_bits};
         return ecm_mersenne_ntt::tune_command(settings.options, input.pos.empty() ? 128 : input.b1,

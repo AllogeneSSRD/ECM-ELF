@@ -1,5 +1,7 @@
 #include "ladder.h"
 #include "pm1_replay.h"
+#include "pm1_probe.h"
+#include <mutex>
 #include "host_lanes.h"
 #include "profiles.h"
 #include "weighted.cuh"
@@ -690,6 +692,7 @@ struct Pm1Request {
     const std::vector<uint32_t>& exponent;
     Pm1Progress& progress;
     const std::function<bool(const Pm1Progress&)>& verified;
+    const Pm1Probe* probe = nullptr;
 };
 
 static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
@@ -1028,6 +1031,11 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         control->describe(plan);
     }
     if (describe_only) return result;
+    // Plan setup uses legacy-stream table generation and stream capture. Keep
+    // setup serialized for independent P-1 streams, then release before replay.
+    static std::mutex pm1_setup;
+    std::unique_lock<std::mutex> setup_guard(pm1_setup,std::defer_lock);
+    if (pm1) setup_guard.lock();
     Stream stream; const auto q=stream.value;
     fuse_init(ctx,width,log,omega2,inv2,true,resolved);
     const size_t carry_smem = size_t((s.words + threads - 1) / threads) * threads * sizeof(uint32_t);
@@ -1490,7 +1498,24 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             if (window) CK(cudaGraphLaunch(steps[bit].exec,q));
             else step(bit);
         };
-        replay(pm1->exponent,pm1->progress,pm1->verified,advance_bit,copy,product,read,restore);
+        setup_guard.unlock();
+        if (pm1->probe) {
+            // Check both production bit paths against the full GMP residue
+            // before any stream enters the timed group.
+            advance_bit(false);
+            advance_bit(true);
+            ecm_edwards::Integer expected,modulus,actual;
+            mpz_import(expected.v,initial.size(),-1,4,0,0,initial.data());
+            mpz_setbit(modulus.v,p);
+            mpz_sub_ui(modulus.v,modulus.v,1);
+            mpz_powm_ui(expected.v,expected.v,4,modulus.v);
+            mpz_mul_ui(expected.v,expected.v,3);
+            mpz_mod(expected.v,expected.v,modulus.v);
+            const auto check=read(Current);
+            mpz_import(actual.v,check.size(),-1,4,0,0,check.data());
+            if (mpz_cmp(actual.v,expected.v)!=0) throw std::runtime_error("P-1 tune residue mismatch");
+            (*pm1->probe)(q,advance_bit);
+        } else replay(pm1->exponent,pm1->progress,pm1->verified,advance_bit,copy,product,read,restore);
         CK(cudaStreamSynchronize(q));
         return result;
     }
@@ -1959,6 +1984,28 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     observe_memory();
     return result;
 }
+Run pm1_probe_lane(int device, unsigned p, const ecm_stage1::Stage1NttOptions& options,
+                   Plan& plan, const Pm1Probe& probe) {
+    Pm1Progress initial;
+    Control control;
+    control.describe_only = !probe;
+    control.describe = [&](const Plan& value) { plan = value; };
+    if (probe) {
+        initial.residue.resize((p+31)/32);
+        uint32_t word=0x85ebca6bu;
+        for (auto& limb:initial.residue) {
+            word^=word<<13; word^=word>>17; word^=word<<5;
+            limb=word;
+        }
+        if (p%32) initial.residue.back()&=(1u<<(p%32))-1;
+        initial.residue.front()&=~2u;
+    }
+    const std::vector<uint32_t> exponent;
+    const std::function<bool(const Pm1Progress&)> verified;
+    const Pm1Request request{exponent,initial,verified,&probe};
+    return run_ladder(device,p,1,initial.residue,{},0,options,&control,1,nullptr,nullptr,&request);
+}
+
 Pm1Progress pm1_stage1(int device, unsigned p, const std::vector<uint32_t>& exponent,
                        Pm1Progress start, const ecm_stage1::Stage1NttOptions& options,
                        const std::function<bool(const Pm1Progress&)>& verified) {

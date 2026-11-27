@@ -44,6 +44,8 @@ inline constexpr int64_t stage1_ntt_allow_known_factors_minimum=0;
 inline constexpr int64_t stage1_ntt_allow_known_factors_maximum=1;
 inline constexpr int64_t stage1_ntt_max_batch_minimum=1;
 inline constexpr int64_t stage1_ntt_max_batch_maximum=512;
+inline constexpr int64_t stage1_ntt_max_batch_pm1_minimum=0;
+inline constexpr int64_t stage1_ntt_max_batch_pm1_maximum=512;
 inline constexpr int64_t stage1_ntt_batch_target_percent_minimum=1;
 inline constexpr int64_t stage1_ntt_batch_target_percent_maximum=100;
 inline constexpr int64_t stage1_ntt_memory_mib_minimum=0;
@@ -213,6 +215,7 @@ struct Stage1Values {
     bool ntt_tight_weighted_bound=true;
     std::string ntt_tune_file="tune.toml";
     int ntt_max_batch=512;
+    int ntt_max_batch_pm1=0;
     int ntt_batch_target_percent=95;
     int ntt_memory_mib=0;
     int ntt_length=0;
@@ -310,6 +313,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"ntt_tight_weighted_bound",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_tight_weighted_bound,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_tight_weighted_bound=v.ntt_tight_weighted_bound;}},
     {"ntt_tune_file",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_tune_file,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_tune_file=v.ntt_tune_file;}},
     {"ntt_max_batch",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_max_batch,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_max_batch=v.ntt_max_batch;}},
+    {"ntt_max_batch_pm1",[](Stage1Values&c,const std::string&v){c.ntt_max_batch_pm1=static_cast<int>(bounded_integer(v,"ntt_max_batch_pm1",0,512));},[](Stage1Values&c,const Stage1Values&v){c.ntt_max_batch_pm1=v.ntt_max_batch_pm1;}},
     {"ntt_batch_target_percent",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_batch_target_percent,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_batch_target_percent=v.ntt_batch_target_percent;}},
     {"ntt_memory_mib",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_memory_mib,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_memory_mib=v.ntt_memory_mib;}},
     {"ntt_length",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_length,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_length=v.ntt_length;}},

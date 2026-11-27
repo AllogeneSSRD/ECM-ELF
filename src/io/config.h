@@ -7,6 +7,9 @@
 #include <map>
 
 struct EcmQueueConfig : ecm_config::Stage1Values {
+    unsigned pm1_batch_limit() const {
+        return unsigned(ntt_max_batch_pm1 ? ntt_max_batch_pm1 : ntt_max_batch);
+    }
     bool ntt_tune_runtime = true;
     int config_version = ecm_config::business_config_version;
     // Presence only; raw values/locations remain in ParsedConfig. This keeps

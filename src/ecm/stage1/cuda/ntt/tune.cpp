@@ -1,5 +1,6 @@
 #include "tune.h"
 #include "batch_timing.h"
+#include "pm1_timing.h"
 #include "ecm/stage1/ntt_target.h"
 #include "ladder.h"
 #include "ecm/stage1/scalar.h"
@@ -110,11 +111,11 @@ ecm_stage1::NttPfaCode pfa_code(const Plan& plan) {
     return plan.dataflow & PfaRadix5 ? Code::Direct : Code::None;
 }
 
-void print_measurement(const Measurement& m, unsigned target) {
+void print_measurement(const Measurement& m, unsigned target, const char* batch_unit="c") {
     const auto& p = m.plan;
     const auto shape = tune_shape_descriptor(p);
-    ecm_ts_fprintf(stdout, "%u %u %s %uc %.0f iter/s %u %u %.3f/%u ms %u %u\n",
-        p.length, p.max_exp, shape.c_str(), m.batch, m.throughput()*m.steps, p.window, p.dataflow,
+    ecm_ts_fprintf(stdout, "%u %u %s %u%s %.0f iter/s %u %u %.3f/%u ms %u %u\n",
+        p.length, p.max_exp, shape.c_str(), m.batch, batch_unit, m.throughput()*m.steps, p.window, p.dataflow,
         m.group_ms(), target, m.steps, m.steps / m.blocks);
 }
 
@@ -1628,11 +1629,270 @@ std::string tune_shape_descriptor(const Plan& plan) {
                                      plan.forward, plan.inverse, pfa_code(plan));
 }
 
+Pm1BatchPlan select_pm1_batch(int index, const std::vector<unsigned>& exponents, const Stage1NttOptions& base) {
+    using ecm_stage2::tune::uint;
+    using ecm_stage2::tune::real;
+    auto weighted=base;
+    weighted.weighted=true;
+    if (weighted.window>0 || (weighted.window<0 && weighted.profile)) weighted.window=1;
+    if (weighted.length) weighted.automatic=false;
+    Pm1BatchPlan selected{1,1,weighted};
+    const auto fallback=[&](unsigned p) {
+        return resolve_packing(p,weighted,true,WeightedBound::UnsignedProducts).length;
+    };
+    selected.ntt.length=fallback(exponents.at(0));
+    pt::Profile db;
+    try { db=load(base.tune_file); }
+    catch (const std::exception& e) {
+        ecm_ts_fprintf(stderr,"P-1 tune read: %s\n",e.what());
+        return selected;
+    }
+    if (db.pm1_stage1.empty()) return selected;
+    const auto device=device_info(index,base.memory_mib);
+    std::vector<const Fields*> rows;
+    for (const auto& row:db.pm1_stage1) {
+        const auto& condition=db.conditions.at(uint(row,"condition"));
+        if (uint(row,"sample_phase")==2 && uint(row,"batch")<=base.max_batch &&
+            uint(row,"peak_bytes")<=device.budget && condition.count("uuid_hex") &&
+            pt::text(condition,"uuid_hex")==device.uuid) rows.push_back(&row);
+    }
+    if (rows.empty()) return selected;
+    std::map<unsigned,BatchRate> rates;
+    std::map<unsigned,Stage1NttOptions> plans;
+    std::map<unsigned,unsigned> lengths;
+    // Resolve each task against its own coefficient and packing bounds before
+    // grouping. Two moduli sharing a transform can use different digit widths.
+    unsigned common=0;
+    double peak=0;
+    for (unsigned i=0;i<exponents.size();++i) {
+        const unsigned p=exponents[i];
+        auto at=lengths.find(p);
+        if (at==lengths.end()) {
+            auto shapes=tune_shapes(p,weighted,true);
+            unsigned length=0;
+            double best=0;
+            for (const auto* row:rows) {
+                if (uint(*row,"max_exp")<p) continue;
+                const auto n=unsigned(uint(*row,"length")), batch=unsigned(uint(*row,"batch"));
+                const auto& shape=shapes[candidate_mode(true,n)];
+                if (!shape || !decode(*row,shape->shape,device,p,batch,weighted,true)) continue;
+                const auto rate=real(*row,"iter_per_s");
+                if (rate>best) { best=rate; length=n; }
+            }
+            if (!length) {
+                try { length=fallback(p); }
+                catch (const std::invalid_argument&) { if (i) break; throw; }
+            }
+            at=lengths.emplace(p,length).first;
+        }
+        if (!i) common=at->second;
+        if (at->second!=common) break;
+        selected.available=i+1;
+    }
+    selected.ntt.length=common;
+    for (const auto* row:rows) {
+        const unsigned batch=unsigned(uint(*row,"batch"));
+        if (uint(*row,"length")!=common) continue;
+        const auto count=std::min(batch,selected.available);
+        const auto largest=*std::max_element(exponents.begin(),exponents.begin()+count);
+        if (largest>uint(*row,"max_exp")) continue;
+        const auto shape=resolve_packing(largest,selected.ntt,true,WeightedBound::UnsignedProducts);
+        const auto cached=decode(*row,shape,device,largest,batch,selected.ntt,true);
+        if (!cached) continue;
+        peak=std::max(peak,cached->rate);
+        if (batch>selected.available || cached->rate<=rates[batch].rate) continue;
+        rates[batch]={cached->rate,unsigned(uint(*row,"repeats"))};
+        plans[batch]=cached->options;
+        plans[batch].bpw=base.bpw;
+    }
+    unsigned batch=0;
+    const auto full=rates.find(selected.available);
+    if (full!=rates.end() && selected.available>1) {
+        if (full->second.rate>=peak*base.batch_target_percent/100.) batch=selected.available;
+        else rates.erase(full);
+    }
+    if (!batch) batch=recommended_batch(rates,base.batch_target_percent);
+    if (batch) { selected.batch=batch; selected.ntt=plans.at(batch); }
+    return selected;
+}
+
+namespace {
+Measurement measure_pm1(const Device& device, unsigned p, const Stage1NttOptions& options,
+                        unsigned batch, unsigned repeats, unsigned target_ms, const std::vector<uint8_t>& bits) {
+    Measurement m;
+    m.batch=batch;
+    m.budget=device.budget;
+    const auto dry=pm1_probe_lane(device.index,p,options,m.plan,{});
+    if (dry.owned_bytes>device.budget/batch) throw BudgetError("P-1 batch exceeds VRAM budget");
+    size_t initial_free,total;
+    CK(cudaMemGetInfo(&initial_free,&total));
+    Pm1TimingGroup group(batch);
+    std::vector<std::future<Run>> lanes;
+    try {
+        for (unsigned lane=0;lane<batch;++lane) {
+            lanes.push_back(std::async(std::launch::async,[&,lane] {
+                try {
+                    Plan plan;
+                    return pm1_probe_lane(device.index,p,options,plan,[&](auto stream,const auto& step) {
+                        group.measure(lane,stream,step,repeats,target_ms,initial_free,bits);
+                    });
+                } catch (...) { group.cancel(std::current_exception()); throw; }
+            }));
+        }
+        for (auto& lane:lanes) m.owned+=lane.get().owned_bytes;
+    } catch (...) { group.cancel(std::current_exception()); throw; }
+    m.observed=group.peak_bytes;
+    if (std::max(m.owned,m.observed)>device.budget) throw BudgetError("P-1 batch exceeds measured VRAM budget");
+    m.steps=group.steps;
+    m.ms=std::move(group.times);
+    return m;
+}
+
+int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1::NttTuneGrid& grid,
+             bool exhaustive,unsigned seconds) {
+    using ecm_stage2::tune::uint;
+    using ecm_stage2::tune::real;
+    if (grid.naf.first) throw std::invalid_argument("P-1 tune has no NAF window");
+    auto base=task.execution.ntt;
+    base.weighted=true;
+    base.automatic=false;
+    if (grid.batch.first>base.max_batch) throw std::invalid_argument("requested batch exceeds the effective P-1 limit (ntt_max_batch_pm1 or ntt_max_batch)");
+    const auto device=device_info(task.execution.device_index,base.memory_mib);
+    auto db=grid.force ? pt::Profile{} : load(base.tune_file);
+    const auto identity=Fields{{"uuid_hex",pt::quoted(device.uuid)}};
+    const auto deadline=seconds ? now_s()+seconds : 0;
+    ecm_edwards::Integer lcm;
+    if (!ecm_build_lcm_exponent(lcm.v,b1,1)) throw std::runtime_error("cannot build P-1 tuning exponent");
+    bool found=false;
+    for (const auto& entry:plan_tune_lengths(base,grid,true)) {
+        const auto shape=std::find_if(entry.shapes.begin(),entry.shapes.end(),[](const auto& c){return bool(c);});
+        if (shape==entry.shapes.end()) continue;
+        const auto p=entry.reference_bits;
+        ecm_edwards::Integer exponent;
+        mpz_mul_ui(exponent.v,lcm.v,2ul*p);
+        const auto count=mpz_sizeinbase(exponent.v,2)-1;
+        const size_t samples=std::min<size_t>(count,512);
+        std::vector<uint8_t> bits(samples);
+        for (size_t i=0;i<samples;++i) {
+            const auto bit=count-1-uint64_t(i)*count/samples;
+            bits[i]=uint8_t((mpz_getlimbn(exponent.v,mp_size_t(bit/GMP_NUMB_BITS))>>(bit%GMP_NUMB_BITS))&1);
+        }
+        auto options=shape->value().options;
+        // P-1 captures one zero-bit and one one-bit graph. Every positive
+        // window setting therefore has exactly one exponent bit per launch.
+        options.window=base.window==0 ? 0 : 1;
+        Plan plan;
+        const auto dry=pm1_probe_lane(device.index,p,options,plan,{});
+        const unsigned cap=unsigned(std::min<size_t>({base.max_batch,grid.batch.last,device.budget/dry.owned_bytes}));
+        std::map<unsigned,BatchRate> rates;
+        std::set<unsigned> failed;
+        std::set<unsigned> anchors;
+        for (unsigned b=grid.batch.first;b<=cap;b=exhaustive || grid.batch_explicit ? b+1 : b*2) anchors.insert(b);
+        if (cap>=grid.batch.first) anchors.insert(cap);
+        table_header();
+        const auto sample=[&](unsigned batch,Stage1NttOptions candidate,unsigned phase) {
+            if (ecm_stage1_stop_requested() || (deadline && now_s()>=deadline)) throw TimeLimit{};
+            const unsigned repeats=phase==1 ? grid.coarse_repeats : grid.fine_repeats;
+            Plan expected;
+            pm1_probe_lane(device.index,p,candidate,expected,{});
+            const auto id=db.condition(identity);
+            double cached_rate=0;
+            for (const auto& row:db.pm1_stage1) {
+                if (uint(row,"condition")!=id || uint(row,"batch")!=batch ||
+                    uint(row,"length")!=plan.length || uint(row,"reference_bits")!=p ||
+                    uint(row,"b1")!=b1 ||
+                    uint(row,"tile")!=expected.tile || uint(row,"graph_bits")!=expected.window ||
+                    uint(row,"dataflow")!=expected.dataflow || uint(row,"max_radix_bits")!=expected.outer_max ||
+                    uint(row,"warp_tail")!=unsigned(expected.warp_tail) ||
+                    uint(row,"sample_phase")!=phase || uint(row,"repeats")<repeats ||
+                    uint(row,"sample_target_ms")<grid.group_ms || uint(row,"peak_bytes")>device.budget) continue;
+                cached_rate=std::max(cached_rate,real(row,"iter_per_s"));
+            }
+            if (cached_rate) return cached_rate;
+            auto m=measure_pm1(device,p,candidate,batch,repeats,grid.group_ms,bits);
+            print_measurement(m,grid.group_ms,"");
+            auto row=encode(m,m.steps);
+            row.erase("naf_memory_bytes");
+            row["condition"]=std::to_string(id);
+            row["reference_bits"]=std::to_string(p);
+            row["b1"]=std::to_string(b1);
+            row["sample_phase"]=std::to_string(phase);
+            row["sample_target_ms"]=std::to_string(grid.group_ms);
+            row["timed_steps"]=std::to_string(m.steps);
+            row["median_ms"]=pt::numeric(m.time());
+            row["dataflow"]=std::to_string(m.plan.dataflow);
+            db.update_pm1(row);
+            if (!base.tune_file.empty()) {
+                const auto parent=std::filesystem::u8path(base.tune_file).parent_path();
+                if (!parent.empty()) std::filesystem::create_directories(parent);
+                ecm_io::FileLock lock(base.tune_file);
+                auto latest=load(base.tune_file);
+                row["condition"]=std::to_string(latest.condition(identity));
+                latest.update_pm1(std::move(row));
+                ecm_io::write_atomic(base.tune_file,latest.serialize());
+            }
+            return m.throughput()*m.steps;
+        };
+        const auto scan=[&](unsigned batch) {
+            try {
+                auto best=options;
+                double rate=sample(batch,best,1);
+                auto compare=[&](Stage1NttOptions other) {
+                    const auto measured=sample(batch,other,1);
+                    if (measured>rate) { rate=measured; best=other; }
+                };
+                if (!base.tile && !base.profile && plan.tile>=5) { auto alt=best; alt.tile=plan.tile-2; compare(alt); }
+                if (!base.outer_max && !base.profile && tile_log(plan.length)>plan.tile) {
+                    auto alt=best; alt.outer_max=plan.outer_max==2 ? 4 : 2; compare(alt);
+                }
+                if (ecm_stage1::stage1_ntt_radix5(plan.length)) {
+                    using Layout=Stage1NttOptions::MixedLayout;
+                    for (const auto layout:{Layout::Twiddle,Layout::Pfa,Layout::Coalesced}) {
+                        auto alt=best;
+                        alt.mixed_layout=layout;
+                        compare(alt);
+                    }
+                    if (p/plan.length>=radix5_limb_min_digit_bits) {
+                        auto alt=best;
+                        alt.fused_radix5_inverse=true;
+                        compare(alt);
+                    }
+                }
+                if (base.window<0 && !base.profile) { auto alt=best; alt.window=plan.window ? 0 : 1; compare(alt); }
+                rates[batch]={sample(batch,best,2),grid.fine_repeats};
+                found=true;
+            } catch (const BudgetError&) { failed.insert(batch); }
+            catch (const std::runtime_error& error) {
+                if (std::string_view(error.what())!=cudaGetErrorString(cudaErrorMemoryAllocation)) throw;
+                failed.insert(batch);
+            }
+        };
+        for (auto b:anchors) { scan(b); if (failed.count(b)) break; }
+        if (rates.empty()) continue;
+        const auto percent=grid.find_percent ? grid.find_percent : base.batch_target_percent;
+        if (grid.find_percent) {
+            unsigned high=recommended_batch(rates,percent), low=grid.batch.first;
+            while (low<high) {
+                const unsigned mid=low+(high-low)/2;
+                if (!rates.count(mid) && !failed.count(mid)) scan(mid);
+                if (!failed.count(mid) && recommended_batch(rates,percent)<=mid) high=mid;
+                else low=mid+1;
+            }
+        }
+        ecm_ts_fprintf(stdout,"pm1_stage1_tune: length=%u target=%u%% batch=%u\n",
+                       plan.length,percent,recommended_batch(rates,percent));
+    }
+    if (!found) throw BudgetError("no P-1 NTT length or batch fits the grid and memory budget");
+    return 0;
+}
+} // namespace
+
 int tune_command(const ecm_stage1::Stage1Options& task, double b1, const ecm_stage1::NttTuneGrid& grid,
                  bool exhaustive, unsigned seconds) {
     using namespace ecm_stage1;
     try {
         if (!(b1 >= 2 && b1 <= 5000000000.0)) throw std::invalid_argument("invalid tune B1");
+        if (grid.pm1) return tune_pm1(task,uint64_t(b1),grid,exhaustive,seconds);
         if (grid.exp.last > stage1_ntt_max_exponent || (grid.exp.first && grid.exp.first < stage1_ntt_min_exponent))
             throw std::invalid_argument("tune exponent outside supported range");
         const bool edwards = task.execution.selection.curve == CurveModel::Edwards;
@@ -1670,7 +1930,7 @@ int tune_command(const ecm_stage1::Stage1Options& task, double b1, const ecm_sta
         if (!measured) throw BudgetError("no matching Stage1 NTT length, width or batch fits the requested grid");
         return 0;
     } catch (const TimeLimit&) {
-        ecm_ts_fprintf(stdout,"stage1_ntt_grid: status=time_limit\n");
+        ecm_ts_fprintf(stdout,"%s: status=time_limit\n",grid.pm1 ? "pm1_stage1_tune" : "stage1_ntt_grid");
         return 0;
     } catch (const std::exception& e) {
         ecm_ts_fprintf(stderr, "ERROR: %s\n", e.what());

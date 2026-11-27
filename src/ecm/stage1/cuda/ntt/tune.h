@@ -16,6 +16,13 @@ struct BatchMemory {
     unsigned max_curves = 0;
 };
 std::string tune_shape_descriptor(const Plan& plan);
+struct Pm1BatchPlan {
+    unsigned batch = 1;
+    unsigned available = 1;
+    ecm_stage1::Stage1NttOptions ntt;
+};
+Pm1BatchPlan select_pm1_batch(int device, const std::vector<unsigned>& exponents,
+                              const ecm_stage1::Stage1NttOptions&);
 
 int tune_command(const ecm_stage1::Stage1Options&, double b1, const ecm_stage1::NttTuneGrid&, bool exhaustive, unsigned seconds);
 ecm_stage1::Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request&, unsigned p,

@@ -22,7 +22,8 @@ inline constexpr const char *parallel_columns[]={
     "condition","scope","target_bits","b1","b2","d","required_free_bytes","carrier_exponent","phase_mask","workers","curves",
     "repeats","mean_wall_seconds","mean_middle_seconds","middle_stddev_seconds","program_version","updated_at"
 };
-inline bool supported_format(Word value){return value>=8 && value<=format;}
+inline constexpr unsigned pm1_format=19;
+inline bool supported_format(Word value){return value>=8 && value<=pm1_format;}
 inline constexpr const char *matrix_column_order[]={
 #define ECM_STAGE2_TUNE_COLUMN(name) #name,
 #define ECM_STAGE2_TUNE_NTT_COLUMN(name)
@@ -201,7 +202,7 @@ inline bool is_stage1_ntt(const Fields &s) {
     const auto type=text(s,"ntt_type");
     return type==linear_ntt_type || type==weighted_ntt_type;
 }
-inline void validate_stage1_ntt(const Fields &s) {
+inline void validate_stage1_ntt(const Fields &s, bool pm1=false) {
     validate_provenance(s);
     const auto n=uint(s,"length"), batch=uint(s,"batch");
     const Word log=ecm_stage1::stage1_ntt_length_log(unsigned(n));
@@ -235,6 +236,18 @@ inline void validate_stage1_ntt(const Fields &s) {
            !valid || valid>batch || !(real(s,"curves_per_s")>0) ||
            uint(s,"dataflow")>UINT32_MAX || uint(s,"repeats")>1000000000)
             throw std::runtime_error("invalid Stage1 NTT production measurement");
+    }
+    if(pm1) {
+        const auto steps=uint(s,"timed_steps");
+        const double ms=real(s,"median_ms");
+        const auto bits=uint(s,"reference_bits"), phase=uint(s,"sample_phase");
+        if(!steps || !uint(s,"sample_target_ms") || !(ms>0) || phase<1 || phase>2 ||
+           uint(s,"b1")<2 || uint(s,"b1")>5000000000ull ||
+           bits<ecm_stage1::stage1_ntt_min_exponent || bits>uint(s,"max_exp") ||
+           uint(s,"dataflow")>UINT32_MAX || uint(s,"repeats")>ecm_stage1::ntt_max_repeats ||
+           std::abs(real(s,"iter_per_s")*ms/(1000.*batch*steps)-1)>1e-9)
+            throw std::runtime_error("invalid P-1 iteration timing");
+        return;
     }
     if(s.count("sample_target_ms")) {
         const auto window=uint(s,"naf_window"), width=optional_uint(s,"reference_bits");
@@ -768,7 +781,7 @@ inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
 struct Profile {
     Fields metadata;
     std::map<Word,Fields> conditions;
-    std::vector<Fields> samples,ntt,stage1_ntt,parallel;
+    std::vector<Fields> samples,ntt,stage1_ntt,pm1_stage1,parallel;
     bool stage1_compacted=false;
     // The CPU Stage2 worker owns these rows. CUDA never uses them as evidence.
     std::string cpu_stage2_tables;
@@ -841,6 +854,24 @@ struct Profile {
     };
     using Stage1RowIndex = std::map<Fields,std::vector<size_t>,Stage1DecisionLess>;
 
+    void update_pm1(Fields sample) {
+        if (!conditions.count(uint(sample,"condition")) || text(sample,"ntt_type") != weighted_ntt_type ||
+            sample.count("naf_window") || sample.count("curve") || sample.count("naf_memory_bytes"))
+            throw std::runtime_error("invalid P-1 tuning condition or arithmetic");
+        validate_stage1_ntt(sample,true);
+        const auto same = [&](const Fields& old) {
+            return uint(old,"b1")==uint(sample,"b1") && uint(old,"sample_phase")==uint(sample,"sample_phase") &&
+                uint(old,"repeats")==uint(sample,"repeats") && uint(old,"sample_target_ms")==uint(sample,"sample_target_ms") &&
+                !matrix_row_less(old,sample,ntt_row_order) && !matrix_row_less(sample,old,ntt_row_order);
+        };
+        const auto dominates=[](const Fields& a,const Fields& b) {
+            return stage1_dominates(a,b) && uint(a,"peak_bytes")<=uint(b,"peak_bytes");
+        };
+        for(const auto& old:pm1_stage1) if(same(old) && dominates(old,sample)) return;
+        pm1_stage1.erase(std::remove_if(pm1_stage1.begin(),pm1_stage1.end(),
+            [&](const Fields& old){return same(old) && dominates(sample,old);}),pm1_stage1.end());
+        pm1_stage1.push_back(std::move(sample));
+    }
     void update_stage1_ntt(Fields sample,bool observation=false,Stage1RowIndex* index=nullptr) {
         if (!sample.count("ntt_memory_bytes") && sample.count("owned_bytes"))
             sample["ntt_memory_bytes"] = sample.at("owned_bytes");
@@ -960,7 +991,7 @@ struct Profile {
         std::ifstream in(path,std::ios::binary);Profile out;Fields *table=nullptr;std::string line;
         Fields common;std::vector<std::string> columns;bool parameter_table=false,ntt_table=false,parallel_table=false,legacy_ntt=false,rows=false;
         Word table_key=0,row_count=0;std::set<std::string> sections;bool first=true,columns_seen=false,rows_seen=false;
-        bool cpu_table=false;
+        bool cpu_table=false,pm1_table=false;
         auto finish=[&]() {
             if(parameter_table && (!columns_seen || !rows_seen || !row_count || rows))
                 throw std::runtime_error("incomplete tune parameter table");
@@ -1002,7 +1033,8 @@ struct Profile {
                 Fields record=common;
                 for(size_t i=0;i<columns.size();++i)if(values[i]!="\"\"" && !record.emplace(columns[i],values[i]).second)
                     throw std::runtime_error("tune column duplicates a common field");
-                if(parallel_table)out.parallel.push_back(std::move(record));
+                if(pm1_table)out.pm1_stage1.push_back(std::move(record));
+                else if(parallel_table)out.parallel.push_back(std::move(record));
                 else if(ntt_table) {
                     if(legacy_ntt && uint(record,"condition")!=table_key)
                         throw std::runtime_error("NTT table condition/count mismatch");
@@ -1025,19 +1057,21 @@ struct Profile {
                 const auto section=line.substr(1,line.size()-2);
                 if(!sections.insert(section).second)throw std::runtime_error("duplicate tune table");
                 parallel_table=section=="stage2_parallel";
+                pm1_table=section=="pm1.stage1";
                 if(section=="profile")table=&out.metadata;
                 else if(section.compare(0,10,"condition.")==0) {
                     if(out.conditions.size()>=256)throw std::runtime_error("too many tune conditions");
                     table=&out.conditions[cost::integer(section.substr(10))];
-                } else if(parallel_table || section=="ntt" || section.compare(0,6,"width.")==0 || section.compare(0,4,"ntt.")==0) {
+                } else if(pm1_table || parallel_table || section=="ntt" || section.compare(0,6,"width.")==0 || section.compare(0,4,"ntt.")==0) {
                     legacy_ntt=section.compare(0,4,"ntt.")==0;
                     ntt_table=section=="ntt" || legacy_ntt;
                     if(legacy_ntt && optional_uint(out.metadata,"format",format)>=14)
                         throw std::runtime_error("NTT rows belong in one [ntt] table");
-                    table_key=section=="ntt" || parallel_table?0:cost::integer(section.substr(ntt_table?4u:6u));
-                    if(!ntt_table && !parallel_table && (table_key<2 || table_key>16384))throw std::runtime_error("invalid width knot");
+                    const bool width_table=section.compare(0,6,"width.")==0;
+                    table_key=width_table || legacy_ntt?cost::integer(section.substr(ntt_table?4u:6u)):0;
+                    if(width_table && (table_key<2 || table_key>16384))throw std::runtime_error("invalid width knot");
                     parameter_table=true;table=&common;
-                    if(section!="ntt" && !parallel_table)common[ntt_table?"condition":"target_bits"]=std::to_string(table_key);
+                    if(width_table || legacy_ntt)common[ntt_table?"condition":"target_bits"]=std::to_string(table_key);
                 } else throw std::runtime_error("unsupported tune table; regenerate this development profile");
             } else {
                 const auto eq=line.find('=');if(!table || eq==line.npos)throw std::runtime_error("invalid tune row");
@@ -1096,6 +1130,10 @@ struct Profile {
         }
         for(auto s:out.ntt){s["condition"]=std::to_string(remap.at(uint(s,"condition")));normalized.update_ntt(std::move(s),false);}
         Stage1RowIndex stage1_index;
+        for (auto& row : out.pm1_stage1) {
+            row["condition"]=std::to_string(remap.at(uint(row,"condition")));
+            normalized.update_pm1(std::move(row));
+        }
         for(auto& s:out.stage1_ntt) {
             s["condition"]=std::to_string(remap.at(uint(s,"condition")));
             if(uint(out.metadata,"format")<17 && s.count("sample_target_ms") && !s.count("batch_scope"))
@@ -1111,7 +1149,7 @@ struct Profile {
     }
     std::string serialize()const {
         if(conditions.empty() && metadata.empty() && !cpu_stage2_tables.empty())return cpu_stage2_tables;
-        std::ostringstream out;out<<"# Stage2 mean timings; identical parameters share one repeated measurement row.\n[profile]\nformat = "<<(!stage1_ntt.empty() || !ntt.empty() ? format : samples.empty() && parallel.empty() ? 14 : 16)<<"\nunit = \"full_stage2\"\n";
+        std::ostringstream out;out<<"# Stage2 mean timings; identical parameters share one repeated measurement row.\n[profile]\nformat = "<<(!pm1_stage1.empty() ? pm1_format : !stage1_ntt.empty() || !ntt.empty() ? format : samples.empty() && parallel.empty() ? 14 : 16)<<"\nunit = \"full_stage2\"\n";
         if(metadata.count("error_limit"))out<<"error_limit = "<<compact_literal(metadata.at("error_limit"))<<'\n';
         for(const auto &c:conditions) {
             out<<"\n[condition."<<c.first<<"]\n";
@@ -1158,6 +1196,7 @@ struct Profile {
             s["ntt_type"]=quoted(stage2_ntt_type);ntt_rows.push_back(std::move(s));
         }
         if(!ntt_rows.empty())emit("ntt",std::move(ntt_rows),true);
+        if(!pm1_stage1.empty())emit("pm1.stage1",pm1_stage1,true);
         if(!parallel.empty())emit("stage2_parallel",parallel,false);
         if(!cpu_stage2_tables.empty())out<<'\n'<<cpu_stage2_tables;
         return out.str();

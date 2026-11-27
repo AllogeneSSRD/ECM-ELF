@@ -7,10 +7,37 @@
 #include "io/files.h"
 #include "io/pm1_saves.h"
 #include <chrono>
+#include <fstream>
+#include <set>
 
 namespace ecm_pm1 {
 using ecm_edwards::Integer;
 using ecm_mersenne_ntt::Pm1Progress;
+
+std::vector<Pm1Task> batch_prefix(const std::string& path, size_t source_line, Pm1Task first,
+                                  const ecm_stage1::Stage1NttOptions& options, bool shared_prime95_dir) {
+    std::vector<Pm1Task> tasks{std::move(first)};
+    if (options.max_batch<=1 || options.tune_file.empty()) return tasks;
+    std::ifstream in(path);
+    std::string raw;
+    for (size_t n=0;n<source_line;++n)
+        if (!std::getline(in,raw)) return tasks;
+    if (ecm_queue::task_text(raw)!=tasks.front().raw_line) return tasks;
+    std::set<std::pair<unsigned,uint64_t>> destinations{{tasks.front().p,shared_prime95_dir?0:tasks.front().b1}};
+    while (tasks.size()<options.max_batch && std::getline(in,raw)) {
+        const auto kind=ecm_queue::classify_line(raw,nullptr,nullptr);
+        if (kind==ecm_queue::LineKind::Comment) continue;
+        if (kind!=ecm_queue::LineKind::Task) break;
+        const auto text=ecm_queue::task_text(raw);
+        Pm1Task next;
+        std::string error;
+        if (!ecm_is_pm1_line(text) || !ecm_parse_pm1_line(text,next,error)) break;
+        if (!destinations.emplace(next.p,shared_prime95_dir?0:next.b1).second) break;
+        tasks.push_back(std::move(next));
+    }
+    if (in.bad()) throw std::runtime_error("cannot read Pminus1 queue prefix: "+path);
+    return tasks;
+}
 
 Outcome run(const Pm1Task& task, uint64_t b2, const ecm_stage1::Stage1Options& options,
             const std::filesystem::path& owl_root, const std::filesystem::path& prime95_dir) {

@@ -1521,6 +1521,7 @@ void merge_portable_tune(const Options &o,const fs::path &destination) {
     auto merge_ntt=[&](const pt::Profile &source) {
         for(auto s:source.ntt){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update_ntt(std::move(s),false);}
         for(auto s:source.stage1_ntt){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update_stage1_ntt(std::move(s));}
+        for(auto s:source.pm1_stage1){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update_pm1(std::move(s));}
     };
     for(const auto &path:o.tune_merge) {
         const auto source=pt::Profile::load(absolute_from(fs::current_path(),path));
@@ -2185,6 +2186,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
         const auto old=pt::Profile::load(absolute_from(fs::current_path(),path));
         for(auto s:old.ntt){s["condition"]=std::to_string(profile.condition(old.conditions.at(et::uint(s,"condition"))));profile.update_ntt(std::move(s),false);}
         for(auto s:old.stage1_ntt){s["condition"]=std::to_string(profile.condition(old.conditions.at(et::uint(s,"condition"))));profile.update_stage1_ntt(std::move(s));}
+        for(auto s:old.pm1_stage1){s["condition"]=std::to_string(profile.condition(old.conditions.at(et::uint(s,"condition"))));profile.update_pm1(std::move(s));}
     }
     pt::Budget budget(double(o.tune_budget));
     std::vector<PortableTuneTarget> targets;

@@ -12,6 +12,8 @@ Pminus1=1,2,400381,-1,500,1000
 
 完整语法为 `Pminus1=[AID,]1,2,p,-1,B1,B2[,how_far_factored][,B2_start][,"factors"]`。p 取 32 至 5,242,880 范围内的素数，B1 取 2 至 5,000,000,000。CUDA 加权 NTT 在完整 M=2ᵖ−1 上计算 3 的 2p·lcm(1,…,B1) 次幂。CPU GMP 对 x−1 和剥离原有已知因子后的余因子求 GCD。完成记录位于 worker 的 finished 文件，包括本轮找到的真因子或 `gcd=target`。
 
+连续的 `Pminus1` 可按相同 NTT 长度并发执行。用 `ecm_cuda -tune "pm1,exp=400381,batch=1-4"` 测量本机的批量和执行形状。批次选择、计时口径和矩阵字段见 [P−1 Stage1 调优](TUNE.md#pm1-stage1-tune)。
+
 **存档。** 每个完成的任务都写 Prime95 v8 的原生 `m…` 文件。默认交接目录是 ecm.toml 同目录下的 `pm1/M<p>-B1-<B1>/`。该目录下的 `p1-<p>/` 同时保存 GpuOwl 断点；可与本地参考版 PRPLL（`6dd6dd5`）交换该目录，在相同 p 和 B1 下双向续算。定期保存和停止时的断点均取 Gerbicz 校验通过的块末。已有其他内容的 Prime95 存档占用目标名时，worker 保留任务并报出文件路径。
 
 **Stage 2 交接。** Pminus1 使用 `[stage1]` 下的 `handoff_mode_pm1`，默认 `"prime95"`，即使通用 `handoff_mode` 为 `"off"` 也会按此设置交接。可在 `[worker.N]` 覆盖同名键。设为 `"off"` 时仍写 Prime95 存档，所有 Pminus1 任务均跳过 worktodo 发布。
