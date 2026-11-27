@@ -161,6 +161,24 @@
     },
     {
       "owner": "stage1",
+      "key": "handoff_mode_pm1",
+      "template_level": "core",
+      "field": "handoff_mode_pm1",
+      "type": "string",
+      "default": "prime95",
+      "domain": "[off|prime95]",
+      "parser": "enum",
+      "description": [
+        "Overrides handoff_mode for Pminus1 tasks. prime95 publishes eligible Stage2 assignments. off keeps the Prime95 Stage1 save and skips publication, even with stage2_after_factored enabled.",
+        "Pminus1 任务优先使用此设置。prime95 向接收端发布符合条件的 Stage2 任务。off 只保留 Prime95 Stage1 存档，即使开启 stage2_after_factored 也不发布。"
+      ],
+      "values": [
+        "off",
+        "prime95"
+      ]
+    },
+    {
+      "owner": "stage1",
       "key": "handoff_partial",
       "field": "handoff_partial",
       "type": "bool",

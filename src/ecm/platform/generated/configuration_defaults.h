@@ -11,6 +11,7 @@ inline constexpr char stage1_shared_cpu_affinity[]="";
 inline constexpr char stage1_shared_tune_file[]="tune.toml";
 inline constexpr char stage1_param[]="auto";
 inline constexpr char stage1_handoff_mode[]="ecm-elf";
+inline constexpr char stage1_handoff_mode_pm1[]="prime95";
 inline constexpr bool stage1_handoff_partial=true;
 inline constexpr char stage1_handoff_unsupported[]="ecm-elf";
 inline constexpr char stage1_worktodo[]="worktodo.txt";

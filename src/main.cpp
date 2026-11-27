@@ -1011,7 +1011,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
             done.finished = finished_path;
             done.record = line + " # P-1 Stage1 " + (outcome.whole_target ? "gcd=target" :
                 outcome.factor.empty() ? std::string("no factor") : "factor=" + outcome.factor);
-            if (outcome.factor.empty() || after_factored) {
+            if (cfg.handoff_mode_pm1 == "prime95" && (outcome.factor.empty() || after_factored)) {
                 if (!receiver.empty() && (!receiver.has_extension() || same_path(receiver.u8string(), add.u8string())))
                     throw std::runtime_error("Prime95 receiver needs a queue filename distinct from .add");
                 for (const auto& path : {receiver, add, alternate_add}) {

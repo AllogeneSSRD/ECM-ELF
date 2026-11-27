@@ -11,6 +11,7 @@
       <Item id="option_shared_shared_tune_file" name="CUDA Stage1、CUDA Stage2 和 CPU GWNUM Stage2 共用此文件，默认使用 ecm.toml 同目录的 tune.toml。worker 可覆盖路径。显式留空时关闭自动持久化。" />
       <Item id="option_stage1_param" name="Stage1 曲线构造。auto 时，队列任务默认用 Edwards，直接输入在 CPU 上默认用 m0，在 GPU 上默认用 m3。curve 可在 auto 时指定曲线。ECMSTAGE1 的存档类型前缀优先。" />
       <Item id="option_stage1_handoff_mode" name="Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接收方。off 只保留存档，prime95 交给 Prime95。" />
+      <Item id="option_stage1_handoff_mode_pm1" name="Pminus1 任务优先使用此设置。prime95 向接收端发布符合条件的 Stage2 任务。off 只保留 Prime95 Stage1 存档，即使开启 stage2_after_factored 也不发布。" />
       <Item id="option_stage1_handoff_partial" name="Stage1 继续运行时，将已完成的批次交接给 ECM-ELF Stage2。" />
       <Item id="option_stage1_handoff_unsupported" name="Prime95 协议不支持该存档时使用的后备方式。" />
       <Item id="option_shared_worktodo" name="共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，Pminus1 交给 CUDA P-1 Stage1，ECMSTAGE2、ECMSTAGE2N 和 ECMSTAGE2PART 交给 Stage2。同一 worker 同时由一个进程消费队列。" />

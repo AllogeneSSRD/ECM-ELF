@@ -140,6 +140,8 @@ Queue input and Stage2 handoff:
   All read B1 from the save. An omitted or zero count selects all records after skip
   on ordinary Stage2 tasks. PART requires a positive count and defers the NF report.
   TOML [stage1] handoff_mode = "ecm-elf" (default), "off", or "prime95".
+  Pminus1 uses handoff_mode_pm1 = "prime95" (default) or "off".
+  Both modes write the Prime95 save. Only "prime95" publishes a Stage2 assignment.
   ECM-ELF handoff appends an eligible ECMSTAGE2 line to the original worker.
   handoff.workers / handoff.worktodo_file select another destination.
   Published counts use the actual saved range, including any extra NTT tail curves.

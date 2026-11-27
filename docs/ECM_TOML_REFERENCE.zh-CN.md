@@ -371,6 +371,16 @@ handoff_mode = "ecm-elf"
 
 Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接收方。off 只保留存档，prime95 交给 Prime95。
 
+### handoff_mode_pm1
+
+```toml
+handoff_mode_pm1 = "prime95"
+```
+
+类型 `string` · 范围 `[off|prime95]` · Worker 覆盖 `[worker.N] handoff_mode_pm1` · 级别 `常用`。
+
+Pminus1 任务优先使用此设置。prime95 向接收端发布符合条件的 Stage2 任务。off 只保留 Prime95 Stage1 存档，即使开启 stage2_after_factored 也不发布。
+
 ### handoff_partial
 
 ```toml

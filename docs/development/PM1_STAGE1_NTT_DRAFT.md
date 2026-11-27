@@ -42,6 +42,8 @@ Pminus1=[AID,]1,2,p,-1,B1,B2[,how_far_factored][,B2_start][,"factors"]
 
 ## 实现与实测
 
+- 0.75.1 增加 Pminus1 专用的 `handoff_mode_pm1`，默认 `prime95`，可按 worker 设为 `off` 仅写存档。队列回归覆盖通用模式关闭、专用模式关闭以及两个方向的 worker 覆盖。
+
 - 0.75.0 的 CUDA worker 在正常队列执行 Pminus1。设备端在规范余数上以两次模加完成乘 3，按位执行 CUDA Graph 或直接提交。GMP 对照覆盖 p=37、400381、3500017、5242877；后两例分别使用 163840 和 262144 点。独立故障注入使两次校验失败并回滚，30 个已验证断点逐一与 GMP 相等。[CUDA 算术入口](../../src/ecm/stage1/cuda/ntt/ladder.cu) · [回滚验收](../../tools/test/pm1_gerbicz_test.cpp) · [证据目录](../../data/experiments/pm1_stage1_interop_20261127)
 - Windows sm89 worker 和 GpuOwl `6dd6dd5` 在 RTX 4070 Ti 上双向续算 M400381、B1=500。ECM-ELF 从 GpuOwl 的 k=115/744 恢复，GpuOwl 从 ECM-ELF 的 k=691/744 恢复。两端与 GpuOwl 从头运行的 50,048 字节终点逐字节相同。上游 GMP oracle 独立核对 Prime95 完成档的字段、校验和及余数，res64 为 `8eb02f6cfcfe4958`，GCD=1。[双向恢复脚本](../../tools/test/test_pm1_gpuowl_resume.py) · [GMP 核对](../../data/experiments/pm1_stage1_interop_20261127/resume-wapicf73/upstream_oracle.log)
 - 九个生产队列用例覆盖发布开关、已知因子、gcd=T、B2 推导和交接。Prime95 31.6 build 1 从阶段边界接手三个 M400381 任务，均在 Stage 2 GCD 得到 671839319。普通交接行给出 500/1000；强制交接给出 1000/2000 并使用 `Stage1GCD=-1`；双零交接给出 500/0，Prime95 启动日志显示 B2=TBD。这三个小界任务的接收端实际报告 B2=89850。任务行中的请求上界和接收端实际处理上界分别核验。[队列矩阵](../../tools/test/test_pm1_stage1_queue.py) · [接收端验收脚本](../../tools/test/test_pm1_prime95_handoff.ps1) · [接收端日志](../../data/experiments/pm1_stage1_interop_20261127/receiver_trace)

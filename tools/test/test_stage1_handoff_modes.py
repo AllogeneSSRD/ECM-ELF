@@ -135,7 +135,8 @@ handoff_unsupported = "{fallback}"
 
     scenario("default_local", None, expected="in-place")
     scenario("explicit_off", "off")
-    scenario("local_in_place", "ecm-elf", expected="in-place")
+    scenario("local_in_place", "ecm-elf", expected="in-place",
+             stage1_extra='handoff_mode_pm1 = "off"\n')
     scenario("slice_below_boundary", "ecm-elf", local_receiver=2,
              stage1_extra='handoff_workers = "2[:128], 3[128:]"\n')
     scenario("slice_at_boundary", "ecm-elf", local_receiver=3,

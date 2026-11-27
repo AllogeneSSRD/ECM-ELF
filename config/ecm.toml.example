@@ -82,6 +82,12 @@ worktodo_file = "worktodo.txt"  # string: <path>
 # Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接
 # 收方。off 只保留存档，prime95 交给 Prime95。
 
+# handoff_mode_pm1 = "prime95"  # string: [off|prime95]
+# Overrides handoff_mode for Pminus1 tasks. prime95 publishes eligible Stage2 assignments. off keeps
+# the Prime95 Stage1 save and skips publication, even with stage2_after_factored enabled.
+# Pminus1 任务优先使用此设置。prime95 向接收端发布符合条件的 Stage2 任务。off 只保留 Prime95 Stage1
+# 存档，即使开启 stage2_after_factored 也不发布。
+
 # handoff_partial = true  # bool: [false|true|0|1]
 # Publish completed Stage1 batches to ECM-ELF Stage2 while Stage1 continues.
 # Stage1 继续运行时，将已完成的批次交接给 ECM-ELF Stage2。

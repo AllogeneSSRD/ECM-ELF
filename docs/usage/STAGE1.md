@@ -14,7 +14,9 @@ Pminus1=1,2,400381,-1,500,1000
 
 **存档。** 每个完成的任务都写 Prime95 v8 的原生 `m…` 文件。默认交接目录是 ecm.toml 同目录下的 `pm1/M<p>-B1-<B1>/`。该目录下的 `p1-<p>/` 同时保存 GpuOwl 断点；可与本地参考版 PRPLL（`6dd6dd5`）交换该目录，在相同 p 和 B1 下双向续算。定期保存和停止时的断点均取 Gerbicz 校验通过的块末。已有其他内容的 Prime95 存档占用目标名时，worker 保留任务并报出文件路径。
 
-**Stage 2 交接。** 无真因子时发布 `worktodo.add`。有真因子时仅在产生存档的 worker 设置 `[stage2].stage2_after_factored=1` 时发布。交接保留原 AID、试除深度、B2_start 和已知因子列表，本轮发现的因子仅记入本机结果。任务 B2 非零时原样交接，为零时输出 B1 × `b2_ratio`，比例也为零则交接 B2=0，Prime95 自行选界。参考版 GpuOwl 将 B2=0 解释为仅运行 Stage 1。
+**Stage 2 交接。** Pminus1 使用 `[stage1]` 下的 `handoff_mode_pm1`，默认 `"prime95"`，即使通用 `handoff_mode` 为 `"off"` 也会按此设置交接。可在 `[worker.N]` 覆盖同名键。设为 `"off"` 时仍写 Prime95 存档，所有 Pminus1 任务均跳过 worktodo 发布。
+
+使用 `"prime95"` 时，无真因子即发布 `worktodo.add`；有真因子时仅在产生存档的 worker 设置 `[stage2].stage2_after_factored=1` 时发布。交接保留原 AID、试除深度、B2_start 和已知因子列表，本轮发现的因子仅记入本机结果。任务 B2 非零时原样交接，为零时输出 B1 × `b2_ratio`，比例也为零则交接 B2=0，Prime95 自行选界。参考版 GpuOwl 将 B2=0 解释为仅运行 Stage 1。
 
 要直接交给 Prime95，可在 `[stage1]` 指定 `prime95_save_dir` 和 `prime95_worktodo_file` 指向接收程序使用的存档目录与工作文件。接收端若要在 Stage 2 末尾重新发现 Stage 1 因子，可设置 `Stage1GCD=-1`。使用上述小界示例测试 Prime95 时设置 `AllowLowB1=1`。ECM-ELF 在存档和任务行发布后结束该任务。
 

@@ -28,7 +28,8 @@ def saved_residue(root, p, b1):
     raise AssertionError("missing completed GpuOwl checkpoint")
 
 
-def run(exe, directory, p, b1, b2, ratio, after, factor, tail="", whole=False):
+def run(exe, directory, p, b1, b2, ratio, after, factor, tail="", whole=False,
+        stage1_settings="", worker_settings="", publish=None):
     directory.mkdir(parents=True)
     aid = "1234567890abcdef1234567890abcdef"
     prefix = f"Pminus1={aid},1,2,{p},-1,{b1},"
@@ -37,7 +38,7 @@ def run(exe, directory, p, b1, b2, ratio, after, factor, tail="", whole=False):
     config = directory / "ecm.toml"
     config.write_text(
         'config_version=4\n[shared]\nworktodo_file="worktodo.txt"\nfinished_file="finished.txt"\n'
-        '[stage2]\nb2_ratio=99\n[worker.2]\n'
+        f'[stage1]\n{stage1_settings}\n[stage2]\nb2_ratio=99\n[worker.2]\n{worker_settings}\n'
         f'b2_ratio={ratio}\nstage2_after_factored={after}\n'
     )
     result = subprocess.run([str(exe), "--config", str(config), "--worker", "2"],
@@ -55,7 +56,8 @@ def run(exe, directory, p, b1, b2, ratio, after, factor, tail="", whole=False):
     assert record.startswith(line + " # P-1 Stage1 ")
     assert record.endswith("gcd=target" if whole else f"factor={factor}" if factor else "no factor")
     add = root / "worktodo.add"
-    assert add.exists() == (not factor or bool(after))
+    assert add.exists() == ((not factor or bool(after)) if publish is None else publish)
+    assert not (root / "worktodo.add.txt").exists()
     if add.exists():
         assert add.read_text().splitlines() == [prefix + str(b2 or b1 * ratio) + tail]
     print(directory.name, "OK", flush=True)
@@ -75,3 +77,13 @@ if __name__ == "__main__":
     run(exe, output / "p95_stage2", 400381, 500, 1000, 0, 0, None)
     run(exe, output / "p95_forced", 400381, 1000, 2000, 0, 1, 671839319)
     run(exe, output / "p95_auto", 400381, 500, 0, 0, 0, None)
+    run(exe, output / "default_over_global_off", 37, 2, 0, 0, 0, None,
+        stage1_settings='handoff_mode="off"', publish=True)
+    run(exe, output / "pm1_off", 37, 2, 0, 0, 0, None,
+        stage1_settings='handoff_mode="prime95"\nhandoff_mode_pm1="off"', publish=False)
+    run(exe, output / "worker_off_after_factor", 37, 3, 0, 2, 1, 223,
+        stage1_settings='handoff_mode_pm1="prime95"',
+        worker_settings='handoff_mode_pm1="off"', publish=False)
+    run(exe, output / "worker_prime95", 37, 2, 0, 0, 0, None,
+        stage1_settings='handoff_mode_pm1="off"',
+        worker_settings='handoff_mode_pm1="prime95"', publish=True)

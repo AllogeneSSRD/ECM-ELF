@@ -371,6 +371,16 @@ Type `string` · Range `[off|ecm-elf|prime95]` · Worker override `[worker.N] ha
 
 Send successful Stage1 tasks with usable points and no factor to ECM-ELF Stage2 by default. Append the new task at the end of the source worker's queue unless a receiver is configured. Use off to keep the save or prime95 to select Prime95.
 
+### handoff_mode_pm1
+
+```toml
+handoff_mode_pm1 = "prime95"
+```
+
+Type `string` · Range `[off|prime95]` · Worker override `[worker.N] handoff_mode_pm1` · Level `core`.
+
+Overrides handoff_mode for Pminus1 tasks. prime95 publishes eligible Stage2 assignments. off keeps the Prime95 Stage1 save and skips publication, even with stage2_after_factored enabled.
+
 ### handoff_partial
 
 ```toml

@@ -11,6 +11,7 @@ inline constexpr BusinessOption business_options[]={
     {"shared","shared_tune_file","<path>","option_shared_shared_tune_file","string",false,false,0,0},
     {"stage1","param","[auto|e|m0|m2|m3]","option_stage1_param","string",false,false,0,0},
     {"stage1","handoff_mode","[off|ecm-elf|prime95]","option_stage1_handoff_mode","string",false,false,0,0},
+    {"stage1","handoff_mode_pm1","[off|prime95]","option_stage1_handoff_mode_pm1","string",false,false,0,0},
     {"stage1","handoff_partial","[false|true|0|1]","option_stage1_handoff_partial","bool",false,false,0,0},
     {"stage1","handoff_unsupported","[ecm-elf|keep-save]","option_stage1_handoff_unsupported","string",false,false,0,0},
     {"shared","worktodo","<path>","option_shared_worktodo","string",false,false,0,0},

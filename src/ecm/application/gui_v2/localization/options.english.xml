@@ -11,6 +11,7 @@
       <Item id="option_shared_shared_tune_file" name="CUDA Stage1, CUDA Stage2 and CPU GWNUM Stage2 share this file. Defaults to tune.toml beside ecm.toml. Workers can override the path. An explicit empty value disables automatic persistence." />
       <Item id="option_stage1_param" name="Stage1 curve construction. With auto, queue tasks default to Edwards and direct input defaults to m0 on CPU or m3 on GPU. The optional curve key applies with auto. A typed ECMSTAGE1 save name takes precedence." />
       <Item id="option_stage1_handoff_mode" name="Send successful Stage1 tasks with usable points and no factor to ECM-ELF Stage2 by default. Append the new task at the end of the source worker's queue unless a receiver is configured. Use off to keep the save or prime95 to select Prime95." />
+      <Item id="option_stage1_handoff_mode_pm1" name="Overrides handoff_mode for Pminus1 tasks. prime95 publishes eligible Stage2 assignments. off keeps the Prime95 Stage1 save and skips publication, even with stage2_after_factored enabled." />
       <Item id="option_stage1_handoff_partial" name="Publish completed Stage1 batches to ECM-ELF Stage2 while Stage1 continues." />
       <Item id="option_stage1_handoff_unsupported" name="Fallback for saves unsupported by the Prime95 protocol." />
       <Item id="option_shared_worktodo" name="Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1. Pminus1 selects CUDA P-1 Stage1. ECMSTAGE2, ECMSTAGE2N and ECMSTAGE2PART select Stage2. One process consumes a worker queue at a time." />
