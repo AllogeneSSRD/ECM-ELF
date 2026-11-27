@@ -145,7 +145,7 @@ worktodo_file = "worktodo.txt"
 
 Type `string` · Range `<path>` · Worker override `[worker.N] worktodo_file` · Level `core`.
 
-Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1; ECMSTAGE2 and ECMSTAGE2N select Stage2. One process consumes a worker queue at a time.
+Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1. ECMSTAGE2, ECMSTAGE2N and ECMSTAGE2PART select Stage2. One process consumes a worker queue at a time.
 
 ## [stage1]
 
@@ -370,6 +370,16 @@ handoff_mode = "ecm-elf"
 Type `string` · Range `[off|ecm-elf|prime95]` · Worker override `[worker.N] handoff_mode` · Level `core`.
 
 Send successful Stage1 tasks with usable points and no factor to ECM-ELF Stage2 by default. Append the new task at the end of the source worker's queue unless a receiver is configured. Use off to keep the save or prime95 to select Prime95.
+
+### handoff_partial
+
+```toml
+handoff_partial = true
+```
+
+Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] handoff_partial` · Level `advanced`.
+
+Publish completed Stage1 batches to ECM-ELF Stage2 while Stage1 continues.
 
 ### handoff_unsupported
 
@@ -1023,7 +1033,7 @@ checkpoint_dir = ""
 
 Type `string` · Range `<dir>` · Worker override `[worker.N] checkpoint_dir` · Level `advanced`.
 
-Directory for per-task .ecm_ckpt_stage2_<bits>_<B1>.dat progress files. Empty uses the legacy progress file's directory if explicitly set, otherwise the queue directory. Task IDs bind AID, N, full save contents and queue_skip. On restart the current effective B2/Auto B2 and requested curve count override the checkpoint policy; completed curves retain their actual bounds. A target below the completed count warns and seals all completed work. New checkpoints contain completed curve state and pending submission data. They are removed after publication and queue advancement.
+Directory for direct-save Stage2 checkpoints. Empty uses the configured progress file directory or the queue directory. Queue tasks share one checkpoint beside each save and retain the effective B2 of each completed curve.
 
 <a id="stage2_progress_file"></a>
 
@@ -1035,7 +1045,7 @@ checkpoint_legacy_file = ""
 
 Type `string` · Range `<path>` · Worker override `[worker.N] checkpoint_legacy_file` · Level `legacy`.
 
-Legacy single-file progress import path. Empty checks the old queue-path plus worker-suffix .progress file. A matching task's completed count and pending receipt are imported into its own .ecm_ckpt_stage2_<bits>_<B1>.dat file. An unrelated legacy task is retained and does not stop this task. New progress files use checkpoint_dir; no arithmetic state is checkpointed.
+Legacy progress path. Its parent directory is used for direct-save checkpoints when checkpoint_dir is empty. Shared queue checkpoints are stored beside the save.
 
 <a id="stage2_cpu_backend"></a>
 

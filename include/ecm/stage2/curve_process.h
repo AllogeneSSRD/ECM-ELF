@@ -12,6 +12,7 @@ struct CurvePublication {
 // One synchronous curve-process launch. Owns no CLI parser or compute state.
 struct CurveProcessRequest {
     std::filesystem::path save,results,log;
+    std::string projection_target;
     struct Record {uint64_t offset=0,hash=0,index=0;} record;
     struct ConsoleBudget {uint64_t arena=0,owner_mb=0;} console_budget;
     uint64_t b2=0,b2_min=0,d=0,batch=0;

@@ -3,6 +3,7 @@
 #include "ecm/stage1/selection.h"
 #include <gmp.h>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -105,13 +106,18 @@ enum class TaskStatus { Completed, Stopped, Failed };
 enum class FailureSource { None, Preparation, Execution, Publication, Persistence, Device };
 
 struct TaskDependencies;
+struct PartialHandoff {
+    std::string source;
+    bool enabled;
+    std::function<void(const std::string&, uint64_t, uint32_t)> publish;
+};
 
 // Owns the per-curve payload. Getter pointers remain borrowed until this value
 // is moved or destroyed; factor/found/sigma indices must be below curves().
 class TaskResult {
     struct State;
     std::unique_ptr<State> data_;
-    friend TaskResult run_stage1_task(const Stage1Request &,const TaskDependencies &);
+    friend TaskResult run_stage1_task(const Stage1Request &, const TaskDependencies &, const PartialHandoff*);
 public:
     TaskResult();
     ~TaskResult();
@@ -132,10 +138,11 @@ public:
     int found(uint32_t index) const noexcept;
     uint64_t sigma(uint32_t index) const noexcept;
     const ecm_save::Range &save_range() const noexcept;
+    const std::string& handoff_group() const noexcept;
     const std::string &completed_checkpoint() const noexcept;
 };
 
-TaskResult run_stage1_task(const Stage1Request &,const TaskDependencies &);
+TaskResult run_stage1_task(const Stage1Request &, const TaskDependencies &, const PartialHandoff* = nullptr);
 // Used while applying a GPU range policy to retain an in-flight NTT task.
 std::optional<GpuAlgorithm> stage1_checkpoint_gpu_algorithm(const Stage1Request&);
 

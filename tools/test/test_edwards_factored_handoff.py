@@ -64,7 +64,9 @@ def main():
                     'stage2_after_factored=true' if enabled else '')
         run(stage1, path, 'stage1')
         original = path / 'e_input_20.save'
-        assert records(original) == [(target * m127, 1009, 17, 20, 'FACTOR')]
+        saved = records(original)
+        assert saved[0] == (target * m127, 1009, 17, 20, 'FACTOR')
+        assert len(saved) == 1
         assert 'QCHECKSUM=' in original.read_text()
         queue = path / 'worktodo.txt'
         if enabled:
@@ -75,13 +77,14 @@ def main():
             assert task.startswith('ECMSTAGE2=')
             fields = next(csv.reader([task.split('=', 1)[1]]))
             assert fields[-1] == '1009'
-            projected, = records(Path(fields[-5]))
-            assert projected[0] == 10007 * m127 and projected[2:] == (17, 20, 'POINT')
+            assert Path(fields[-6]) == original
+            assert fields[-4:-1] == ['0', '1', 'project=cofactor']
             worker_flags = ('--worker', '2') if sliced else ()
             run(stage2, path, 'stage2', '--once', *worker_flags)
             assert 'ECMSTAGE2=' not in queue.read_text()
             result, = map(json.loads, (path / 'stage2.jsonl').read_text().splitlines())
             assert result['stage'] == 2 and result['factors'] == ['10007']
+            assert records(original) == saved
         else:
             assert not queue.read_text().strip()
             assert 'validated 0 curves' in run(stage2, path, 'skip_factor', '--save', original,

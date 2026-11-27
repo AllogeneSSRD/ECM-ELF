@@ -48,6 +48,7 @@ using ecm_stage1_app::stage1_result_settings;
 #include "ecm/stage1/sigma.h"
 #include "io/config.h"
 #include "io/stage1_checkpoint.h"
+#include "io/stage2_handoff.h"
 #include "io/worktodo.h"
 #include "sync/p95.h" /* finished task -> Prime95 worktodo.add (D4/§13) */
 #include "sync/stage2.h"
@@ -254,6 +255,7 @@ struct QueueItem : WorktodoStage1Task {
     std::string auto_stage2_line;
     bool append_stage2 = false;
     bool after_factored = false;
+    bool partial_handoff = false;
     const P95TransferConfig* p95 = nullptr;
     const Stage2TransferConfig* stage2 = nullptr;
 };
@@ -344,7 +346,31 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
         ecm_ts_fprintf(stdout, "stage1_handoff: bits=%zu worker=0\n", handoff_bits);
         std::fflush(stdout);
     }
-    auto result = run_stage1_task(item.input.request(), stage1_tasks(opt));
+    const auto send_partial = [&](const std::string& assignment) {
+        std::string error;
+        if (stage2) {
+            int receiver = 0;
+            if (!ecm_stage2_transfer_park(*stage2, assignment, error, &receiver, handoff_bits))
+                throw std::runtime_error(error);
+            size_t remaining = 0;
+            if (!ecm_stage2_transfer_flush(stage2->pending, remaining, error))
+                ecm_ts_fprintf(stderr, "Stage2 partial transfer pending: %s\n", error.c_str());
+        } else if (!ecm_worktodo_append_unique(worktodo_path, finished_path, worker, assignment, error)) {
+            throw std::runtime_error(error);
+        }
+    };
+    // Stage1 may repair the skip column when claiming a resumed, already appended save.
+    PartialHandoff partial{worktodo_path + '|' + std::to_string(worker) + '|' + aid, item.partial_handoff,
+        [&](const std::string& group, uint64_t skip, uint32_t count) {
+            std::string assignment, error;
+            if (!ecm_rewrite_stage2_range(stage2_line, skip, count, assignment, error))
+                throw std::runtime_error(error);
+            send_partial(ecm_stage2_handoff_line(assignment, {}, true));
+            ecm_ts_fprintf(stdout, "stage1_handoff_part: skip=%llu curves=%u group=%s\n",
+                           static_cast<unsigned long long>(skip), count, group.c_str());
+        }};
+    auto result = run_stage1_task(item.input.request(), stage1_tasks(opt),
+                                 !p95 && (stage2 || !auto_stage2_line.empty()) ? &partial : nullptr);
 
     const bool has_factors = result.has_factors();
 
@@ -441,22 +467,31 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
                 *handoff = rewritten;
             }
         const bool edwards = opt.execution.selection.curve == CurveModel::Edwards;
+        if (!result.handoff_group().empty()) {
+            if (found_factor) {
+                const auto ledger = ecm_handoff::Ledger::read(ecm_handoff::checkpoint_path(std::filesystem::u8path(range.path)));
+                const auto& group = ledger.producers.at(result.handoff_group());
+                if (!ecm_rewrite_stage2_range(stage2_line, range.skip, group.prefix_count, rewritten, error))
+                    throw std::runtime_error(error);
+                send_partial(ecm_stage2_handoff_line(rewritten, result.handoff_group(), false));
+            } else {
+                stage2_line = ecm_stage2_handoff_line(stage2_line, result.handoff_group(), false);
+                if (!auto_stage2_line.empty()) auto_stage2_line = stage2_line;
+            }
+        }
         if (found_factor && edwards && item.after_factored && (stage2 || !auto_stage2_line.empty())) {
             const auto projection = ecm_edwards::cofactor_batch(range.records);
-            if (projection.curves) {
+            if (projection.modulus_bits) {
                 EcmStage2Task assignment;
                 if (!ecm_parse_stage2_line(stage2_line, assignment, error))
                     throw std::runtime_error(error);
-                const auto identity = ecm_io::fingerprint(stage2_line + "\n" + projection.lines);
-                const auto path = range.path + ".cofactor-" + std::to_string(identity) + ".save";
-                (void)ecm_save::publish_batch(path, projection.lines, false);
-                stage2_line = ecm_stage2_cofactor_line(assignment, path, projection.curves,
-                                                       projection.factors);
+                stage2_line = ecm_stage2_cofactor_line(assignment, range.path, range.skip,
+                                                      count, projection.factors);
                 handoff_bits = projection.modulus_bits;
                 if (!auto_stage2_line.empty()) auto_stage2_line = stage2_line;
                 deliver_stage2 = true;
-                ecm_ts_fprintf(stdout, "Stage2 cofactor handoff: curves=%u save=%s\n",
-                               projection.curves, path.c_str());
+                ecm_ts_fprintf(stdout, "Stage2 cofactor handoff: skip=%llu curves=%u save=%s\n",
+                               static_cast<unsigned long long>(range.skip), count, range.path.c_str());
             } else ecm_ts_fprintf(stdout, "Stage2 cofactor handoff: no usable Edwards endpoint\n");
         } else if (edwards && !found_factor && std::all_of(range.records.begin(), range.records.end(),
                        [](const auto& row) { return row.find("; STATUS=IDENTITY;") != row.npos; })) {
@@ -963,6 +998,8 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                 item.stage2 = &stage2cfg;
             else if (cfg.auto_stage2)
                 item.auto_stage2_line = item.stage2_line;
+            item.partial_handoff = cfg.handoff_partial && !item.p95 &&
+                                   (item.stage2 || !item.auto_stage2_line.empty());
         } else {
             bool use_local = cfg.handoff_mode == "ecm-elf";
             if (cfg.handoff_mode == "prime95") {
@@ -975,6 +1012,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                 }
             }
             if (use_local) {
+                item.partial_handoff = cfg.handoff_partial;
                 if (local_route_is_external())
                     item.stage2 = stage2_receiver_config(true);
                 else {

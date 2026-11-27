@@ -2,6 +2,8 @@
 #include "edwards/memory.h"
 #include "edwards/cpu/ecm_edwards_cpu.h"
 #include "../../io/stage1_checkpoint.h"
+#include "../../io/stage2_handoff.h"
+#include <iomanip>
 #include "../../io/stage1_checkpoint_identity.h"
 #include "ecm/stage1/selection.h"
 #include "ecm/stage1/ntt_target.h"
@@ -64,6 +66,7 @@ struct TaskResult::State {
     int task_return = ECM_ERROR;
     ecm_save::Range save_range;
     std::string completed_checkpoint;
+    std::string handoff_group;
 };
 
 TaskResult::TaskResult() : data_(std::make_unique<State>()) {
@@ -126,6 +129,10 @@ uint64_t TaskResult::sigma(uint32_t i) const noexcept {
 
 const ecm_save::Range& TaskResult::save_range() const noexcept {
     return data_->save_range;
+}
+
+const std::string& TaskResult::handoff_group() const noexcept {
+    return data_->handoff_group;
 }
 
 const std::string& TaskResult::completed_checkpoint() const noexcept {
@@ -198,12 +205,13 @@ static std::string save_destination(const Stage1Request& request) {
 }
 
 static std::string encode_saved_batch(const Stage1Request& request,
-                                      ComputationResult& result) {
+                                      ComputationResult& result, size_t first = 0) {
     const auto& selection = request.options.execution.selection;
     if (selection.curve == CurveModel::Edwards) {
         std::string lines;
         ecm_edwards::Integer scalar;
-        for (auto& curve : result.curves) {
+        for (auto it = result.curves.begin() + first; it != result.curves.end(); ++it) {
+            auto& curve = *it;
             if (curve.kind == CurveKind::Degenerate)
                 continue;
             const bool factor = curve.kind == CurveOutcome::Kind::Factor;
@@ -229,9 +237,9 @@ static std::string encode_saved_batch(const Stage1Request& request,
         return lines;
     }
     std::vector<EcmSavePoint> points;
-    points.reserve(result.curves.size());
-    for (const auto& curve : result.curves)
-        points.push_back({curve.sigma, curve.value});
+    points.reserve(result.curves.size() - first);
+    for (auto it = result.curves.begin() + first; it != result.curves.end(); ++it)
+        points.push_back({it->sigma, it->value});
     return ecm_encode_mont_save(request.modulus, request.b1,
                                 selection.target == ExecutionTarget::Cpu ? 0 : selection.gpu_param,
                                 points,
@@ -380,7 +388,8 @@ static ecm_results::Stage1BatchRecord describe_result(
     return {std::move(row), std::move(internal)};
 }
 
-TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies& deps) {
+TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies& deps,
+                           const PartialHandoff* handoff) {
     const auto N = request.modulus;
     const double B1 = request.b1, B2 = request.b2;
     const uint32_t curves = request.curves;
@@ -495,6 +504,87 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                 execution.execution.naf_w = ecm_mersenne_ntt::production_window(request,
                     ntt_arithmetic_bits(N,opt), !split_ntt);
             const Stage1Request resolved{N,B1,B2,curves,savefilename,saveappend,n_expr,execution};
+            const auto publish_part = [&](ComputationResult& progress, bool final) {
+                if (!handoff || destination.empty()) return;
+                using namespace ecm_handoff;
+                const auto task_key = handoff->source + '|' + result_identity + '|' +
+                                      std::to_string(progress.curves.front().sigma);
+                std::ostringstream token;
+                token << std::hex << std::setfill('0') << std::setw(16) << ecm_io::fingerprint(task_key)
+                      << std::setw(16) << progress.curves.front().sigma;
+                const auto id = token.str();
+                const auto checkpoint = ecm_handoff::checkpoint_path(std::filesystem::u8path(destination));
+                if ((final || !handoff->enabled) && !std::filesystem::exists(checkpoint)) return;
+                Producer group;
+                {
+                    const auto snapshot = Ledger::read(checkpoint);
+                    const auto existing = snapshot.producers.find(id);
+                    if (existing != snapshot.producers.end()) group = existing->second;
+                    else if (final || !handoff->enabled) return;
+                }
+                // Only this Stage1 owner advances its producer. Reload under the
+                // writer lock to retain curves that Stage2 committed meanwhile.
+                const auto store_producer = [&] {
+                    const ecm_io::FileLock lock(checkpoint.u8string());
+                    auto ledger = Ledger::read(checkpoint);
+                    ledger.producers[id] = group;
+                    ledger.write(checkpoint);
+                };
+                if (group.modulus.empty()) group.modulus = ecm_edwards::hex(N);
+                if (group.published_curves > progress.curves.size()) {
+                    if (final) throw std::runtime_error("final Stage1 result predates already published curves");
+                    return;
+                }
+                const auto publish_pending = [&] {
+                    if (!group.pending_count) return;
+                    handoff->publish(id, group.pending_skip, group.pending_count);
+                    group.pending_count = 0;
+                    store_producer();
+                };
+                if (group.status == Status::Open && handoff->enabled) publish_pending();
+                if (group.published_curves != progress.curves.size()) {
+                    const bool hit = std::any_of(progress.curves.begin() + group.published_curves,
+                        progress.curves.end(), [](const auto& curve) { return curve.kind == CurveOutcome::Kind::Factor; });
+                    const auto batch = ecm_save::publish_batch(destination,
+                        encode_saved_batch(request, progress, group.published_curves), true);
+                    if (!batch.records.empty()) {
+                        std::vector<uint64_t> sigmas;
+                        for (auto it = progress.curves.begin() + group.published_curves; it != progress.curves.end(); ++it)
+                            if (it->kind != CurveKind::Degenerate) sigmas.push_back(it->sigma);
+                        ecm_save::validate_batch(batch, N, uint64_t(std::llround(B1)),
+                            selection.curve == CurveModel::Edwards ? -1 : selection.gpu_param, sigmas);
+                        if (!group.saved_count) group.saved_start = batch.skip;
+                        if (batch.skip != group.saved_start + group.saved_count)
+                            throw std::runtime_error("Stage1 partial handoff requires a contiguous save range");
+                        group.saved_count += static_cast<uint32_t>(batch.records.size());
+                        if (!hit && group.status == Status::Open) {
+                            group.prefix_count = group.saved_count;
+                            if (!final && handoff->enabled) {
+                                group.pending_skip = batch.skip;
+                                group.pending_count = static_cast<uint32_t>(batch.records.size());
+                            }
+                        }
+                        if (hit && group.factor_record == UINT64_MAX) {
+                            const auto factor = std::find_if(batch.records.begin(), batch.records.end(),
+                                [](const auto& row) { return row.find("; STATUS=FACTOR;") != row.npos; });
+                            if (factor != batch.records.end())
+                                group.factor_record = batch.skip + uint64_t(factor - batch.records.begin());
+                        }
+                    }
+                    group.published_curves = static_cast<uint32_t>(progress.curves.size());
+                    if (hit) group.status = Status::Factored;
+                    store_producer();
+                    if (group.status == Status::Open && handoff->enabled) publish_pending();
+                }
+                if (final && group.status == Status::Open) {
+                    group.status = Status::Sealed;
+                    store_producer();
+                }
+                if (final && group.saved_count) {
+                    out->handoff_group = id;
+                    out->save_range = ecm_save::inspect_range(destination, group.saved_start, group.saved_count);
+                }
+            };
             if (ecm_stage1_stop_requested()) out->computation.stop();
             else if (!split_ntt) out->computation = deps.execute(resolved, execution, session);
             else out->computation = ecm_cuda_stage1::run_ntt_batches(
@@ -509,7 +599,7 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                     ecm_results::publish_stage1_batch(opt.persistence.results_file,
                         opt.persistence.submission_file, std::move(early), N, key,
                         publication_checkpoint, true);
-                });
+                }, publish_part);
         } else
 #endif
             out->computation = deps.execute(request, execution, session);
@@ -527,8 +617,8 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
             throw std::runtime_error("Stage1 result count differs from requested curves");
         phase = FailureSource::Publication;
         if (!destination.empty()) {
-            out->save_range =
-                ecm_save::publish_batch(destination, encode_saved_batch(request, computed), true);
+            if (!out->save_range.valid)
+                out->save_range = ecm_save::publish_batch(destination, encode_saved_batch(request, computed), true);
             ecm_ts_fprintf(stdout, "Stage1 save: %s (%zu saved curves)\n", destination.c_str(),
                            out->save_range.records.size());
             validate_saved_batch(out->save_range, opt, N, B1, computed);

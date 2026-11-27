@@ -24,10 +24,10 @@ config_version = 4
 # worker 可覆盖路径。显式留空时关闭自动持久化。
 
 worktodo_file = "worktodo.txt"  # string: <path>
-# Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1; ECMSTAGE2 and ECMSTAGE2N select Stage2. One
-# process consumes a worker queue at a time.
-# 共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2 和 ECMSTAGE2N 交给 Stage2。同一 worker 同
-# 时由一个进程消费队列。
+# Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1. ECMSTAGE2, ECMSTAGE2N and ECMSTAGE2PART
+# select Stage2. One process consumes a worker queue at a time.
+# 共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2、ECMSTAGE2N 和 ECMSTAGE2PART 交给 Stage2。
+# 同一 worker 同时由一个进程消费队列。
 
 # queue_order = "file_order"  # string: [file_order|stage1_first|stage2_first]
 # file_order follows the queue. stage1_first or stage2_first runs the preferred stage until it has

@@ -54,7 +54,8 @@ uint64_t fingerprint(const std::string &s) {
     for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
     return h;
 }
-Record parse_record(std::string line,unsigned input_max_bits,EdwardsPreparation preparation) {
+Record parse_record(std::string line,unsigned input_max_bits,EdwardsPreparation preparation,
+                    const std::string& projection_target) {
     if (line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);
     if (line.find('\0') != line.npos)
         throw std::runtime_error("binary checkpoint is not a METHOD=ECM text save");
@@ -93,32 +94,56 @@ Record parse_record(std::string line,unsigned input_max_bits,EdwardsPreparation 
     std::string err;
     if (!ecm_parse_expression(fields["N"], n.z, &err)) throw std::runtime_error("N: " + err);
     if (mpz_cmp_ui(n.z, 3) <= 0 || !mpz_odd_p(n.z) ||
-        (input_max_bits && mpz_sizeinbase(n.z, 2) > input_max_bits))
+        (projection_target.empty() && input_max_bits && mpz_sizeinbase(n.z, 2) > input_max_bits))
         throw std::runtime_error(input_max_bits ?
             "N must be odd, >3 and at most "+std::to_string(input_max_bits)+" bits" : "N must be odd and >3");
     if (mpz_set_str(x.z, fields["X"].c_str(), 0) || mpz_sgn(x.z) < 0 || mpz_cmp(x.z, n.z) >= 0)
         throw std::runtime_error("X must be an integer in [0,N), decimal or 0x hex");
     if (fields.count("Z") && (mpz_set_str(z.z, fields["Z"].c_str(), 0) || mpz_cmp_ui(z.z, 1)))
         throw std::runtime_error("only normalized affine saves (Z=1 or absent) are supported");
+    const auto saved_n = number(n.z), saved_x = number(x.z);
     if(edwards) {
         r.factor=fields["STATUS"]=="FACTOR";
         const bool identity=fields["STATUS"]=="IDENTITY";
         r.skip_stage2=r.factor || identity;
-        if(u64(fields["CHECKSUM"],"CHECKSUM")!=ecm_edwards::save_checksum(number(n.z),number(x.z),r.sigma,r.b1,r.factor,identity))
+        r.hash = ecm_edwards::save_checksum(saved_n, saved_x, r.sigma, r.b1, r.factor, identity);
+        if(u64(fields["CHECKSUM"],"CHECKSUM") != r.hash)
             throw std::runtime_error("Edwards save CHECKSUM mismatch");
+        ecm_edwards::SavedCurve original{saved_n,saved_x,r.sigma,r.b1,0,r.factor,identity,{}};
+        if (fields.count("QX") || fields.count("QZ") || fields.count("QCHECKSUM")) {
+            original = ecm_edwards::parse_saved_curve(line);
+            r.hash = fingerprint(std::to_string(r.hash) + '|' + fields.at("QCHECKSUM"));
+        }
         r.checksum=true;
         if(r.factor) {
             if(mpz_cmp_ui(x.z,1)<=0 || mpz_cmp(x.z,n.z)>=0 || !mpz_divisible_p(n.z,x.z))
                 throw std::runtime_error("invalid Edwards saved factor");
-        } else if(identity) {
-            if(mpz_sgn(x.z))throw std::runtime_error("invalid Edwards saved identity");
-        } else if(preparation==EdwardsPreparation::Construct) {
+        } else if(identity && mpz_sgn(x.z)) throw std::runtime_error("invalid Edwards saved identity");
+        if(!projection_target.empty()) {
+            Big target;
+            if(mpz_set_str(target.z,projection_target.c_str(),16) || mpz_cmp_ui(target.z,3)<=0 ||
+               mpz_cmp(target.z,n.z)>=0 || !mpz_divisible_p(n.z,target.z) ||
+               (input_max_bits && mpz_sizeinbase(target.z,2)>input_max_bits))
+                throw std::runtime_error("Stage2 projection requires a supported proper divisor of the saved modulus");
+            if(r.factor) {
+                mpz_divexact(z.z,n.z,x.z);
+                if(!mpz_divisible_p(z.z,target.z))
+                    throw std::runtime_error("Stage2 cofactor does not divide the saved endpoint modulus");
+            }
+            r.projected=true;
+            r.skip_stage2=!ecm_edwards::project_saved_curve(x.z,original,target.z);
+            r.factor=false;
+            mpz_swap(n.z,target.z);
+        }
+        if(!r.skip_stage2 && preparation==EdwardsPreparation::Construct) {
             Big d,px,py,a24;
             const auto setup=ecm_edwards::construct(d.z,px.z,py.z,a24.z,factor.z,r.sigma,n.z);
             if(setup==ecm_edwards::Setup::Factor){r.factor=true;mpz_set(x.z,factor.z);}
             else if(setup!=ecm_edwards::Setup::Ready)throw std::runtime_error("degenerate Edwards curve in save");
             else r.a24=number(a24.z);
         }
+    } else if(!projection_target.empty()) {
+        throw std::runtime_error("cofactor projection requires Edwards records");
     } else if (fields.count("CHECKSUM")) {
         set64(chk.z, r.b1);
         set64(factor.z, r.sigma);
@@ -130,15 +155,43 @@ Record parse_record(std::string line,unsigned input_max_bits,EdwardsPreparation 
             throw std::runtime_error("save CHECKSUM mismatch");
         r.checksum = true;
     }
-    r.n = number(n.z); r.x = number(x.z);
+    if (!edwards)
+        r.hash = fingerprint(saved_n + '|' + saved_x + '|' + std::to_string(r.sigma) +
+                             '|' + std::to_string(r.b1));
+    r.n = r.projected ? projection_target : saved_n;
+    r.x = r.projected || (r.factor && !r.skip_stage2) ? number(x.z) : saved_x;
     return r;
 }
 bool comment(const std::string &line) {
     const auto t = trim(line);
     return t.empty() || t[0] == '#' || t[0] == ';';
 }
+std::string saved_record_line(std::istream& input, uint64_t offset, uint64_t index, uint64_t key) {
+    input.clear();
+    input.seekg(static_cast<std::streamoff>(offset));
+    std::string line;
+    if (std::getline(input, line) && (offset == 0 || line.compare(0, 7, "METHOD=") == 0)) {
+        try {
+            if (parse_record(line, 0, EdwardsPreparation::ValidateOnly).hash == key)
+                return line;
+        } catch (const std::runtime_error&) {
+            // An edit to metadata in an earlier record can shift this offset.
+        }
+    }
+    input.clear();
+    input.seekg(0);
+    uint64_t position = 0;
+    while (std::getline(input, line)) {
+        if (comment(line) || ++position != index)
+            continue;
+        if (parse_record(line, 0, EdwardsPreparation::ValidateOnly).hash == key)
+            return line;
+        break;
+    }
+    throw TaskInputError("save record " + std::to_string(index) + " changed after planning");
+}
 std::vector<Record> records(const fs::path &path, uint64_t skip, uint64_t count, unsigned input_max_bits,
-                            EdwardsPreparation preparation) {
+                            EdwardsPreparation preparation,const std::string& projection_target) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
         if (!fs::exists(path)) throw TaskInputError("save not found: " + path.string());
@@ -154,8 +207,8 @@ std::vector<Record> records(const fs::path &path, uint64_t skip, uint64_t count,
         ++index;
         if (index <= skip) continue;
         try {
-            auto r = parse_record(line,input_max_bits,preparation);
-            r.offset = static_cast<uint64_t>(offset); r.index = index; r.hash = fingerprint(line);
+            auto r = parse_record(line,input_max_bits,preparation,projection_target);
+            r.offset = static_cast<uint64_t>(offset); r.index = index;
             out.push_back(std::move(r));
         } catch (const std::runtime_error &e) {
             throw TaskInputError("save record " + std::to_string(index) + ": " + e.what());

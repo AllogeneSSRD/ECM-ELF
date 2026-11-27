@@ -149,6 +149,7 @@ struct Stage1Values {
     std::string shared_tune_file="tune.toml";
     std::string param="auto";
     std::string handoff_mode="ecm-elf";
+    bool handoff_partial=true;
     std::string handoff_unsupported="ecm-elf";
     std::string worktodo="worktodo.txt";
     uint64_t b2_ratio=0;
@@ -244,6 +245,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"shared_tune_file",[](Stage1Values&c,const std::string&v){c.shared_tune_file=v;},[](Stage1Values&c,const Stage1Values&v){c.shared_tune_file=v.shared_tune_file;}},
     {"param",[](Stage1Values&c,const std::string&v){if(v!="auto"&&v!="e"&&v!="m0"&&v!="m2"&&v!="m3")throw std::runtime_error("param must be [auto|e|m0|m2|m3]");c.param=v;},[](Stage1Values&c,const Stage1Values&v){c.param=v.param;}},
     {"handoff_mode",[](Stage1Values&c,const std::string&v){if(v!="off"&&v!="ecm-elf"&&v!="prime95")throw std::runtime_error("handoff_mode must be [off|ecm-elf|prime95]");c.handoff_mode=v;},[](Stage1Values&c,const Stage1Values&v){c.handoff_mode=v.handoff_mode;}},
+    {"handoff_partial",[](Stage1Values&c,const std::string&v){c.handoff_partial=boolean(v,"handoff_partial");},[](Stage1Values&c,const Stage1Values&v){c.handoff_partial=v.handoff_partial;}},
     {"handoff_unsupported",[](Stage1Values&c,const std::string&v){if(v!="ecm-elf"&&v!="keep-save")throw std::runtime_error("handoff_unsupported must be [ecm-elf|keep-save]");c.handoff_unsupported=v;},[](Stage1Values&c,const Stage1Values&v){c.handoff_unsupported=v.handoff_unsupported;}},
     {"worktodo",[](Stage1Values&c,const std::string&v){assign_value(c.worktodo,v);},[](Stage1Values&c,const Stage1Values&v){c.worktodo=v.worktodo;}},
     {"b2_ratio",[](Stage1Values&c,const std::string&v){c.b2_ratio=v.empty()?0:static_cast<uint64_t>(bounded_integer(v,"b2_ratio",0,1000000));},[](Stage1Values&c,const Stage1Values&v){c.b2_ratio=v.b2_ratio;}},

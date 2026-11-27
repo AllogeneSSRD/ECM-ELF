@@ -34,6 +34,8 @@ struct EcmStage2Task {
     bool modulus_from_save = false;  // ECMSTAGE2N
     uint32_t curves_to_run = 0;       // Stage2: 0 selects all remaining records
     std::vector<std::string> factors; // known factors (optional)
+    std::string handoff_group;
+    bool partial = false, project_cofactor = false;
 };
 
 // Prime95 ECM2= task (k*b^n+c, explicit B1/B2, optional 64-bit sigma + factors).
@@ -59,6 +61,7 @@ struct Ecm2Task {
 bool ecm_parse_stage1_line(const std::string& line, EcmStage2Task& task, std::string& err);
 // Parse ECMSTAGE2 or ECMSTAGE2N. Returns false and fills `err` on failure.
 bool ecm_parse_stage2_line(const std::string& line, EcmStage2Task& task, std::string& err);
+std::string ecm_stage2_handoff_line(const std::string& line, std::string_view group, bool partial);
 // Replace only the save-name CSV token; AID, bounds, counts and factors keep
 // their original spelling. Used when Stage1 adds its curve/param prefix.
 bool ecm_rewrite_stage2_save(const std::string& line, const std::string& save,
@@ -66,7 +69,7 @@ bool ecm_rewrite_stage2_save(const std::string& line, const std::string& save,
 bool ecm_rewrite_stage2_range(const std::string& line, uint64_t skip, uint32_t count,
                               std::string& rewritten, std::string& err);
 std::string ecm_stage2_cofactor_line(const EcmStage2Task& task, const std::string& save,
-                                    uint32_t curves, const std::vector<std::string>& factors);
+                                    uint64_t skip, uint32_t curves, const std::vector<std::string>& factors);
 // Snapshot of current-worker Stage1 save assignments. Completion still matches
 // the first identical row in a freshly read file, never a stale line number.
 bool ecm_worktodo_stage1_lines(const std::string& path, int worker, std::vector<std::string>& lines,

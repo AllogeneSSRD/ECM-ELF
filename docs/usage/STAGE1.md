@@ -217,6 +217,8 @@ Stage1 与 Stage2 共用 `ecm.toml` 和 `worktodo.txt`。新版 TOML 在首个�
 
 `handoff_workers` 留空时保留当前 worker。同一队列内移除已完成的 Stage1 行并追加到该 worker 最后一段末尾。指定外部队列时写入其中的同编号 worker。填写 `"2"`、`"1,3"` 或 `"2-4"` 可选择接收 worker，编号范围为 1…1000000；在候选中选择任务行较少者，并列时取较小编号，同时考虑本 worker 尚未投递的记录。目标缺少分区时创建标签，文件头未标号部分视为 worker 1。同队列的 `"auto"` 使用 `[shared] worker_count` 确定候选范围。候选必须读取此队列并允许 Stage2。未设数量时从队列分区选取，没有分区时默认从 worker 1 开始。外部队列优先采用已有分区，缺少分区时按配置数量生成候选。
 
+`[stage1] handoff_partial = true` 默认启用 NTT 分批交接。目标为 ECM-ELF 时，Stage1 验证并追加每个非末批的记录，再交接 `ECMSTAGE2PART`。末批完成后投递普通 `ECMSTAGE2`。不同批次可以交给不同 worker。同一队列需要不同 worker 才能让两阶段同时运行。单个 Stage1 任务的各批需在同一存档内连续追加。设置为 `false` 时，整条 Stage1 完成后集中交接。Prime95 交接使用整项完成的方式。 [Stage2 分批消费](STAGE2.md#分批交接)
+
 `handoff_worktodo_file` 留空时使用当前 worker 生效的 `[shared] worktodo_file`。可填写绝对路径或相对 TOML 所在目录的路径。接收端去重使用 `[shared] finished_file`。在 `[worker.N]` 中使用同名键可覆盖交接设置。
 
 `handoff_workers = "2[:4096], 3[4096:]"` 将小于 4096 bit 的余因子交给 worker 2，将 4096 bit 及以上的交给 worker 3。切片使用 Stage2 实际处理的余因子位宽，Edwards 命中后若继续交接则使用新余因子。编号区间也可以带切片，如 `2-4[:4096]`。`"2, 3"`、`"2-3"`、`"2[], 3[:]"` 等价。位宽重叠时，所有匹配的 worker 一起比较队列长度。如果没有匹配项，保留源任务并报告位宽，修正配置后可重试。

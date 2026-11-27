@@ -11,8 +11,9 @@
       <Item id="option_shared_shared_tune_file" name="CUDA Stage1、CUDA Stage2 和 CPU GWNUM Stage2 共用此文件，默认使用 ecm.toml 同目录的 tune.toml。worker 可覆盖路径。显式留空时关闭自动持久化。" />
       <Item id="option_stage1_param" name="Stage1 曲线构造。auto 时，队列任务默认用 Edwards，直接输入在 CPU 上默认用 m0，在 GPU 上默认用 m3。curve 可在 auto 时指定曲线。ECMSTAGE1 的存档类型前缀优先。" />
       <Item id="option_stage1_handoff_mode" name="Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接收方。off 只保留存档，prime95 交给 Prime95。" />
+      <Item id="option_stage1_handoff_partial" name="Stage1 继续运行时，将已完成的批次交接给 ECM-ELF Stage2。" />
       <Item id="option_stage1_handoff_unsupported" name="Prime95 协议不支持该存档时使用的后备方式。" />
-      <Item id="option_shared_worktodo" name="共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2 和 ECMSTAGE2N 交给 Stage2。同一 worker 同时由一个进程消费队列。" />
+      <Item id="option_shared_worktodo" name="共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2、ECMSTAGE2N 和 ECMSTAGE2PART 交给 Stage2。同一 worker 同时由一个进程消费队列。" />
       <Item id="option_shared_b2_ratio" name="命令行、任务行和 b2 配置均未提供非零 B2 时，非零比例使用存档 B1 × ratio 作为上界。适用于队列及 GPU 直接读档。乘积超出范围会报错。" />
       <Item id="option_stage1_auto_stage2" name="Stage1 无因子完成后写入完成记录并生成 ECMSTAGE2 任务。目标为同一队列且未指定接收 worker 时，原位替换任务行。其他情况按 handoff_worktodo_file 和 handoff_workers 投递。" />
       <Item id="option_stage1_auto_stage2_workers" name="Stage2 接收 worker，可填 1..1000000 内的编号或闭区间。逗号分隔的每项可加位宽切片，如 2[:4096], 3[4096:]。按实际余因子位宽匹配，包含起点、排除终点。省略方括号、[]、[:] 都匹配任意位宽。选匹配候选中任务最少者，并列取较小编号。无匹配时保留源任务。同队列 auto 使用 worker_count 或已有分区，候选须读取该队列并允许 Stage2。外部队列 auto 优先采用已有分区。留空保留当前 worker。目标不可写时保留待投递记录。" />
@@ -73,7 +74,7 @@
       <Item id="option_stage1_ntt_tight_weighted_bound" name="CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。自动选型将通过该界的短加权计划与其他合法计划一同实测。false 使用保守界。" />
       <Item id="option_stage1_ntt_tune_file" name="共享调优 TOML。Stage1 NTT 计划写入单个 [ntt] 矩阵，与 Stage2 调优数据共存。路径相对配置目录。留空关闭持久化。" />
       <Item id="option_stage1_ntt_max_batch" name="CUDA Stage1 NTT 调优和生产每个新批次的曲线数上限。各变换长度和 NAF 窗口的实际容量还受内存预算限制。" />
-      <Item id="option_stage1_ntt_batch_target_percent" name="请求批量达到 CUDA Stage1 NTT 可行吞吐峰值的指定比例时，优先整批执行。需要拆批时，选择达到可行子批峰值该比例的最小实测批量。" />
+      <Item id="option_stage1_ntt_batch_target_percent" name="CUDA Stage1 NTT 选批的吞吐门槛，以可行峰值的百分比表示。请求批量达标时优先整批执行。需要拆批时，选择达到可行子批峰值该比例的最小实测批量。" />
       <Item id="option_stage1_ntt_memory_mib" name="Stage1 NTT 总显存预算（MiB）。0 使用 CUDA 初始化后空闲显存的 80%；显式预算也受空闲显存限制。" />
       <Item id="option_stage1_ntt_length" name="变换长度。0 推导安全长度，加权卷积包含支持且更短的 radix-5 形状。" />
       <Item id="option_stage1_ntt_bpw" name="每个数字的位数。0 选择最宽精确线性表示或最短安全加权变换。加权模式下，显式值限制最大 digit 位宽。" />
@@ -96,8 +97,8 @@
       <Item id="option_stage2_stage2_log_file" name="指定 Stage2 普通运行日志，追加记录阶段、批次、警告和结束统计。留空关闭普通文件日志，控制台仍输出；未显式指定时，多 worker 自动给默认文件名加编号后缀。" />
       <Item id="option_stage2_stage2_results_file" name="CPU 与 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint 迁移完成前保留原 JSONL。" />
       <Item id="option_stage2_stage2_debug_log_file" name="指定 Stage2 独立调试日志文件，仅在 debug_log 开启时写入。留空恢复默认文件名；默认名称按 worker 加后缀，显式指定时按原路径使用。" />
-      <Item id="option_stage2_stage2_progress_file" name="旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确认回执迁入独立 .ecm_ckpt_stage2_&lt;bits&gt;_&lt;B1&gt;.dat 文件。不相关的旧任务保留，当前任务继续。新进度文件使用 checkpoint_dir，不保存曲线内部算术状态。" />
-      <Item id="option_stage2_stage2_progress_dir" name="每任务 .ecm_ckpt_stage2_&lt;bits&gt;_&lt;B1&gt;.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、完整 save 内容和 queue_skip。重启采用当前有效 B2/Auto B2 及请求曲线数，已完成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。新 checkpoint 保存已完成曲线状态和待发布结果；结果发布并推进队列后清除。" />
+      <Item id="option_stage2_stage2_progress_file" name="旧进度文件路径。checkpoint_dir 为空时，直接读档断点使用该路径的父目录。队列共享断点位于存档旁。" />
+      <Item id="option_stage2_stage2_progress_dir" name="直接读档 Stage2 断点的目录。空值使用已配置进度路径的父目录或队列目录。队列任务共享存档旁的断点，并保留每条已完成曲线的实际 B2。" />
       <Item id="option_stage2_stage2_save_dir" name="指定 Stage2 查找任务所引用 save 的目录。留空继承共享 tmp_dir；任务给出绝对 save 路径时直接使用该路径。程序读取并验证源 save，不修改其内容。" />
       <Item id="option_stage2_stage2_debug_log" name="控制是否将 Stage2 调试细节写入独立日志。true 开启，false 关闭；verbose=true 不会自动开启调试日志，开启本选项也不把全部调试输出刷到控制台。" />
       <Item id="option_stage2_stage2_after_factored" name="Edwards Stage1 命中后，从可复用的终点生成余因子存档并交接给本地 ECM-ELF Stage2。按产生存档的 worker 读取。默认关闭。" />
@@ -118,9 +119,9 @@
       <Item id="option_stage2_stage2_opencl_point_window" name="巨步坐标暂存窗口点数。0 由后端选型；正值按预算和 G 批次边界调整。" />
       <Item id="option_stage2_stage2_opencl_short_point_batch" name="允许已验证的短设备批次。关闭后不使用该策略合并 baby 提交及配对 giant。" />
       <Item id="option_stage2_stage2_opencl_tune_profile" name="原生 OpenCL 点计划计时文件。相对 ecm.toml，可按 worker 覆盖；空路径关闭学习。共用 tune_runtime_enabled、tune_min_repeats 和 tune_runtime_sample_limit。" />
-      <Item id="option_stage2_stage2_baby_backend" name="Baby点算术：auto在有效运行时对照达到最少重复数前保留标量基线；scalar强制每点一线程；coop32请求在实际算术8193..16384 bits使用32线程协作。不支持的位宽或设备baby预算回退仍用标量。运行时先固定D/布局/链长比较一个后端候选，再继续D搜索。CLI --baby-backend覆盖当前worker配置；省略此键时保留显式NTT_BABY_COOP。OpenCL仅支持auto/scalar。" />
-      <Item id="option_stage2_stage2_giant_backend" name="Giant链算术：默认auto，在有效对照达到最少重复数前保留scalar，再按含点启动检查的实测耗时选择coop32／coop16或标量。先完成baby选型，在固定D/布局/链长上逐个比较giant候选；按算术位宽、并行链数区间和内存路径复用配对后再扩展D。coop16使用固定16384-bit容器，coop32按位宽分档。协作要求CUDA实际算术8193..16384 bits及合格chain；seed和[D]Q不变。显式scalar/coop16/coop32固定后端。CLI --giant-backend覆盖当前worker配置；省略时保留显式NTT_GIANT_COOP。OpenCL仅支持auto/scalar。" />
-      <Item id="option_stage2_stage2_seed_backend" name="Giant相邻seed及GPU构建[D]Q的算术：默认auto，在同形状有效对照达到最少重复数前保留scalar，再按含点启动检查的实测耗时选择最快合格项。固定D／布局／链长／baby及giant算术后，每个家族只增加一个coop32对照，按算术位宽、链并行区间及显存路径复用，随后继续D搜索。协作要求CUDA实际算术8193..16384 bits及真实chain；其他情况保持标量、坐标布局和非单位回退。实际seed_coop独立记入ECM每行，即使忽略environment也不合并；NTT表仍可复用。CLI --seed-backend覆盖当前worker；省略时保留显式NTT_GIANT_SEED_COOP=0|32。OpenCL实际为scalar。" />
+      <Item id="option_stage2_stage2_baby_backend" name="CUDA 默认在实际算术位宽 8193..16384 bits 且设备 baby 生成可用时使用 coop32，其他形状使用标量。显式 auto 从标量起步，依据通过校验的配对 tune 结果选择。CLI --baby-backend 覆盖 TOML。省略此键时优先使用显式 NTT_BABY_COOP。旧成本配置默认使用标量，OpenCL 使用标量。" />
+      <Item id="option_stage2_stage2_giant_backend" name="CUDA 默认在实际算术位宽 8193..16384 bits 且可走递推链时使用 coop32。coop16 使用固定 16384-bit 容器，coop32 按位宽分档。显式 auto 从标量起步，依据通过校验的配对 tune 结果选择。CLI --giant-backend 覆盖 TOML。省略此键时优先使用显式 NTT_GIANT_COOP。旧成本配置默认使用标量，OpenCL 使用标量。" />
+      <Item id="option_stage2_stage2_seed_backend" name="CUDA 默认在实际算术位宽 8193..16384 bits 且使用成对种子时，以 coop32 生成种子和设备端 [D]Q。显式 auto 从标量起步，依据通过校验的配对 tune 结果选择。CLI --seed-backend 覆盖 TOML。省略此键时优先使用显式 NTT_GIANT_SEED_COOP。旧成本配置默认使用标量，OpenCL 使用标量。" />
       <Item id="option_stage2_stage2_reduce_backend" name="普通S4逐系数归约：默认auto，在同形状重复对照合格前保留scalar，再按含点启动检查的实测总耗时选择最快项。每个算术家族固定D／布局／链长／点后端，每次仅增加一个缺少的协作变体（两遍／合并），完成有效对照后再继续D搜索。CUDA实际算术8193..16384 bits可使用共享余数；较小位宽和精确梅森归约保持原内核。实际reduce_coop、线程块与内核身份按ECM每行独立记账，即使忽略environment也不混合，独立NTT表继续复用。CLI --reduce-backend覆盖当前worker；省略时保留显式NTT_S4_COOP_REDUCE=0|32。OpenCL实际为scalar。" />
       <Item id="option_stage2_stage2_groot_balanced" name="G根多项式布局：&quot;auto&quot;按已验证的NTT拐点模型及实测tune选型，true强制分块均衡布局，false强制连续布局，默认&quot;auto&quot;。不改变giant点块划分或B2/D/P。仅CUDA支持强制布局，OpenCL接受&quot;auto&quot;。CLI --groot-layout auto|true|false覆盖当前worker配置，并保留CLI 0/1别名；tune行记录实际布局0/1。" />
       <Item id="option_stage2_stage2_groot_subtree" name="CUDA Stage2 G 树子树策略。0 关闭，1 对支持的原生或承载梅森算术开启四根子树，auto 或 -1 按匹配的 ECM tune 结果选择。自动模式在两种模式均有合格结果前走原路径。切片按实际余因子位宽依次匹配，含起点、不含终点。命令行 --groot-subtree 优先。其他算术路径沿用原树。" />

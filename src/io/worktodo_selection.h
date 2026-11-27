@@ -46,6 +46,7 @@ inline bool worker_matches(int section, int worker) {
 
 inline constexpr std::string_view stage2_prefix = "ECMSTAGE2=";
 inline constexpr std::string_view stage2_n_prefix = "ECMSTAGE2N=";
+inline constexpr std::string_view stage2_part_prefix = "ECMSTAGE2PART=";
 
 inline bool stage2_from_save(std::string_view text) {
     return text.substr(0, stage2_n_prefix.size()) == stage2_n_prefix;
@@ -53,7 +54,8 @@ inline bool stage2_from_save(std::string_view text) {
 
 inline WorktodoStage task_stage(std::string_view text) {
     // Prime95 and unknown rows go to Stage1 for parsing and diagnostics.
-    return text.substr(0, stage2_prefix.size()) == stage2_prefix || stage2_from_save(text)
+    return text.substr(0, stage2_prefix.size()) == stage2_prefix || stage2_from_save(text) ||
+           text.substr(0, stage2_part_prefix.size()) == stage2_part_prefix
                ? WorktodoStage::Stage2 : WorktodoStage::Stage1;
 }
 

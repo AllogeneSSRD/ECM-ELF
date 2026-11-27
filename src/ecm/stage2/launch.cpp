@@ -5,6 +5,7 @@
 #include "ecm/platform/gpu_worker.h"
 #include "ecm/platform/program_version.h"
 #include <iostream>
+#include <set>
 
 namespace {
 using ecm_stage2::Algorithm;
@@ -201,6 +202,7 @@ int ecm_stage2::run_combined_stage2(int argc, char** argv, GpuEntry gpu) {
             std::cout << " invalid_tasks=" << invalid_tasks << std::endl;
             return invalid_tasks ? 1 : 0;
         };
+        std::set<std::string> deferred;
         for (;;) {
             poll_inherited_stop();
             if (stop_requests) return finish(true);
@@ -212,14 +214,20 @@ int ecm_stage2::run_combined_stage2(int argc, char** argv, GpuEntry gpu) {
             Candidate route{Algorithm::Cpu};
             try {
                 const auto fields = queue_fields(task, 0);
+                const auto projection = fields.task.project_cofactor ? queue_modulus(fields.task,nullptr) : std::string{};
                 const auto plan = records(absolute_from(paths.tmp, fields.task.save_name), fields.skip, 1, 0,
-                                          EdwardsPreparation::ValidateOnly);
+                                          EdwardsPreparation::ValidateOnly,projection);
                 if (!plan.empty()) route = select(plan.front(), fields.task.n);
             } catch (const TaskInputError&) {
                 // Use the shared queue's durable error handling for malformed tasks.
             }
             const auto status = invoke(route, task);
             if (status == DispatchChanged) continue;
+            if (status == DispatchDeferred) {
+                if (once || !deferred.insert(task).second) return finish(false);
+                continue;
+            }
+            deferred.clear();
             if (status == DispatchInvalid) ++invalid_tasks;
             else if (status == DispatchAdvanced) ++finished_tasks;
             else return status ? status : (invalid_tasks ? 1 : 0);

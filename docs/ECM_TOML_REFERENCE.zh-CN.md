@@ -145,7 +145,7 @@ worktodo_file = "worktodo.txt"
 
 类型 `string` · 范围 `<path>` · Worker 覆盖 `[worker.N] worktodo_file` · 级别 `常用`。
 
-共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2 和 ECMSTAGE2N 交给 Stage2。同一 worker 同时由一个进程消费队列。
+共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2、ECMSTAGE2N 和 ECMSTAGE2PART 交给 Stage2。同一 worker 同时由一个进程消费队列。
 
 ## [stage1]
 
@@ -370,6 +370,16 @@ handoff_mode = "ecm-elf"
 类型 `string` · 范围 `[off|ecm-elf|prime95]` · Worker 覆盖 `[worker.N] handoff_mode` · 级别 `常用`。
 
 Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接收方。off 只保留存档，prime95 交给 Prime95。
+
+### handoff_partial
+
+```toml
+handoff_partial = true
+```
+
+类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] handoff_partial` · 级别 `高级`。
+
+Stage1 继续运行时，将已完成的批次交接给 ECM-ELF Stage2。
 
 ### handoff_unsupported
 
@@ -1023,7 +1033,7 @@ checkpoint_dir = ""
 
 类型 `string` · 范围 `<dir>` · Worker 覆盖 `[worker.N] checkpoint_dir` · 级别 `高级`。
 
-每任务 .ecm_ckpt_stage2_<bits>_<B1>.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、完整 save 内容和 queue_skip。重启采用当前有效 B2/Auto B2 及请求曲线数，已完成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。新 checkpoint 保存已完成曲线状态和待发布结果；结果发布并推进队列后清除。
+直接读档 Stage2 断点的目录。空值使用已配置进度路径的父目录或队列目录。队列任务共享存档旁的断点，并保留每条已完成曲线的实际 B2。
 
 <a id="stage2_progress_file"></a>
 
@@ -1035,7 +1045,7 @@ checkpoint_legacy_file = ""
 
 类型 `string` · 范围 `<path>` · Worker 覆盖 `[worker.N] checkpoint_legacy_file` · 级别 `旧版`。
 
-旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确认回执迁入独立 .ecm_ckpt_stage2_<bits>_<B1>.dat 文件。不相关的旧任务保留，当前任务继续。新进度文件使用 checkpoint_dir，不保存曲线内部算术状态。
+旧进度文件路径。checkpoint_dir 为空时，直接读档断点使用该路径的父目录。队列共享断点位于存档旁。
 
 <a id="stage2_cpu_backend"></a>
 

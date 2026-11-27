@@ -293,8 +293,10 @@ Options arguments(int argc, char **argv) {
         else if (a == "--record-offset") o.offset = num();
         else if (a == "--record-hash") o.hash = num();
         else if (a == "--record-index") o.index = num();
+        else if (a == "--projection-target") o.projection_target = value();
         else throw std::runtime_error("unknown option: " + a);
     }
+    if(!o.child && !o.projection_target.empty())throw std::runtime_error("projection-target is internal to the curve worker");
     if(o.prediction_policy!="model" && o.prediction_policy!="paired")throw std::runtime_error("prediction-policy must be model or paired");
     if(o.tune_arithmetic!="both" && o.tune_arithmetic!="generic" && o.tune_arithmetic!="mersenne")throw std::runtime_error("tune-arithmetic must be both, generic or mersenne");
     return o;

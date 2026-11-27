@@ -22,6 +22,7 @@ inline TaskDisplay task_display(const std::string &line) {
     };
     auto keyword=trim(line.substr(0,eq));
     for(char &c:keyword)c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    if(keyword=="ECMSTAGE2PART")keyword="ECMSTAGE2";
     if(keyword!="ECM" && keyword!="ECM2" && keyword!="ECMSTAGE1" && keyword!="ECMSTAGE2" && keyword!="ECMSTAGE2N")return out;
     std::vector<std::string> values;std::vector<bool> quoted;
     std::string value;bool in_quote=false,had_quote=false;

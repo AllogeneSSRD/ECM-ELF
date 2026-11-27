@@ -1,4 +1,5 @@
 #include "../../io/files.h"
+#include "../../io/stage2_handoff.h"
 // Backend-independent worktodo ownership, checkpoint recovery and publication.
 #include "task.h"
 #include "backend.h"
@@ -19,6 +20,7 @@
 #include <sstream>
 #include <string_view>
 #ifndef _WIN32
+#include <cerrno>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <unistd.h>
@@ -55,6 +57,55 @@ public:
         fd_ = ::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
         return fd_ >= 0 && flock(fd_, LOCK_EX | LOCK_NB) == 0;
 #endif
+    }
+};
+
+// A stable auxiliary file carries one OS byte-range lock per absolute record.
+// Keep it open for the work window so an interrupted process releases its claims.
+class CurveClaims {
+#ifdef _WIN32
+    Handle file_;
+#else
+    int file_ = -1;
+#endif
+public:
+    explicit CurveClaims(fs::path path) {
+        path += ".claims";
+#ifdef _WIN32
+        file_.value=CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,
+                                nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
+        if(file_.value==INVALID_HANDLE_VALUE)
+#else
+        file_=::open(path.c_str(),O_RDWR|O_CREAT|O_CLOEXEC,0600);
+        if(file_<0)
+#endif
+            throw std::runtime_error("cannot open Stage2 curve claims: "+path.u8string());
+    }
+    CurveClaims(const CurveClaims&) = delete;
+    CurveClaims& operator=(const CurveClaims&) = delete;
+    ~CurveClaims() {
+#ifndef _WIN32
+        close(file_);
+#endif
+    }
+    bool claim(uint64_t record) {
+        if(!record || record>INT64_MAX)throw std::runtime_error("Stage2 curve claim index is out of range");
+#ifdef _WIN32
+        OVERLAPPED range{};
+        range.Offset=static_cast<DWORD>(record);
+        range.OffsetHigh=static_cast<DWORD>(record>>32);
+        if(LockFileEx(file_.value,LOCKFILE_EXCLUSIVE_LOCK|LOCKFILE_FAIL_IMMEDIATELY,0,1,0,&range))return true;
+        if(GetLastError()==ERROR_LOCK_VIOLATION)return false;
+#else
+        struct flock range{};
+        range.l_type=F_WRLCK;
+        range.l_whence=SEEK_SET;
+        range.l_start=static_cast<off_t>(record);
+        range.l_len=1;
+        if(fcntl(file_,F_SETLK,&range)==0)return true;
+        if(errno==EACCES || errno==EAGAIN)return false;
+#endif
+        throw std::runtime_error("cannot claim Stage2 curve "+std::to_string(record));
     }
 };
 
@@ -148,10 +199,82 @@ void publish_outcomes(stage2_queue::State& state, const fs::path& progress, bool
     }, state.adopt_v5);
 }
 
+void publish_shared(ecm_handoff::Ledger& ledger,const fs::path& progress) {
+    const auto save=[&] { ledger.write(progress); };
+    for(auto& entry:ledger.publications) {
+        auto& item=entry.second;
+        if(item.published)continue;
+        ecm_results::append_checkpointed(fs::u8path(item.path),item.report,item.append,save,[&] {
+            item.published=true;
+            item.report.clear();
+            save();
+        });
+    }
+}
+
+void store_shared_curve(const fs::path& progress,const std::string& submission,const Record& record,
+                        const std::string& outcome) {
+    const auto body=ecm_results::json::parse(outcome).get("report");
+    const auto status=body.get("status").text();
+    if((status!="NF" && status!="F") || body.get("curves").text()!="1")
+        throw std::runtime_error("invalid Stage2 curve result");
+    const auto report=body.dump();
+    const ecm_io::FileLock lock(progress.u8string());
+    auto ledger=ecm_handoff::Ledger::read(progress);
+    auto& rows=ledger.curves[record.n];
+    const auto lower=body.has("b2-min")?u64(body.get("b2-min").text(),"B2min"):record.b1;
+    const auto upper=u64(body.get("b2").text(),"B2");
+    if(!rows.emplace(record.index,ecm_handoff::CurveResult{record.hash,lower,upper,report}).second)
+        throw std::runtime_error("duplicate committed Stage2 curve "+std::to_string(record.index));
+    if(status=="F")
+        ledger.publications.try_emplace("F|"+ecm_results::factor_identity(report),
+                                        ecm_handoff::Publication{submission,report+'\n'});
+    ledger.write(progress);
+    publish_shared(ledger,progress);
+}
+
+std::string shared_nf(const ecm_handoff::Ledger& ledger,const std::vector<Record>& plan,
+                      const EcmStage2Task& task) {
+    struct Aggregate {
+        uint64_t lower,upper,b1,count;
+        std::string latest;
+    };
+    std::vector<Aggregate> aggregates;
+    for(const auto& record:plan) {
+        if(ledger.cancelled(record.n,record.index))continue;
+        const auto& result=ledger.curves.at(record.n).at(record.index);
+        if(ecm_results::json::parse(result.report).get("status").text()!="NF")continue;
+        const auto compatible=[&](const Aggregate& a) {
+            return (std::max)(a.lower,result.b2_min)<(std::min)(a.upper,result.b2);
+        };
+        auto same=std::find_if(aggregates.begin(),aggregates.end(),compatible);
+        if(same==aggregates.end())
+            aggregates.push_back({result.b2_min,result.b2,record.b1,1,result.report});
+        else {
+            same->lower=(std::max)(same->lower,result.b2_min);
+            same->upper=(std::min)(same->upper,result.b2);
+            ++same->count;
+            same->latest=result.report;
+        }
+    }
+    std::string reports;
+    for(const auto& a:aggregates) {
+        auto report=ecm_results::json::parse(a.latest);
+        report.set("b2",ecm_results::json::Value::number(std::to_string(a.upper)));
+        if(a.lower!=a.b1 || report.has("b2-min"))
+            report.set("b2-min",ecm_results::json::Value::number(std::to_string(a.lower)));
+        if(!task.aid.empty())report.set("aid",ecm_results::json::parse(json_string(task.aid)));
+        reports+=ecm_results::aggregate_nf(report.dump(),a.count)+'\n';
+    }
+    return reports;
+}
+
 } // namespace
 
 void CurveQueue::commit(uint64_t position,const std::string &outcome) const {
+    if(commit_shared)commit_shared(plan.at(position),outcome);
     state.complete(state.reserved.at(position-state.done),outcome);
+    if(commit_shared)return;
     state.save(progress);
     publish_outcomes(state,progress);
 }
@@ -213,6 +336,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
     QueueStopHandler control_guard;
     bool began=false;
     uint64_t completed=0,failed_tasks=0;
+    std::set<std::string> waiting_handoffs;
     for (;;) {
         poll_inherited_stop();
         fatal_log.clear();
@@ -224,10 +348,18 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
         std::string task_line,expected_n;
         QueueSelection fields;
         std::vector<Record> plan;
+        stage2_queue::State state;
+        fs::path progress;
+        const bool persist=!o.dry&&!o.plan_only;
+        bool close_only=false, may_cancel=false;
+        const auto finish_row = [&](const std::string& run) {
+            append_finished(finished,"# stage2_task_id="+run,task_line,run);
+            if(!ecm_worktodo_advance(worktodo.string(),o.worker,task_line,WorktodoAction::Remove))
+                throw std::runtime_error("task completed but queue could not be advanced; progress retained");
+        };
         uint64_t skip=o.skip,count=o.curves,b2=o.b2?o.b2:defaults.b2;
         std::size_t selected_records=0;
-        uint64_t saved_b1=0;
-        bool edwards_save=false;
+        uint64_t first_record_key=0;
         std::string_view b2_source=o.b2?"cli":defaults.b2?"config":o.auto_b2?"auto":"unset";
         if(queue) {
             std::string read_error;
@@ -240,6 +372,11 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                 return DispatchChanged;
             if(read == WorktodoReadResult::Empty)break;
         }
+        const auto defer = [&] {
+            report("stage2_handoff_wait: skip="+std::to_string(skip)+" count="+std::to_string(count));
+            return waiting_handoffs.insert(task_line).second &&
+                ecm_worktodo_advance(worktodo.string(),o.worker,task_line,WorktodoAction::AppendToWorker,task_line);
+        };
         try {
             if(queue) {
                 fields=queue_fields(task_line,engine.input_max_bits);
@@ -257,17 +394,44 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                     fields.task.n>=2 && fields.task.n<=ecm_stage2::max_input_bits?unsigned(fields.task.n):0;
             } else save=absolute_from(cwd,o.save);
             for(const auto &path:writable)if(same_path(save,path))throw std::runtime_error("save path conflicts with writable queue/log/result state");
-            if(!o.dry&&!o.plan_only){fatal_log=log;fatal_log_worker=o.worker;fatal_log_max_kb=o.log_max_kb;}
-            if(o.auto_b2&&!b2&&o.cost_profile.empty()&&o.tune_profile.empty())throw std::runtime_error("Auto B2 requires --tune-profile or --cost-profile FILE");
-            if(o.carrier_exponent && o.auto_b2 && !b2 && o.tune_profile.empty())throw std::runtime_error("Mersenne carrier Auto B2 requires full ECM tune data");
-            plan=records(save,skip,count,engine.input_max_bits,engine.edwards_preparation);
+            if(persist){fatal_log=log;fatal_log_worker=o.worker;fatal_log_max_kb=o.log_max_kb;}
+            if(queue) {
+                progress=ecm_handoff::checkpoint_path(save);
+                for(const auto& path:writable)if(same_path(progress,path))
+                    throw std::runtime_error("shared Stage2 checkpoint conflicts with output state");
+                if(same_path(progress,ini)||same_path(progress,executable())||
+                   (!o.tune_profile.empty()&&same_path(progress,fs::path(o.tune_profile))))
+                    throw std::runtime_error("shared Stage2 checkpoint conflicts with input");
+            }
+            if(queue && !fields.task.partial && !fields.task.handoff_group.empty()) {
+                const auto ledger=ecm_handoff::Ledger::read(progress);
+                const auto group=ledger.producers.find(fields.task.handoff_group);
+                if(group==ledger.producers.end() || group->second.status==ecm_handoff::Status::Open ||
+                   group->second.modulus!=expected_n || skip!=group->second.saved_start ||
+                   count!=group->second.prefix_count)
+                    throw TaskInputError("final Stage2 range differs from the Stage1 handoff");
+                close_only=group->second.status==ecm_handoff::Status::Factored;
+            }
+            if(fields.task.partial && persist && !fs::exists(save)) {
+                const bool rotated=defer();
+                if(startup.dispatch_row)return rotated?DispatchDeferred:0;
+                if(rotated && !o.once)continue;
+                break;
+            }
+            const auto projection=fields.task.project_cofactor?expected_n:std::string{};
+            if(!close_only || count)
+                plan=records(save,skip,count,engine.input_max_bits,engine.edwards_preparation,projection);
+            if(fields.task.partial && plan.size()!=count) {
+                if(!persist)throw TaskInputError("PART range exceeds available save records");
+                const bool rotated=defer();
+                if(startup.dispatch_row)return rotated?DispatchDeferred:0;
+                if(rotated && !o.once)continue;
+                break;
+            }
             if(!queue && plan.empty())
                 throw TaskInputError("skip exceeds saved curve count or save contains no curves");
             selected_records=plan.size();
-            if(!plan.empty()) {
-                saved_b1=plan.front().b1;
-                edwards_save=plan.front().edwards;
-            }
+            if(!plan.empty())first_record_key=plan.front().hash;
             if(queue && fields.task.modulus_from_save)
                 expected_n=queue_modulus(fields.task,plan.empty()?nullptr:&plan.front());
             if(!b2 && cfg.b2_ratio && !plan.empty()) {
@@ -276,12 +440,18 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                 b2=plan.front().b1*cfg.b2_ratio;
                 b2_source="b2_ratio";
             }
+            if(!close_only && std::any_of(plan.begin(),plan.end(),[](const Record& r){ return !r.skip_stage2; })) {
+                if(o.auto_b2&&!b2&&o.cost_profile.empty()&&o.tune_profile.empty())
+                    throw std::runtime_error("Auto B2 requires --tune-profile or --cost-profile FILE");
+                if(o.carrier_exponent && o.auto_b2 && !b2 && o.tune_profile.empty())
+                    throw std::runtime_error("Mersenne carrier Auto B2 requires full ECM tune data");
+            }
             for(const auto &r:plan) {
                 if(!expected_n.empty()&&r.n!=expected_n)
                     throw TaskInputError(fields.task.modulus_from_save ?
                         "ECMSTAGE2N selected save records must have the same N" : "worktodo N differs from save N");
                 if(queue&&r.b1!=plan.front().b1)throw TaskInputError("queue saves must have the same B1");
-                if(r.skip_stage2)continue;
+                if(close_only || r.skip_stage2)continue;
                 if(engine.validate)engine.validate(r,b2);
                 if(o.b2_min && (o.b2_min<r.b1 || b2<=o.b2_min)) {
                     const std::string message="Stage2 interval requires saved B1 <= B2min < B2";
@@ -322,106 +492,91 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             report("WARNING: requested="+std::to_string(count)+" available="+std::to_string(selected_records)+
                    " after skip="+std::to_string(skip)+"; running available curves only.",true);
         if(plan.empty())report("WARNING: no available curves after skip; task will finish with zero curves.",true);
-        stage2_queue::State state;
-        const bool persist=!o.dry&&!o.plan_only;
-        fs::path progress;
         QueueFileLock progress_lock;
+        std::unique_ptr<CurveClaims> claims;
         if(persist && queue) {
-            stage2_queue::Task task;
-            task.aid=fields.task.aid;task.n=expected_n;
-            task.save_sha256=ecm_stage2::sha256_file(save);task.skip=skip;task.total=selected_records;
-            task.b1=saved_b1;
-            task.b2=b2;task.b2_min=o.b2_min;task.auto_b2=o.auto_b2&&!b2;
-            Big target;mpz_set_str(target.z,expected_n.c_str(),16);
-            const auto bits=mpz_sizeinbase(target.z,2);
-            // Serialize filename allocation, then keep only the selected task lease.
-            fs::create_directories(progress_dir);
-            QueueFileLock name_lock;
-            auto name_lockpath=task.path(progress_dir,bits);name_lockpath+=".name.lock";
-            if(!name_lock.open(name_lockpath))throw std::runtime_error("another process is allocating this Stage2 checkpoint name");
-            const auto match_legacy=[&](const std::string &line) {
-                const auto old=queue_fields(line,engine.input_max_bits);Big n;std::string error;
-                return old.task.aid==task.aid && ecm_compute_stage2_n(old.task,n.z,error) && number(n.z)==task.n;
-            };
-            auto source=stage2_queue::load_task(progress_dir,bits,task,state,{},&progress);
-            if(source.empty() && stage2_queue::import_legacy(legacy_progress,task,match_legacy,state))
-                source=legacy_progress;
-            const bool skips_records=selected_records!=plan.size();
-            if(!source.empty() && skips_records) {
-                // Earlier workers counted saved factors as completed slots.
-                // Finish their existing checkpoint with the original numbering.
-                plan=records(save,skip,count,engine.input_max_bits,engine.edwards_preparation);
-            } else if(source.empty() && edwards_save) {
-                auto point_task=task;
-                point_task.save_sha256=ecm_stage2::sha256_text("stage2-points-only|"+task.save_sha256);
-                point_task.total=plan.size();
-                fs::path point_progress;
-                source=stage2_queue::load_task(progress_dir,bits,point_task,state,{},&point_progress);
-                if(skips_records || !source.empty()) {
-                    task=std::move(point_task);
-                    progress=std::move(point_progress);
+            const auto row_key=ecm_stage2::sha256_text(ecm_io::file_identity(save)+"|"+expected_n+"|"+
+                fields.task.aid+"|"+std::to_string(skip)+"|"+std::to_string(selected_records)+"|"+
+                fields.task.handoff_group);
+            bool active=false;
+            uint64_t finished_curves=0;
+            std::vector<Record> pending;
+            {
+                // A nonblocking record claim never waits while we hold the ledger writer lock.
+                const ecm_io::FileLock lock(progress.u8string());
+                auto ledger=ecm_handoff::Ledger::read(progress);
+                publish_shared(ledger,progress);
+                std::set<uint64_t> factors_verified;
+                for(auto& record:plan) {
+                    const auto& previous=ledger.curves[record.n];
+                    const auto ready=previous.find(record.index);
+                    if(ready!=previous.end()) {
+                        if(ready->second.point_key!=record.hash)
+                            throw std::runtime_error("completed Stage2 record changed: "+std::to_string(record.index));
+                        ++finished_curves;
+                        continue;
+                    }
+                    if(const auto* cancelled=ledger.cancelled(record.n,record.index)) {
+                        if(cancelled->factor_record!=UINT64_MAX &&
+                           factors_verified.insert(cancelled->factor_record).second) {
+                            const auto factor=records(save,cancelled->factor_record,1,0,EdwardsPreparation::ValidateOnly);
+                            if(factor.size()!=1 || !factor.front().factor || !factor.front().skip_stage2 ||
+                               factor.front().n!=record.n)
+                                throw std::runtime_error("saved factor differs from the Stage1 handoff");
+                        }
+                        if(fields.task.partial)continue;
+                        // The final task waits for any old-modulus computation already in flight.
+                        if(!claims)claims=std::make_unique<CurveClaims>(progress);
+                        if(!claims->claim(record.index))active=true;
+                        continue;
+                    }
+                    if(close_only)continue;
+                    if(!claims)claims=std::make_unique<CurveClaims>(progress);
+                    if(!claims->claim(record.index)) {
+                        active=true;
+                        continue;
+                    }
+                    if(!may_cancel)may_cancel=std::any_of(ledger.producers.begin(),ledger.producers.end(),[&](const auto& entry) {
+                        const auto& producer=entry.second;
+                        return producer.status==ecm_handoff::Status::Open && producer.modulus==record.n &&
+                            record.index>producer.saved_start && record.index-producer.saved_start<=producer.saved_count;
+                    });
+                    pending.push_back(std::move(record));
+                }
+                if(pending.empty() && !active && !fields.task.partial && !close_only) {
+                    const auto id="NF|"+row_key;
+                    if(!ledger.publications.count(id)) {
+                        auto batch=shared_nf(ledger,plan,fields.task);
+                        if(!batch.empty()) {
+                            ledger.publications.emplace(id,ecm_handoff::Publication{
+                                ecm_io::file_identity(fs::u8path(o.submission)),std::move(batch)});
+                            ledger.write(progress);
+                            publish_shared(ledger,progress);
+                        }
+                    }
                 }
             }
-            for(const auto &path:writable)if(same_path(progress,path))throw std::runtime_error("task checkpoint conflicts with output state");
-            if(same_path(progress,save)||same_path(progress,ini)||same_path(progress,executable())||
-               (!o.tune_profile.empty()&&same_path(progress,fs::path(o.tune_profile))))
-                throw std::runtime_error("task checkpoint conflicts with input");
-            auto lockpath=progress;lockpath+=".lock";
-            if(!progress_lock.open(lockpath))
-                throw std::runtime_error("another process owns this Stage2 task checkpoint");
-            if(source==progress && fs::exists(legacy_progress)) {
-                stage2_queue::State previous;
-                if(stage2_queue::import_legacy(legacy_progress,task,match_legacy,previous) &&
-                   previous.run==state.run && previous.publication_task==state.publication_task)source=legacy_progress;
-            }
-            QueueFileLock legacy_lock;
-            if(!source.empty() && source!=progress) {
-                auto path=source;path+=".lock";
-                if(!legacy_lock.open(path))
-                    throw std::runtime_error("another process owns this legacy Stage2 checkpoint");
-                if(state.version<5) {
-                    const auto previous_run=state.run;
-                    if(!stage2_queue::import_legacy(source,task,match_legacy,state) ||
-                       previous_run!=state.run)
-                        throw std::runtime_error("legacy Stage2 checkpoint changed during discovery");
+            if(pending.empty()) {
+                if(active) {
+                    const bool rotated=defer();
+                    if(startup.dispatch_row)return rotated?DispatchDeferred:0;
+                    if(rotated && !o.once)continue;
+                    break;
                 }
+                waiting_handoffs.erase(task_line);
+                finish_row(row_key);
+                report(std::string(fields.task.partial?"stage2_part_done: ":"task_done: ")+
+                       "requested="+(count?std::to_string(count):"all")+" available="+
+                       std::to_string(plan.size())+" completed="+std::to_string(finished_curves));
+                if(startup.dispatch_row)return DispatchAdvanced;
+                if(o.once || stop_requests)break;
+                continue;
             }
-            const auto previous_total=state.total,previous_b2=state.b2;
-            const auto previous_auto=state.auto_b2;
-            if(state.version<5 && (state.done || !state.pending.empty() || !state.reserved.empty()))
-                throw std::runtime_error("Stage2 checkpoint predates self-contained outcomes; finish it with the version that created it");
-            if(state.version<6) {
-                state.adopt_v5=state.version==5;
-                state.version=6;
-            }
-            while(!state.reserved.empty() && !state.reserved.back().completed)
-                state.reserved.pop_back();
-            // Commit migration before applying policy changes or retiring old receipts.
-            if(!source.empty() && source!=progress) {
-                state.save(progress);
-                auto archive=source;archive+=".migrated";
-#ifdef _WIN32
-                if(!MoveFileExW(source.c_str(),archive.c_str(),MOVEFILE_WRITE_THROUGH))
-#else
-                if(fs::exists(archive) || !ecm_replace_file(source,archive))
-#endif
-                    throw std::runtime_error("cannot archive imported Stage2 checkpoint: "+source.u8string());
-                report("stage2_resume_import: completed="+std::to_string(state.done)+" total="+std::to_string(state.total)+
-                    " legacy_archived=1 checkpoint="+progress.u8string());
-            }
-            state.reconfigure(task);
-            if(state.done>plan.size() &&
-               records(save,skip,state.done,engine.input_max_bits,EdwardsPreparation::ValidateOnly).size()!=state.done)
-                throw std::runtime_error("Stage2 completed progress exceeds the available save records");
-            if(!source.empty() && (previous_total!=task.total || previous_b2!=task.b2 || previous_auto!=task.auto_b2))
-                report("stage2_resume_override: previous_total="+std::to_string(previous_total)+" requested="+std::to_string(task.total)+
-                    " completed="+std::to_string(state.done)+" effective_total="+std::to_string(state.total)+
-                    " previous_B2="+std::to_string(previous_b2)+" B2="+std::to_string(task.b2)+
-                    "; completed curves retain their actual bounds.",true);
-            if(state.done>plan.size())report("WARNING: requested="+std::to_string(plan.size())+
-                " is below already completed="+std::to_string(state.done)+
-                "; no further curves will run; sealing all completed curves (factor hits reported separately).",true);
+            plan=std::move(pending);
+            state.total=plan.size();
         } else if(persist) {
+            const auto save_identity = "save-position-v1|" + ecm_io::file_identity(save) + "|" +
+                                       std::to_string(first_record_key);
             stage2_queue::Task task;
             task.aid=o.submission_aid;
             task.skip=skip;
@@ -429,7 +584,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             task.b2=b2;
             task.b2_min=o.b2_min;
             task.auto_b2=o.auto_b2&&!b2;
-            auto identity=ecm_stage2::sha256_file(save)+"|"+std::to_string(selected_records)+"|"+
+            auto identity=save_identity+"|"+std::to_string(selected_records)+"|"+
                 std::to_string(b2)+"|"+std::to_string(task.auto_b2)+"|"+
                 ecm_io::file_identity(fs::u8path(o.submission))+"|"+std::to_string(o.submission_exponent);
             for(const auto &known:o.submission_known)identity+="|"+known;
@@ -447,11 +602,11 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             state.load(progress);
             state.reconfigure(task);
         }
-        if(persist) {
+        if(persist && !queue) {
             const auto submission=ecm_io::file_identity(fs::u8path(o.submission));
             if(!state.submission_path.empty() && state.submission_path!=submission)
                 throw std::runtime_error("Stage2 checkpoint belongs to a different submission path");
-            state.submission_path=submission;
+            if(state.submission_path.empty())state.submission_path=submission;
             state.save(progress);
             publish_outcomes(state,progress,!state.final_nf.empty());
             if(state.adopt_v5) {
@@ -477,9 +632,24 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             report(message.str());
         }
         bool task_completed=true;
+        std::function<bool()> cancelled;
+        if(may_cancel)cancelled=[&] {
+            const auto ledger=ecm_handoff::Ledger::read(progress);
+            return std::any_of(plan.begin(),plan.end(),[&](const auto& record) {
+                return ledger.cancelled(record.n,record.index)!=nullptr;
+            });
+        };
         if(!o.dry && !o.plan_only) {
             const QueueReport queue_report=report;
-            const CurveQueue curve_queue{plan,save,curve_results,log,progress,defaults,state,completed,queue_report};
+            std::function<void(const Record&,const std::string&)> commit_shared;
+            if(queue) {
+                const auto submission=ecm_io::file_identity(fs::u8path(o.submission));
+                commit_shared=[&,submission](const Record& record,const std::string& outcome) {
+                    store_shared_curve(progress,submission,record,outcome);
+                };
+            }
+            const CurveQueue curve_queue{plan,save,curve_results,log,progress,defaults,state,completed,
+                                         queue_report,cancelled,commit_shared};
             task_completed=engine.run(curve_queue,o,b2,d);
         } else for(size_t i=static_cast<size_t>(state.done);i<plan.size();++i) {
             poll_inherited_stop();
@@ -497,32 +667,12 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
         }
         if(!queue && o.dry && task_completed)
             report("validated "+std::to_string(plan.size())+" curves; B2="+std::to_string(b2));
-        if(task_completed && persist && state.done==state.total)
+        if(task_completed && persist && !queue && state.done==state.total)
             publish_outcomes(state,progress,true);
         if(!queue||o.dry||o.plan_only)break;
-        if(state.done<state.total)break;
-        std::string current;
-        std::string read_error;
-        const auto read = ecm_worktodo_read_next_line(worktodo.string(), o.worker,
-            {cfg.worktodo_priority, cfg.worktodo_skip}, WorktodoStage::Stage2,
-            current, read_error);
-        if(read == WorktodoReadResult::Error)throw std::runtime_error(read_error);
-        if(read != WorktodoReadResult::Task||current!=task_line)
-            throw std::runtime_error("task completed but worktodo changed; queue and progress retained");
-        append_finished(finished,"# stage2_task_id="+state.run,task_line,state.run);
-        if(!ecm_worktodo_advance(worktodo.string(),o.worker,task_line,WorktodoAction::Remove))
-            throw std::runtime_error("task completed but queue could not be advanced; progress retained");
-        // A restart after queue advancement can ignore a complete stale state.
-        std::error_code removal_error;
-        fs::remove(progress, removal_error);
-        if(removal_error && removal_error!=std::errc::no_such_file_or_directory)
-            throw std::runtime_error("task advanced but cannot remove completed progress file");
-        report("task_done: requested="+(count?std::to_string(count):"all")+" available="+std::to_string(plan.size())+
-               " completed="+std::to_string(state.done));
+        if(!task_completed && !(cancelled && cancelled()))break;
         worker_options.runtime_prepare_hints=std::move(o.runtime_prepare_hints);
         worker_options.runtime_route_hints=std::move(o.runtime_route_hints);
-        if(startup.dispatch_row)return stop_requests?0:DispatchAdvanced;
-        if(o.once||stop_requests)break;
     }
     if(stage2_log::enabled(stage2_log::curve)||startup.dry)
         report(std::string(startup.plan_only?"plan_complete":startup.dry?"dry_run_complete":stop_requests?"stage2_stopped":"stage2_complete")+

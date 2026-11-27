@@ -1,15 +1,15 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "e77945289728a19f86e89ae6bf793e65f8b0ee866b0a3378f797580f215840e2",
-    "src/ecm/platform/generated/configuration_defaults.h": "cac4a08e1ac3cff47dd4f5abfe40d0c1e694f74e2998a9cfc09a7d05bbc5e3c4",
-    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "9431bc9724fa3257e56cba9c07fafa7f3ab3bf5ac1bbfd75248d55f3a0957870",
-    "src/ecm/application/configuration/generated/ecm_toml_template.h": "96750548906a3e2a0f18369201cb7253185a274a924b64886cd3c8940f1438f4",
-    "config/ecm.toml.default": "1ea80ed80fb7e8c217fa978a1c28534b8bc6cb7e520850f99af1bb871e365af1",
-    "config/ecm.toml.example": "c218d0be6c7fa17a37ff9b06c826f755505de24c8625c3db307548f4828eed15",
-    "docs/ECM_TOML_REFERENCE.en.md": "d92bd362fbe252435da3d9ee30067e00e64e032fd633a3a94301abda63746f90",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "8ca6aad3c843b1f5532e6be64a6d3701d4be866b81e9d23a8801144109a71ff2",
-    "config/ecm_options.json": "5ef17ff9081e77afa15fd2621d2fbd78ce47223a63b39365c8d06bc7e25f5856",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "5667eff5af979c0385f2748aeef270f585c97dfea95a11fa8aff72bf28112635",
+    "src/ecm/platform/generated/configuration_defaults.h": "6cfd8826e3ae20db32229b240b7715a580f1d25efcda859428856292ce67d3fc",
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "ad4a9a56629e137e35a86d2cfdfb70b356632e8bed36b224f00e729da8baab1f",
+    "src/ecm/application/configuration/generated/ecm_toml_template.h": "5a0d26831ccb50dc83dd707889d461f92d73c35480a115616c7226efed3976f9",
+    "config/ecm.toml.default": "0c5548e2ec508307f84a9852fe656c41e790779b8a93c79ab301898a995100b9",
+    "config/ecm.toml.example": "62a1aae6608f98ac8f91a42dbd8536e34721c50dee5297bf89e9a3f80ab5ad0e",
+    "docs/ECM_TOML_REFERENCE.en.md": "084a4138a7bedce842c719eedb8ca6835f50db09cbf8c6a7d3fd53f1ea5df495",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "fbc932685456073af2de5f0dd225616bb3ca64852736a92206b79f03eabf506f",
+    "config/ecm_options.json": "f0eecfcc08220711f02b7f9e2c30985011464bfb259c2e9dafe8e9de6bc90723",
     "tools/gen/generate_ecm_config.py": "dc958b3dca0b3de26b544c9f86bce0bd4ebba11c4ce483938393f99bf03c32e5"
   }
 }

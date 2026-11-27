@@ -287,13 +287,27 @@ SavedCurve parse_saved_curve(std::string text) {
     return r;
 }
 
+bool project_saved_curve(mpz_ptr x, const SavedCurve& curve, mpz_srcptr modulus) {
+    if (curve.identity) return false;
+    if (curve.factor) {
+        if (curve.endpoint.x.empty()) return false;
+        Integer z, inverse;
+        mpz_set_str(z.v, curve.endpoint.z.c_str(), 16);
+        if (!mpz_invert(inverse.v, z.v, modulus)) return false;
+        mpz_set_str(x, curve.endpoint.x.c_str(), 16);
+        mpz_mul(x, x, inverse.v);
+    } else mpz_set_str(x, curve.x.c_str(), 16);
+    mpz_mod(x, x, modulus);
+    return mpz_sgn(x) != 0;
+}
+
 CofactorBatch cofactor_batch(const std::vector<std::string>& records) {
     CofactorBatch batch;
     if (records.empty()) return batch;
     std::vector<SavedCurve> curves;
     curves.reserve(records.size());
     for (const auto& line : records) curves.push_back(parse_saved_curve(line));
-    Integer n, remaining, f, common, x, z, inverse;
+    Integer n, remaining, f, common, x;
     mpz_set_str(n.v, curves.front().n.c_str(), 16);
     mpz_set(remaining.v, n.v);
     for (const auto& curve : curves) {
@@ -311,21 +325,9 @@ CofactorBatch cofactor_batch(const std::vector<std::string>& records) {
         mpz_divexact(remaining.v, remaining.v, common.v);
     }
     if (batch.factors.empty() || mpz_cmp_ui(remaining.v, 3) <= 0) return batch;
-    batch.modulus_bits = mpz_sizeinbase(remaining.v, 2);
-    for (const auto& curve : curves) {
-        if (curve.identity) continue;
-        if (curve.factor) {
-            if (curve.endpoint.x.empty()) continue;
-            mpz_set_str(x.v, curve.endpoint.x.c_str(), 16);
-            mpz_set_str(z.v, curve.endpoint.z.c_str(), 16);
-            if (!mpz_invert(inverse.v, z.v, remaining.v)) continue;
-            mpz_mul(x.v, x.v, inverse.v);
-        } else mpz_set_str(x.v, curve.x.c_str(), 16);
-        mpz_mod(x.v, x.v, remaining.v);
-        if (!mpz_sgn(x.v)) continue;
-        batch.lines += save_line(remaining.v, x.v, curve.sigma, curve.b1, false);
-        ++batch.curves;
-    }
+    if (std::any_of(curves.begin(), curves.end(), [&](const auto& curve) {
+            return project_saved_curve(x.v, curve, remaining.v);
+        })) batch.modulus_bits = mpz_sizeinbase(remaining.v, 2);
     return batch;
 }
 

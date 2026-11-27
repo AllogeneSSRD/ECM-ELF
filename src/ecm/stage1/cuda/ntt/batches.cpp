@@ -159,7 +159,8 @@ void append_result(std::string& bytes, const CurveOutcome& curve, std::string& s
 ecm_stage1::ComputationResult run_ntt_batches(
     const ecm_stage1::Stage1Request& request, const ecm_stage1::TaskDependencies& deps,
     ecm_stage1_checkpoint::Context& session,
-    const std::function<void(const ecm_stage1::CurveOutcome&, uint32_t)>& publish_factor) {
+    const std::function<void(const ecm_stage1::CurveOutcome&, uint32_t)>& publish_factor,
+    const std::function<void(ecm_stage1::ComputationResult&, bool)>& publish_batch) {
     using namespace ecm_stage1;
     using namespace ecm_edwards_memory;
     const auto free = host_free_bytes();
@@ -223,6 +224,8 @@ ecm_stage1::ComputationResult run_ntt_batches(
         failure.fail(FailureSource::Publication);
         return failure;
     }
+    if (offset && publish_batch)
+        publish_batch(state.completed, offset >= request.curves && !state.curves);
     state.completed.curves.reserve(request.curves);
     std::string scratch((mpz_sizeinbase(request.modulus, 2) + 7) / 8, '\0');
     CurvePrefetch prefetch;
@@ -331,6 +334,8 @@ ecm_stage1::ComputationResult run_ntt_batches(
             failure.fail(FailureSource::Publication);
             return failure;
         }
+        if (publish_batch)
+            publish_batch(state.completed, offset >= request.curves);
         ecm_ts_fprintf(stdout, "stage1_ntt_batch_complete: completed=%u total=%u\n", offset, request.curves);
     }
     state.completed.completion = ComputationResult::Completion::Completed;

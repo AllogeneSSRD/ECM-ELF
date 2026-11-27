@@ -12,6 +12,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"shared","shared_tune_file","string","<path>","shared","tune_file","",false},
     {"stage1","param","string","[auto|e|m0|m2|m3]","stage1","param","",false},
     {"stage1","handoff_mode","string","[off|ecm-elf|prime95]","stage1","handoff_mode","",false},
+    {"stage1","handoff_partial","bool","[false|true|0|1]","stage1","handoff_partial","",false},
     {"stage1","handoff_unsupported","string","[ecm-elf|keep-save]","stage1","handoff_unsupported","",false},
     {"shared","worktodo","string","<path>","shared","worktodo_file","",false},
     {"shared","b2_ratio","u64","[0|1..1000000]","stage2","b2_ratio","",false},

@@ -35,9 +35,19 @@ stage2_cpu_threads = 4
 
 `[stage2] stage2_after_factored = true` 让 Stage1 在 Edwards 命中后继续交接本地 Stage2。Stage1 按产生存档的 worker 读取此选项，默认关闭。
 
-Stage1 从原模数剥离本批记录的因子，把可用曲线的终点约化到同一个余因子，然后另存为 `.cofactor-*.save` 并交接。命中曲线自身的终点也参与投影，前提是它在目标余因子上的分母可逆。新队列行保留 B2、AID 与已知因子，并附加本次剥离的因子。原存档保留原模数和 `FACTOR` 标记。余因子无可用点时不生成任务。
+Stage1 从原模数剥离本次发现的因子，生成带 `project=cofactor` 的普通 `ECMSTAGE2` 行。`skip_curves` 和 `num_curves` 仍指向原始存档记录，任务行保留 B2、AID 和已知因子，再附加本次剥离的因子。每条 Stage1 曲线在 `.save` 中占一行。余因子无可用点时省略交接。
 
-直接读取原始 save 时，Stage2 跳过 `FACTOR` 和 `IDENTITY`。命中后续算使用上述余因子存档。
+Stage2 读取时验证存档校验值，确认余因子整除原记录模数，再投影到内存中的余因子点。`POINT` 的 `X` 直接取模。命中曲线使用 `QX/QZ`，要求分母在目标余因子上可逆。`IDENTITY` 和缺少可用端点的曲线跳过。普通读档跳过 `FACTOR` 和 `IDENTITY`。
+
+## 分批交接
+
+`ECMSTAGE2PART` 使用普通 `ECMSTAGE2` 的字段，范围由显式 `skip_curves` 和正数 `num_curves` 决定。可以修改范围、拆分或补投一段。各 worker 共用 `<save>.stage2.ckpt`，按绝对记录号认领曲线。重叠区间中，已有结果的曲线直接跳过，正在处理的曲线让给持有者。范围尚未全部写入 `.save` 时，PART 留在队列中。
+
+PART 即时发布验证通过的因子。完成后从待办移除，保留共享断点，等待普通 `ECMSTAGE2` 汇总 `NF`。最终行覆盖全组，可以先补算空闲的缺口。只剩其他 worker 正在处理的曲线时，最终行留在队列中。完成记录继续保留，供迟到的 PART 去重。
+
+修改 B2 后，剩余曲线采用新设置。每条已完成曲线保留自身的实际 B2 区间。一次汇总的 `NF` 采用这些曲线的共同覆盖，例如一部分算到 100、另一部分算到 300，整组上限记为 100。实际区间没有共同覆盖时分开汇总。
+
+Stage1 命中因子时，旧组的最终行范围截止到命中批次之前，只负责收尾。尚未开始的曲线在读到本组因子标记后跳过，已在运行的曲线可以完成并发布 `F`。旧组省略 `NF`。启用 `stage2_after_factored` 时，独立的普通 `ECMSTAGE2` 用同一份存档计算目标余因子。
 
 ## 原生 OpenCL 入口
 
@@ -157,20 +167,16 @@ Stage2 继续使用 save 中的曲线终点和真实 B1。B2min 只用于确定�
 
 ## 自动续跑与退出
 
-新队列任务使用 `.ecm_ckpt_stage2_<实际N位数>_<B1>.dat`，记录完成状态、NF 汇总和已验证因子。续跑需要原队列、Stage1 save 和 ckpt；逐曲线 JSONL 可选，提交结果也可以从尚存的 ckpt 补发。提交路径在任务存续期间保持一致。阶段内的 NTT、树和多项式状态不会写入 ckpt。
+队列任务使用存档旁的 `<save>.stage2.ckpt`，按记录号和实际计算模数保留结果及实际 B2。追加保存点或修改用户名、电脑名等元数据不影响已提交的进度。算术字段继续通过 `CHECKSUM` 和 `QCHECKSUM` 检查。重启时可以更换设备、显存预算、D、承载设置和日志路径。
 
-重启可以更换设备、显存预算、D、承载设置和日志路径，或移动内容完全相同的 save。AID、实际 N、save 字节和 skip 绑定任务身份。当前数量和有效 B2 可应用到剩余曲线。例如 150/960 改为 300 时从第 151 条续算；改为 100 时保留已完成的 150 条并发布。遇到双槽已完成曲线之间的缺口，先补齐再缩到缺口之前。
-
-第一次 Ctrl+C 停止启动后续曲线，已运行的曲线可以提交结果后退出。第二次会终止子进程树，尚未写入 ckpt 的曲线下次重算。最终提交完成后才写 finished、移除队列行并清理 ckpt。
-
-Stage2 schema 6 ckpt 保存进度、待发布结果和发布确认。直接 `--save` 也使用该恢复流程，并保留完成 ckpt。旧档升级条件见 [Checkpoint](../architecture/CHECKPOINT.md#74-旧档的一次性迁移)。
+第一次 Ctrl+C 停止启动后续曲线，已运行的曲线可以提交结果后退出。第二次会终止子进程树，尚未写入 checkpoint 的曲线下次重算。队列完成后仍保留共享 checkpoint。直接 `--save` 使用单任务 schema 6 断点。以旧格式记录的活跃任务用创建它的版本完成。 [断点格式](../architecture/CHECKPOINT.md#7-stage2-队列进度格式)
 
 
 ## TOML 与路径
 
 默认读取 exe 同目录的 `ecm.toml`；隐式文件缺失采用内置默认值，显式 `--config FILE` 缺失或格式错误时报错。配置分区、优先级和逐键覆盖资格见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md)。
 
-Stage2 与 Stage1 共用 `[shared]` 的 `worktodo_file`、`finished_file` 和 `log_file`。Stage2 的结果、提交、检查点和调试日志在 `[stage2]` 单独设置。队列领取 `ECMSTAGE2=` 和 `ECMSTAGE2N=`。`[stage2] b2_ratio` 可由 worker 覆盖，供队列和 GPU 直接读档在缺少非零 B2 时使用。
+Stage2 与 Stage1 共用 `[shared]` 的 `worktodo_file`、`finished_file` 和 `log_file`。Stage2 的结果、提交、直接读档断点和调试日志在 `[stage2]` 单独设置。队列领取 `ECMSTAGE2=`、`ECMSTAGE2N=` 和 `ECMSTAGE2PART=`。`[stage2] b2_ratio` 可由 worker 覆盖，供队列和 GPU 直接读档在缺少非零 B2 时使用。
 
 共用 `worktodo` 及 Stage2 相对路径基于 TOML 目录，其他 Stage1 相对路径基于其程序目录；CLI 相对路径基于当前工作目录。进度目录空值使用队列目录；显式旧进度路径仍可作为导入来源。`stage2_save_dir` 为空时继承 `stage1_save_dir`，`stage2_gpu_device = -1` 继承 `stage1_gpu_device`。推荐将两个程序与共用 TOML 放在同一目录。
 

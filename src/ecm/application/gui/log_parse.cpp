@@ -321,7 +321,7 @@ bool parse_stage2(const std::string &line,Stage2Event &e) {
         e.kind=Kind::CurveDone;read_after(line,"wall=",e.seconds);
         integer("completed",e.completed);read_after(line,"eta=",e.eta);
         read_after(line," active=",e.active_seconds);
-    } else if(starts_with(line,"task_done:")) {
+    } else if(starts_with(line,"task_done:") || starts_with(line,"stage2_part_done:")) {
         e.kind=Kind::TaskDone;integer("completed",e.done);
     } else if(starts_with(line,"stage2_complete:") || starts_with(line,"stage2_stopped:"))e.kind=Kind::Complete;
     if(e.kind==Kind::CurveStart || e.kind==Kind::CurvePrepare || e.kind==Kind::Result) {

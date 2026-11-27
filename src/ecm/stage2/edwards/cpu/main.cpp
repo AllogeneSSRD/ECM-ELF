@@ -564,14 +564,11 @@ int run_tasks(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
         auto &state=queue.state;
         std::ifstream save(queue.save,std::ios::binary);
         while(state.done<queue.plan.size()) {
-            if(stopped())return false;
+            if(stopped() || (queue.cancelled && queue.cancelled()))return false;
             const auto position=state.done;
             const auto &record=queue.plan[position];
             // Bind the validated snapshot to the on-disk record before constructing A24.
-            save.clear();save.seekg(record.offset);
-            std::string line;
-            if(!std::getline(save,line) || s2prod::fingerprint(line)!=record.hash)
-                throw std::runtime_error("save changed after planning");
+            (void)s2prod::saved_record_line(save, record.offset, record.index, record.hash);
             const auto ordinal=std::to_string(position+1)+"/"+std::to_string(queue.plan.size());
             const auto identity=" record="+std::to_string(record.index)+" sigma="+std::to_string(record.sigma);
             if(events)queue.report("curve_start: "+ordinal+identity+" B1="+std::to_string(record.b1)+" curve_model=ed",false);

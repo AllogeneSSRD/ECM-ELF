@@ -132,8 +132,10 @@ Queue input and Stage2 handoff:
   Completed tasks can produce these lines for a separate Stage2 worker:
     ECMSTAGE2=[AID,]k,b,n,c,filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"]
     ECMSTAGE2N=[AID,]filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"]
+    ECMSTAGE2PART=[AID,]k,b,n,c,filename,B2-or-zero,skip_curves,num_curves[,"known-factors"]
   ECMSTAGE2 checks the expected modulus; ECMSTAGE2N reads the full N from the save.
-  Both read B1 from the save; omitted/zero count means all records after skip.
+  All read B1 from the save. An omitted or zero count selects all records after skip
+  on ordinary Stage2 tasks. PART requires a positive count and defers the NF report.
   TOML [stage1] handoff_mode = "ecm-elf" (default), "off", or "prime95".
   ECM-ELF handoff appends an eligible ECMSTAGE2 line to the original worker.
   handoff.workers / handoff.worktodo_file select another destination.

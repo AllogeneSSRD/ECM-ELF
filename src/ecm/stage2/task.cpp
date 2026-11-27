@@ -43,6 +43,7 @@ static CurveProcessRequest curve_request(Options &o,const fs::path &save,const R
     request.save=save;request.results=results;request.log=log;
     request.log_max_kb=o.log_max_kb;
     request.record={r.offset,r.hash,r.index};request.console_budget={ini_settings.arena,ini_settings.owner_mb};
+    if(r.projected)request.projection_target=r.n;
     request.b2=b2;request.b2_min=o.b2_min;request.d=d;request.device=device;request.batch=batch;
     request.arena=o.arena;
     request.auto_b2=o.auto_b2;
@@ -175,14 +176,11 @@ int curve_worker(Options o) {
     const auto read_saved_line=[&] {
         std::ifstream input(o.save,std::ios::binary);
         if(!input)throw std::runtime_error("cannot reread save");
-        input.seekg(static_cast<std::streamoff>(o.offset));
-        std::string line;
-        if(!std::getline(input,line) || fingerprint(line)!=o.hash)
-            throw std::runtime_error("save changed after planning");
-        return line;
+        return saved_record_line(input, o.offset, o.index, o.hash);
     };
     const auto line=read_saved_line();
-    const Record r = parse_record(line);
+    const Record r = parse_record(line,ecm_stage2::max_input_bits,EdwardsPreparation::Construct,o.projection_target);
+    if(r.skip_stage2)throw std::runtime_error("save record has no usable Stage2 point");
     if(r.edwards && !o.b2 && o.auto_b2)
         throw std::runtime_error("Edwards Stage2 currently requires an explicit B2");
     if(o.carrier_exponent) {
@@ -202,7 +200,7 @@ int curve_worker(Options o) {
         ecm_stage2::timing::record_lock_wait(admission_started);
         if(admission!=WAIT_OBJECT_0)
             throw std::runtime_error("cannot wait for CUDA Stage2 queue admission");
-        if(read_saved_line()!=line)throw std::runtime_error("save changed during Stage2 prefetch");
+        (void)read_saved_line();
         if(o.queue_gpu_input) {
             const auto *view=static_cast<const char *>(MapViewOfFile(gpu_input.value,FILE_MAP_READ,0,0,queue_feedback_bytes));
             if(!view)throw std::runtime_error("cannot receive Stage2 pipeline tune feedback");
@@ -604,7 +602,7 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
                     ? std::chrono::duration<double>(now-observed_from).count()/samples : 0;
                 double eta=-1;
                 if(!remaining)eta=0;
-                else if(!stop_requests&&!failed) {
+                else if(!stop_requests&&!failed && !(queue.cancelled && queue.cancelled())) {
                     // A partially drained queue is limited by its slowest active curve.
                     unsigned admitted=0;
                     double tail=0;
@@ -632,13 +630,14 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
             }
             if(route)result.finishes.push_back(std::chrono::duration<double>(QueueClock::now()-begin).count());
         }
-        if(prepared && (failed || stop_requests)) {
+        const bool cancelled = queue.cancelled && queue.cancelled();
+        if(prepared && (failed || stop_requests || cancelled)) {
             // This reservation was never admitted and cannot have a receipt.
             prepared->process.reset();prepared=nullptr;
             state.reserved.pop_back();
         }
         if(prepared && can_admit()) {admit_worker(*prepared);prepared=nullptr;}
-        while(!failed && !stop_requests && next<end && !prepared) {
+        while(!failed && !stop_requests && !cancelled && next<end && !prepared) {
             const auto position=next-state.done;
             if(position<state.reserved.size() && state.reserved[position].completed) {
                 ++next;result.checked=false;continue;
@@ -736,7 +735,7 @@ bool run_curve_queue(const CurveQueue &queue,Options &o,uint64_t b2,uint64_t d) 
     const bool can_learn_parallel=automatic;
     bool direct_workspace_measured=false;
     PairLease lease;
-    while(state.done<size && !stop_requests) {
+    while(state.done<size && !stop_requests && !(queue.cancelled && queue.cancelled())) {
         const auto remaining=size-static_cast<size_t>(state.done);
         const auto &r=queue.plan[state.done];
         const bool homogeneous=std::all_of(queue.plan.begin()+static_cast<size_t>(state.done),queue.plan.end(),

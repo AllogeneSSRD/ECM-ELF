@@ -281,6 +281,22 @@ static bool parse_save_line(const std::string& line, std::string_view prefix, Ec
                 task.factors.push_back(factor);
             }
     }
+    if (!stage1 && end > tail && !quotes[end - 1] && cols[end - 1] == "project=cofactor") {
+        --end;
+        task.project_cofactor = true;
+        if (task.modulus_from_save || task.factors.empty()) {
+            err = "cofactor projection requires a modulus expression and known factors";
+            return false;
+        }
+    }
+    if (!stage1 && end > tail && !quotes[end - 1] && cols[end - 1].compare(0, 6, "group=") == 0) {
+        task.handoff_group = cols[--end].substr(6);
+        if (task.handoff_group.size() != 32 ||
+            task.handoff_group.find_first_not_of("0123456789abcdef") != std::string::npos) {
+            err = "invalid Stage2 handoff group";
+            return false;
+        }
+    }
     if (end > tail + 3 || (stage1 && end != tail + 3)) {
         err = "expected B2, skip_curves, num_curves and an optional quoted known-factors field";
         return false;
@@ -334,12 +350,21 @@ bool ecm_parse_stage1_line(const std::string& line, EcmStage2Task& task, std::st
 }
 
 bool ecm_parse_stage2_line(const std::string& line, EcmStage2Task& task, std::string& err) {
-    return parse_save_line(line, ecm_queue::stage2_from_save(ecm_queue::task_text(line)) ?
-                          ecm_queue::stage2_n_prefix : ecm_queue::stage2_prefix, task, err);
+    const auto text = ecm_queue::task_text(line);
+    const bool partial = text.compare(0, ecm_queue::stage2_part_prefix.size(), ecm_queue::stage2_part_prefix) == 0;
+    const auto prefix = partial ? ecm_queue::stage2_part_prefix : ecm_queue::stage2_from_save(text)
+        ? ecm_queue::stage2_n_prefix : ecm_queue::stage2_prefix;
+    if (!parse_save_line(line, prefix, task, err)) return false;
+    if (partial && (!task.has_skip || !task.curves_to_run)) {
+        err = "ECMSTAGE2PART requires an explicit nonempty curve range";
+        return false;
+    }
+    task.partial = partial;
+    return true;
 }
 
 std::string ecm_stage2_cofactor_line(const EcmStage2Task& task, const std::string& save,
-                                    uint32_t curves, const std::vector<std::string>& factors) {
+                                    uint64_t skip, uint32_t curves, const std::vector<std::string>& factors) {
     std::string line = task.modulus_from_save ? "ECMSTAGE2N=" : "ECMSTAGE2=";
     if (!task.aid.empty()) line += task.aid + ',';
     if (!task.modulus_from_save)
@@ -349,7 +374,7 @@ std::string ecm_stage2_cofactor_line(const EcmStage2Task& task, const std::strin
         line += ch;
         if (ch == '"') line += ch;
     }
-    line += "\"," + task.b2_text + ",0," + std::to_string(curves);
+    line += "\"," + task.b2_text + ',' + std::to_string(skip) + ',' + std::to_string(curves) + ",project=cofactor";
     std::string known;
     for (const auto* group : {&task.factors, &factors})
         for (const auto& factor : *group) {
@@ -358,6 +383,23 @@ std::string ecm_stage2_cofactor_line(const EcmStage2Task& task, const std::strin
         }
     if (!known.empty()) line += ",\"" + known + '"';
     return line;
+}
+
+std::string ecm_stage2_handoff_line(const std::string& line, std::string_view group, bool partial) {
+    EcmStage2Task assignment;
+    std::string error;
+    if (!ecm_parse_stage2_line(line, assignment, error)) throw std::runtime_error(error);
+    if (assignment.partial || !assignment.handoff_group.empty() || (partial && assignment.modulus_from_save))
+        throw std::runtime_error("invalid source assignment for Stage2 handoff");
+    auto out = assignment.raw_line;
+    std::vector<bool> quotes;
+    const auto columns = split_csv(out.substr(out.find('=') + 1), &quotes);
+    const auto save = save_column(columns, quotes, assignment.modulus_from_save);
+    const auto factors = columns.size() > save + 1 && quotes.back() ? out.rfind(",\"") : out.size();
+    if (factors == out.npos) throw std::runtime_error("cannot locate Stage2 known-factors field");
+    if (!group.empty()) out.insert(factors, ",group=" + std::string(group));
+    if (partial) out.replace(0, ecm_queue::stage2_prefix.size(), ecm_queue::stage2_part_prefix);
+    return out;
 }
 
 bool ecm_rewrite_stage2_range(const std::string& line, uint64_t skip, uint32_t count,
@@ -390,9 +432,9 @@ bool ecm_rewrite_stage2_range(const std::string& line, uint64_t skip, uint32_t c
     }
     const bool factors = spans.size() > save + 1 && quotes.back() &&
                          (!stage1 || spans.size() == save + 5);
-    const auto end = spans.size() - size_t(factors);
+    const auto end = spans.size() - size_t(factors) - size_t(!task.handoff_group.empty()) - size_t(task.project_cofactor);
     if (end <= save + 3) {
-        const auto suffix = factors ? spans[end].first - 1 : line.size();
+        const auto suffix = end < spans.size() ? spans[end].first - 1 : line.size();
         const bool has_b2_field = end > save + 1;
         rewritten = line.substr(0, spans[save + size_t(has_b2_field)].second);
         if (!has_b2_field)

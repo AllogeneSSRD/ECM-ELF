@@ -21,7 +21,7 @@ namespace s2prod {
 namespace fs=std::filesystem;
 enum class ParallelMode : unsigned { automatic=0, serial=1, paired=2 };
 // These statuses also cross the native OpenCL companion process boundary.
-enum QueueDispatchStatus { DispatchAdvanced=80, DispatchInvalid, DispatchChanged };
+enum QueueDispatchStatus { DispatchAdvanced=80, DispatchInvalid, DispatchChanged, DispatchDeferred };
 struct TaskInputError : std::runtime_error { using std::runtime_error::runtime_error; };
 struct Big {
     mpz_t z;
@@ -36,10 +36,12 @@ struct Record {
     uint64_t sigma = 0, b1 = 0, offset = 0, hash = 0, index = 0;
     bool checksum = false, edwards = false, factor = false;
     bool skip_stage2 = false;
+    bool projected = false;
 };
 struct PreparedRuntimeProfile;
 struct Options {
     std::string ini, save, worktodo, results, log, debug_file, receipt,submission,submission_aid;
+    std::string projection_target;
     std::string worker_cpu_affinity;
     std::string result_user, result_computer;
     bool frozen_publication = false;

@@ -2061,11 +2061,8 @@ PortableInput portable_freeze_input(const PortableInput &input,const fs::path &s
     if((fs::equivalent(destination,input.save,error) && !error) ||
        upper(destination.lexically_normal().string())==upper(input.save.lexically_normal().string()))
         throw std::runtime_error("tune-file must differ from every task save");
-    std::ifstream in(input.save,std::ios::binary);std::string line;
-    in.seekg(std::streamoff(input.record.offset));
-    if(!std::getline(in,line) || fingerprint(line)!=input.record.hash)
-        throw TaskInputError("tune save changed before snapshot");
-    append(snapshot,line);
+    std::ifstream in(input.save,std::ios::binary);
+    append(snapshot, saved_record_line(in, input.record.offset, input.record.index, input.record.hash));
     auto record=records(snapshot,0,1).at(0);
     if(record.n!=input.record.n || record.x!=input.record.x || record.b1!=input.record.b1 || record.sigma!=input.record.sigma)
         throw TaskInputError("tune save snapshot differs from selected record");

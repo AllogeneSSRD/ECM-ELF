@@ -21,6 +21,8 @@ struct CurveQueue {
     stage2_queue::State &state;
     uint64_t &completed;
     const QueueReport &report;
+    std::function<bool()> cancelled;
+    std::function<void(const Record&, const std::string&)> commit_shared;
     void commit(uint64_t position,const std::string &outcome) const;
 };
 

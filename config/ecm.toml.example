@@ -42,10 +42,10 @@ config_version = 4
 # worker 可覆盖路径。显式留空时关闭自动持久化。
 
 worktodo_file = "worktodo.txt"  # string: <path>
-# Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1; ECMSTAGE2 and ECMSTAGE2N select Stage2. One
-# process consumes a worker queue at a time.
-# 共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2 和 ECMSTAGE2N 交给 Stage2。同一 worker 同
-# 时由一个进程消费队列。
+# Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1. ECMSTAGE2, ECMSTAGE2N and ECMSTAGE2PART
+# select Stage2. One process consumes a worker queue at a time.
+# 共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2、ECMSTAGE2N 和 ECMSTAGE2PART 交给 Stage2。
+# 同一 worker 同时由一个进程消费队列。
 
 # queue_order = "file_order"  # string: [file_order|stage1_first|stage2_first]
 # file_order follows the queue. stage1_first or stage2_first runs the preferred stage until it has
@@ -81,6 +81,10 @@ worktodo_file = "worktodo.txt"  # string: <path>
 # keep the save or prime95 to select Prime95.
 # Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接
 # 收方。off 只保留存档，prime95 交给 Prime95。
+
+# handoff_partial = true  # bool: [false|true|0|1]
+# Publish completed Stage1 batches to ECM-ELF Stage2 while Stage1 continues.
+# Stage1 继续运行时，将已完成的批次交接给 ECM-ELF Stage2。
 
 # handoff_unsupported = "ecm-elf"  # string: [ecm-elf|keep-save]
 # Fallback for saves unsupported by the Prime95 protocol.
@@ -563,25 +567,16 @@ target = "gpu"  # string: [cpu|gpu]
 # 后缀，显式指定时按原路径使用。
 
 # checkpoint_legacy_file = ""  # string: <path>
-# Legacy single-file progress import path. Empty checks the old queue-path plus worker-suffix
-# .progress file. A matching task's completed count and pending receipt are imported into its own
-# .ecm_ckpt_stage2_<bits>_<B1>.dat file. An unrelated legacy task is retained and does not stop this
-# task. New progress files use checkpoint_dir; no arithmetic state is checkpointed.
-# 旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确
-# 认回执迁入独立 .ecm_ckpt_stage2_<bits>_<B1>.dat 文件。不相关的旧任务保留，当前任务继续。新进度文件
-# 使用 checkpoint_dir，不保存曲线内部算术状态。
+# Legacy progress path. Its parent directory is used for direct-save checkpoints when checkpoint_dir
+# is empty. Shared queue checkpoints are stored beside the save.
+# 旧进度文件路径。checkpoint_dir 为空时，直接读档断点使用该路径的父目录。队列共享断点位于存档旁。
 
 # checkpoint_dir = ""  # string: <dir>
-# Directory for per-task .ecm_ckpt_stage2_<bits>_<B1>.dat progress files. Empty uses the legacy
-# progress file's directory if explicitly set, otherwise the queue directory. Task IDs bind AID, N,
-# full save contents and queue_skip. On restart the current effective B2/Auto B2 and requested curve
-# count override the checkpoint policy; completed curves retain their actual bounds. A target below
-# the completed count warns and seals all completed work. New checkpoints contain completed curve
-# state and pending submission data. They are removed after publication and queue advancement.
-# 每任务 .ecm_ckpt_stage2_<bits>_<B1>.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队
-# 列目录。任务 ID 绑定 AID、N、完整 save 内容和 queue_skip。重启采用当前有效 B2/Auto B2 及请求曲线
-# 数，已完成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。新 checkpoint 保存已完成
-# 曲线状态和待发布结果；结果发布并推进队列后清除。
+# Directory for direct-save Stage2 checkpoints. Empty uses the configured progress file directory or
+# the queue directory. Queue tasks share one checkpoint beside each save and retain the effective B2
+# of each completed curve.
+# 直接读档 Stage2 断点的目录。空值使用已配置进度路径的父目录或队列目录。队列任务共享存档旁的断点，并
+# 保留每条已完成曲线的实际 B2。
 
 # stage2_save_dir = ""  # string: <dir>
 # Directory searched for saves referenced by Stage2 assignments. Empty inherits tmp_dir; absolute
