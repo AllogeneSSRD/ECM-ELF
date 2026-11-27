@@ -42,7 +42,9 @@ Pminus1=[AID,]1,2,p,-1,B1,B2[,how_far_factored][,B2_start][,"factors"]
 
 ## 实现与实测
 
-- 0.76.0 的 `-tune pm1` 仅对推进指数位的生产内核计时。相同 NTT 长度的连续任务在独立 CUDA stream 中运行，各自保留指数、Gerbicz 校验和存档。GPU 回归核对了不同断点的任务及 2560 点双任务的完整余数；163840、262144 点双任务调优通过 GMP 校验。格式 19 的 P−1 与 ECM 矩阵经过读写往返核对。`ntt_max_batch_pm1` 覆盖上调、下调及按 worker 继承均已验证。[调优与生产选批](../usage/TUNE.md) · [GPU 回归](../../tools/test/test_pm1_stage1_tune.py) · [验证记录](../../data/experiments/pm1_tune_20261127)
+- 0.75.4 按长度在最小参测批量上预选 Graph，再扫描批量和 NTT 形状。同长度报告分别列出最快配置和达到目标吞吐的最小批量。GPU 回归覆盖缓存命中后实际复测最佳配置、固定 Graph、多长度报告及旧格式 19 重复行合并。163840 和 262144 点、批量 1–2 的同参数连跑中，第二轮每个长度各实测一次，矩阵两轮均为 20 行。[调优说明](../usage/TUNE.md#pm1-stage1-tune) · [冷启动记录](../../data/experiments/pm1_tune_0754/large_final/cold.log) · [复测记录](../../data/experiments/pm1_tune_0754/large_final/hot.log)
+
+- 0.75.2 的 `-tune pm1` 仅对推进指数位的生产内核计时。相同 NTT 长度的连续任务在独立 CUDA stream 中运行，各自保留指数、Gerbicz 校验和存档。GPU 回归核对了不同断点的任务及 2560 点双任务的完整余数；163840、262144 点双任务调优通过 GMP 校验。格式 19 的 P−1 与 ECM 矩阵经过读写往返核对。`ntt_max_batch_pm1` 覆盖上调、下调及按 worker 继承均已验证。[调优与生产选批](../usage/TUNE.md) · [GPU 回归](../../tools/test/test_pm1_stage1_tune.py) · [验证记录](../../data/experiments/pm1_tune_20261127)
 
 - 0.75.1 增加 Pminus1 专用的 `handoff_mode_pm1`，默认 `prime95`，可按 worker 设为 `off` 仅写存档。队列回归覆盖通用模式关闭、专用模式关闭以及两个方向的 worker 覆盖。
 

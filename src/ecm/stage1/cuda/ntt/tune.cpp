@@ -1656,7 +1656,7 @@ Pm1BatchPlan select_pm1_batch(int index, const std::vector<unsigned>& exponents,
     std::vector<const Fields*> rows;
     for (const auto& row:db.pm1_stage1) {
         const auto& condition=db.conditions.at(uint(row,"condition"));
-        if (uint(row,"sample_phase")==2 && uint(row,"batch")<=base.max_batch &&
+        if (pt::tested_fine(row) && uint(row,"batch")<=base.max_batch &&
             uint(row,"peak_bytes")<=device.budget && condition.count("uuid_hex") &&
             pt::text(condition,"uuid_hex")==device.uuid) rows.push_back(&row);
     }
@@ -1764,6 +1764,7 @@ int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1:
     const auto device=device_info(task.execution.device_index,base.memory_mib);
     auto db=grid.force ? pt::Profile{} : load(base.tune_file);
     const auto identity=Fields{{"uuid_hex",pt::quoted(device.uuid)}};
+    const auto id=db.condition(identity);
     const auto deadline=seconds ? now_s()+seconds : 0;
     ecm_edwards::Integer lcm;
     if (!ecm_build_lcm_exponent(lcm.v,b1,1)) throw std::runtime_error("cannot build P-1 tuning exponent");
@@ -1795,38 +1796,51 @@ int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1:
         if (cap>=grid.batch.first) anchors.insert(cap);
         ecm_log_accent(EcmLogAccent::Subtitle,"pm1_stage1_plan: p=%u B1=%llu length=%u capacity=%u\n",
                        p,(unsigned long long)b1,plan.length,cap);
-        unsigned last_batch=0, last_phase=0, measured_count=0, reused_count=0;
+        if (anchors.empty()) continue;
+        // Keep this search's cache independent of the peak retained on disk
+        // for a different reference workload with the same execution plan.
+        db.pm1_stage1.erase(std::remove_if(db.pm1_stage1.begin(),db.pm1_stage1.end(),[&](const Fields& row) {
+            return uint(row,"length")==plan.length && (uint(row,"b1")!=b1 || uint(row,"reference_bits")!=p ||
+                                                       uint(row,"peak_bytes")>device.budget);
+        }),db.pm1_stage1.end());
+        enum class Round { Graph, Coarse, Fine, Recheck };
+        unsigned last_batch=0, measured_count=0, reused_count=0;
+        Round last_round=Round::Graph;
         std::map<unsigned,Score> fine_scores;
-        const auto sample=[&](unsigned batch,Stage1NttOptions candidate,unsigned phase) -> Score {
+        std::map<unsigned,Stage1NttOptions> cached_fine;
+        const auto sample=[&](unsigned batch,const Stage1NttOptions& candidate,Round round) -> Score {
             if (ecm_stage1_stop_requested() || (deadline && now_s()>=deadline)) throw TimeLimit{};
+            const unsigned phase=(round==Round::Graph || round==Round::Coarse) ? 1 : 2;
             const unsigned repeats=phase==1 ? grid.coarse_repeats : grid.fine_repeats;
             Plan expected;
-            pm1_probe_lane(device.index,p,candidate,expected,{});
-            const auto id=db.condition(identity);
-            double cached_rate=0;
-            for (const auto& row:db.pm1_stage1) {
+            const auto lane=pm1_probe_lane(device.index,p,candidate,expected,{});
+            if (round!=Round::Recheck) for (const auto& row:db.pm1_stage1) {
                 if (uint(row,"condition")!=id || uint(row,"batch")!=batch ||
-                    uint(row,"length")!=plan.length || uint(row,"reference_bits")!=p ||
-                    uint(row,"b1")!=b1 ||
+                    uint(row,"length")!=plan.length || uint(row,"bpw")!=expected.bpw ||
+                    uint(row,"max_exp")!=expected.max_exp || uint(row,"ntt_memory_bytes")!=batch*lane.owned_bytes ||
                     uint(row,"tile")!=expected.tile || uint(row,"graph_bits")!=expected.window ||
+                    uint(row,"passes_forward")!=expected.passes || pt::text(row,"forward")!=expected.forward ||
+                    pt::text(row,"inverse")!=expected.inverse ||
                     uint(row,"dataflow")!=expected.dataflow || uint(row,"max_radix_bits")!=expected.outer_max ||
-                    uint(row,"warp_tail")!=unsigned(expected.warp_tail) ||
-                    uint(row,"sample_phase")!=phase || uint(row,"repeats")<repeats ||
-                    uint(row,"sample_target_ms")<grid.group_ms || uint(row,"peak_bytes")>device.budget) continue;
-                cached_rate=std::max(cached_rate,real(row,"iter_per_s"));
-            }
-            if (cached_rate) {
+                    uint(row,"warp_tail")!=unsigned(expected.warp_tail) || uint(row,"peak_bytes")>device.budget) continue;
+                const auto coverage=pt::group_coverage(row);
+                if (std::none_of(coverage.begin(),coverage.end(),[&](const auto& tested) {
+                    return tested.first.first==phase && tested.first.second>=repeats && tested.second>=grid.group_ms;
+                })) continue;
                 ++reused_count;
-                return {batch,expected,cached_rate};
+                if (round==Round::Fine) cached_fine.emplace(batch,candidate);
+                return {batch,expected,real(row,"iter_per_s")};
             }
-            auto m=measure_pm1(device,p,candidate,batch,repeats,grid.group_ms,bits);
-            if (batch!=last_batch || phase!=last_phase) {
+            if (batch!=last_batch || round!=last_round) {
+                const char* label=round==Round::Graph ? "graph" : round==Round::Coarse ? "coarse" :
+                                  round==Round::Fine ? "fine" : "recheck";
                 ecm_log_accent(EcmLogAccent::Subtitle,"pm1_stage1_round: length=%u batch=%u phase=%s\n",
-                               plan.length,batch,phase==1 ? "coarse" : "fine");
+                               plan.length,batch,label);
                 table_header();
                 last_batch=batch;
-                last_phase=phase;
+                last_round=round;
             }
+            auto m=measure_pm1(device,p,candidate,batch,repeats,grid.group_ms,bits);
             ++measured_count;
             print_measurement(m,grid.group_ms,"");
             const double rate=m.throughput()*m.steps;
@@ -1840,31 +1854,56 @@ int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1:
             row["timed_steps"]=std::to_string(m.steps);
             row["median_ms"]=pt::numeric(m.time());
             row["dataflow"]=std::to_string(m.plan.dataflow);
-            db.update_pm1(row);
+            const auto& local=db.update_pm1(std::move(row));
             if (!base.tune_file.empty()) {
                 const auto parent=std::filesystem::u8path(base.tune_file).parent_path();
                 if (!parent.empty()) std::filesystem::create_directories(parent);
                 ecm_io::FileLock lock(base.tune_file);
                 auto latest=load(base.tune_file);
-                row["condition"]=std::to_string(latest.condition(identity));
+                auto snapshot=local;
+                snapshot["condition"]=std::to_string(latest.condition(identity));
                 double previous=0;
-                const bool accepted=latest.update_pm1(std::move(row),phase==2 ? &previous : nullptr);
+                const auto& saved=latest.update_pm1(std::move(snapshot),&previous);
                 ecm_io::write_atomic(base.tune_file,latest.serialize());
-                if (previous>0) {
+                if (previous>0 && (round==Round::Recheck || (grid.force && phase==2))) {
+                    const bool accepted=rate==real(saved,"iter_per_s") && uint(saved,"peak_bytes")==std::max(m.owned,m.observed);
                     const char* status=accepted ? (rate>previous ? "updated" : "retained") : "kept";
                     ecm_log_accent(accepted ? EcmLogAccent::Improved : EcmLogAccent::Retained,
                                    "pm1_stage1_recheck: length=%u batch=%u %.9g vs %.9g (old)  %s, status=%s\n",
                                    plan.length,batch,rate,previous,throughput_change(rate,previous).c_str(),status);
                 }
             }
-            return {batch,m.plan,rate};
+            return {batch,m.plan,round==Round::Fine ? real(local,"iter_per_s") : rate};
         };
+        const auto fits=[&](const auto& run) {
+            try { run(); return true; }
+            catch (const BudgetError&) { return false; }
+            catch (const std::runtime_error& error) {
+                if (std::string_view(error.what())!=cudaGetErrorString(cudaErrorMemoryAllocation)) throw;
+                return false;
+            }
+        };
+        const auto probe_batch=*anchors.begin();
+        if (base.window<0 && !base.profile) {
+            double best_rate=0;
+            for (const int window:{0,1}) {
+                auto candidate=options;
+                candidate.window=window;
+                fits([&] {
+                    const auto score=sample(probe_batch,candidate,Round::Graph);
+                    if (score.rate>best_rate) { best_rate=score.rate; options.window=window; }
+                });
+            }
+            if (!best_rate) continue;
+        }
+        ecm_log_accent(EcmLogAccent::Report,"pm1_stage1_graph: length=%u batch=%u graph_bits=%d mode=%s\n",
+                       plan.length,probe_batch,options.window,base.window<0 && !base.profile ? "tuned" : "fixed");
         const auto scan=[&](unsigned batch) {
-            try {
+            if (!fits([&] {
                 auto best=options;
-                double rate=sample(batch,best,1).rate;
+                double rate=sample(batch,best,Round::Coarse).rate;
                 auto compare=[&](Stage1NttOptions other) {
-                    const auto measured=sample(batch,other,1).rate;
+                    const auto measured=sample(batch,other,Round::Coarse).rate;
                     if (measured>rate) { rate=measured; best=other; }
                 };
                 if (!base.tile && !base.profile && plan.tile>=5) { auto alt=best; alt.tile=plan.tile-2; compare(alt); }
@@ -1884,16 +1923,10 @@ int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1:
                         compare(alt);
                     }
                 }
-                if (base.window<0 && !base.profile) { auto alt=best; alt.window=plan.window ? 0 : 1; compare(alt); }
-                const auto fine=sample(batch,best,2);
+                const auto fine=sample(batch,best,Round::Fine);
                 rates[batch]={fine.rate,grid.fine_repeats};
                 fine_scores.emplace(batch,fine);
-                found=true;
-            } catch (const BudgetError&) { failed.insert(batch); }
-            catch (const std::runtime_error& error) {
-                if (std::string_view(error.what())!=cudaGetErrorString(cudaErrorMemoryAllocation)) throw;
-                failed.insert(batch);
-            }
+            })) failed.insert(batch);
         };
         for (auto b:anchors) { scan(b); if (failed.count(b)) break; }
         if (rates.empty()) continue;
@@ -1907,9 +1940,26 @@ int tune_pm1(const ecm_stage1::Stage1Options& task,uint64_t b1,const ecm_stage1:
                 else low=mid+1;
             }
         }
+        auto fastest=[&] { return std::max_element(fine_scores.begin(),fine_scores.end(),
+            [](const auto& a,const auto& b){return a.second.rate<b.second.rate;}); };
+        auto best=fastest();
+        while (best!=fine_scores.end() && cached_fine.count(best->first)) {
+            const unsigned batch=best->first;
+            if (fits([&] {
+                const auto check=sample(batch,cached_fine.at(batch),Round::Recheck);
+                if (check.rate>best->second.rate) best->second=check;
+                rates[batch].rate=best->second.rate;
+            })) break;
+            rates.erase(batch);
+            fine_scores.erase(best);
+            best=fastest();
+        }
+        if (best==fine_scores.end()) continue;
+        found=true;
         const auto selected=recommended_batch(rates,percent);
-        const auto best=std::max_element(fine_scores.begin(),fine_scores.end(),
-            [](const auto& a,const auto& b){return a.second.rate<b.second.rate;});
+        ecm_log_accent(EcmLogAccent::Report,
+                       "pm1_stage1_length_done: p=%u length=%u phase=fine batch=%u graph=%u iter_per_s=%.9g\n",
+                       p,plan.length,best->first,best->second.plan.window,best->second.rate);
         std::map<BatchRole,Score> roles{{Capacity,fine_scores.rbegin()->second},{Fastest,best->second},
                                        {Economical,fine_scores.at(selected)}};
         if (fine_scores.count(1)) roles.emplace(Single,fine_scores.at(1));

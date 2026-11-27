@@ -854,34 +854,30 @@ struct Profile {
     };
     using Stage1RowIndex = std::map<Fields,std::vector<size_t>,Stage1DecisionLess>;
 
-    bool update_pm1(Fields sample, double* previous_best=nullptr) {
+    const Fields& update_pm1(Fields sample, double* previous_best=nullptr) {
         if (!conditions.count(uint(sample,"condition")) || text(sample,"ntt_type") != weighted_ntt_type ||
             sample.count("naf_window") || sample.count("curve") || sample.count("naf_memory_bytes"))
             throw std::runtime_error("invalid P-1 tuning condition or arithmetic");
         validate_stage1_ntt(sample,true);
-        const auto same = [&](const Fields& old) {
-            return uint(old,"b1")==uint(sample,"b1") && uint(old,"sample_phase")==uint(sample,"sample_phase") &&
-                uint(old,"repeats")==uint(sample,"repeats") && uint(old,"sample_target_ms")==uint(sample,"sample_target_ms") &&
-                !matrix_row_less(old,sample,ntt_row_order) && !matrix_row_less(sample,old,ntt_row_order);
-        };
-        const auto dominates=[](const Fields& a,const Fields& b) {
-            return stage1_dominates(a,b) && uint(a,"peak_bytes")<=uint(b,"peak_bytes");
-        };
-        bool kept=false;
+        if(sample.count("tested_groups")) group_coverage(sample);
         if(previous_best) *previous_best=0;
-        for(const auto& old:pm1_stage1) {
-            if(!same(old)) continue;
-            if(previous_best) *previous_best=std::max(*previous_best,real(old,"iter_per_s"));
-            if(dominates(old,sample)) {
-                if(!previous_best) return false;
-                kept=true;
-            }
+        for(auto& old:pm1_stage1) {
+            if(uint(old,"ntt_memory_bytes")!=uint(sample,"ntt_memory_bytes") ||
+               matrix_row_less(old,sample,ntt_row_order) || matrix_row_less(sample,old,ntt_row_order)) continue;
+            const auto old_rate=real(old,"iter_per_s"), rate=real(sample,"iter_per_s");
+            if(previous_best) *previous_best=old_rate;
+            const bool same_work=uint(old,"reference_bits")==uint(sample,"reference_bits") &&
+                                 uint(old,"b1")==uint(sample,"b1");
+            // Coverage belongs to the sampled exponent. Across workloads keep a
+            // fine-tested decision eligible for production when merging a coarse probe.
+            const bool prefer=(!same_work && tested_fine(old)!=tested_fine(sample)) ? tested_fine(sample) :
+                rate>old_rate || (rate==old_rate && uint(sample,"peak_bytes")<uint(old,"peak_bytes"));
+            if(prefer) old.swap(sample);
+            if(same_work) merge_stage1_history(old,sample,false);
+            return old;
         }
-        if(kept) return false;
-        pm1_stage1.erase(std::remove_if(pm1_stage1.begin(),pm1_stage1.end(),
-            [&](const Fields& old){return same(old) && dominates(sample,old);}),pm1_stage1.end());
         pm1_stage1.push_back(std::move(sample));
-        return true;
+        return pm1_stage1.back();
     }
     void update_stage1_ntt(Fields sample,bool observation=false,Stage1RowIndex* index=nullptr) {
         if (!sample.count("ntt_memory_bytes") && sample.count("owned_bytes"))

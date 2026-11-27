@@ -34,20 +34,35 @@ def check(exe, root):
     cold = run("cold", "-tune", spec)
     assert "\x1b[" not in cold
     assert "phase=coarse" in cold and "phase=fine" in cold
+    assert cold.index("phase=graph") < cold.index("pm1_stage1_graph:") < cold.index("phase=fine")
+    assert cold.count("phase=graph") == 1
+    graph = int(re.search(r"pm1_stage1_graph: length=2 batch=1 graph_bits=([01]) mode=tuned", cold)[1])
+    best_batch = int(re.search(rf"pm1_stage1_length_done: .*length=2 phase=fine batch=(\d+) graph={graph} ", cold)[1])
     assert all(re.search(rf"\b{label}\s+2\s+62\s", cold) for label in ("Single","Max","Best","95%"))
     original = tomllib.loads(profile.read_text())["pm1"]["stage1"]["matrix"]
     columns, *rows = original
     assert "batch" in columns and not any("naf" in c or c == "curve" for c in columns)
-    fine = [dict(zip(columns, row)) for row in rows if row[columns.index("sample_phase")] == 2]
-    assert {r["batch"] for r in fine} == {1, 2} and all(r["repeats"] == 2 for r in fine)
-    for r in fine:
+    def decisions(matrix):
+        keys = ("condition", "max_exp", "length", "batch", "ntt_type", "bpw", "tile", "max_radix_bits",
+                "passes_forward", "forward", "inverse", "graph_bits", "warp_tail", "dataflow", "ntt_memory_bytes")
+        return [tuple(row[matrix[0].index(k)] for k in keys) for row in matrix[1:]]
+
+    records = [dict(zip(columns, row)) for row in rows]
+    assert len(set(decisions(original))) == len(rows)
+    assert {r["graph_bits"] for r in records if r["batch"] == 1} == {0, 1}
+    assert all(r["graph_bits"] == graph for r in records if r["batch"] != 1)
+    fine = [r for r in records if "2/2:2" in r.get("tested_groups", "").split(",")]
+    assert {r["batch"] for r in fine} == {1, 2}
+    for r in records:
         expected = 1000 * r["batch"] * r["timed_steps"] / r["median_ms"]
         assert math.isclose(r["iter_per_s"], expected, rel_tol=1e-9)
     hot = run("hot", "-tune", spec)
-    assert "length max_exp ntt_shape" not in hot and "pm1_stage1_round:" not in hot
-    assert re.search(r"pm1_stage1_tune: .*measured=0 reused=[1-9]", hot)
-    assert tomllib.loads(profile.read_text())["pm1"]["stage1"]["matrix"] == original
-    run("force", "-tune", spec + ",force")
+    assert hot.count("pm1_stage1_round:") == 1 and "phase=recheck" in hot
+    assert f"pm1_stage1_recheck: length=2 batch={best_batch} " in hot
+    assert re.search(r"pm1_stage1_tune: .*measured=1 reused=[1-9]", hot)
+    assert decisions(tomllib.loads(profile.read_text())["pm1"]["stage1"]["matrix"]) == decisions(original)
+    forced = run("force", "-tune", spec + ",force")
+    assert "phase=graph" in forced and "phase=fine" in forced
     pm1 = tomllib.loads(profile.read_text())["pm1"]
     run("ecm", "-tune", "ntt,length=8,naf=2,batch=1,time=0.01,repeat=1:1", "--param", "e")
     db = tomllib.loads(profile.read_text())
@@ -56,16 +71,18 @@ def check(exe, root):
     assert tomllib.loads(profile.read_text())["ntt"] == db["ntt"]
 
     # Deterministic selectors exercise the 95% decision independently of GPU clocks.
+    def write_matrix(matrix):
+        section = "[pm1.stage1]\nmatrix = [\n" + "".join("    " + json.dumps(r) + ",\n" for r in matrix) + "]"
+        profile.write_text(re.sub(r"\[pm1\.stage1\]\s*matrix = \[.*?\n\]", lambda _: section, profile.read_text(), flags=re.S))
+
     def set_rates(single, double):
-        raw = profile.read_text()
-        matrix = tomllib.loads(raw)["pm1"]["stage1"]["matrix"]
+        matrix = tomllib.loads(profile.read_text())["pm1"]["stage1"]["matrix"]
         header = matrix[0]
         for row in matrix[1:]:
             rate = single if row[header.index("batch")] == 1 else double
             row[header.index("iter_per_s")] = rate
             row[header.index("median_ms")] = 1000 * row[header.index("batch")] * row[header.index("timed_steps")] / rate
-        section = "[pm1.stage1]\nmatrix = [\n" + "".join("    " + json.dumps(r) + ",\n" for r in matrix) + "]"
-        profile.write_text(re.sub(r"\[pm1\.stage1\]\s*matrix = \[.*?\n\]", lambda _: section, raw, flags=re.S))
+        write_matrix(matrix)
 
     # Start the second independent exponent from a nonzero GpuOwl checkpoint.
     p, b1, k = 41, 31, 11
@@ -128,6 +145,40 @@ def check(exe, root):
     for value in (-1,513):
         limits(2,value,"")
         run(f"invalid_limit_{value}", *tune_two, success=False)
+    # Import overlapping format-19 observations. Only the timing tuple of the
+    # winner survives; a different allocation is a separate decision.
+    matrix = tomllib.loads(profile.read_text())["pm1"]["stage1"]["matrix"]
+    col = matrix[0].index
+    duplicate = matrix[1].copy()
+    duplicate[col("repeats")] = 3
+    duplicate[col("sample_phase")] = 2
+    duplicate[col("sample_target_ms")] = 13
+    duplicate[col("tested_groups")] = ""
+    duplicate[col("iter_per_s")] *= 2
+    duplicate[col("median_ms")] /= 2
+    other_b1 = duplicate.copy()
+    other_b1[col("b1")] += 1
+    other_b1[col("repeats")] = 4
+    other_b1[col("iter_per_s")] /= 2
+    other_b1[col("median_ms")] *= 2
+    distinct = duplicate.copy()
+    distinct[col("ntt_memory_bytes")] -= 8
+    write_matrix(matrix + [duplicate, other_b1, distinct])
+    cfg.write_text(initial_config.replace("ntt_max_batch=2", "ntt_max_batch=2\nntt_window_bits=0"))
+    fixed = run("fixed_multiple", "-tune", "pm1,length=4-8,batch=1,time=0.01,repeat=1:2")
+    assert "phase=graph" not in fixed
+    for length in (4, 8):
+        assert f"pm1_stage1_graph: length={length} batch=1 graph_bits=0 mode=fixed" in fixed
+        assert re.search(rf"pm1_stage1_length_done: .*length={length} phase=fine batch=1 graph=0 ", fixed)
+    merged = tomllib.loads(profile.read_text())["pm1"]["stage1"]["matrix"]
+    keys = decisions(merged)
+    assert len(keys) == len(set(keys))
+    for key in decisions([matrix[0], duplicate, distinct]):
+        winner = dict(zip(merged[0], merged[1 + keys.index(key)]))
+        assert winner["iter_per_s"] == duplicate[col("iter_per_s")]
+        assert math.isclose(winner["median_ms"], duplicate[col("median_ms")])
+        assert winner["repeats"] == 3 and winner["b1"] == duplicate[col("b1")]
+        assert "2/4:13" not in winner.get("tested_groups", "")
     print("P-1 tune matrix, independent resume, queue boundaries and batch threshold passed")
 
 
